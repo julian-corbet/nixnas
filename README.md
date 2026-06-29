@@ -47,4 +47,7 @@ Design complete — see [`docs/DESIGN.md`](docs/DESIGN.md). Module implementatio
 
 ## License
 
-To be released as FOSS. License not yet chosen.
+[Apache-2.0](LICENSE). Copyright 2026 Julian Corbet.
+
+The explicit patent grant matters here: the core touches TPM2, Secure Boot and
+measured boot. Contributions are accepted under the same license.
