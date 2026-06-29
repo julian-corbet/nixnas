@@ -1,7 +1,8 @@
 # nixnas
 
-A fully declarative, RAM-resident NixOS appliance that brings the Unraid operating
-model to NixOS.
+A fully declarative, RAM-resident NixOS appliance — a **distribution for the
+self-hosted-NAS use-case** that brings the Unraid operating model to NixOS, built to
+be adopted (and contributed to) by others, not just one machine.
 
 - **Boots from a USB stick** and copies itself entirely into RAM (`copytoram`) — the
   stick is spared and only touched on updates.
@@ -33,11 +34,16 @@ history. All heavy work (build, sign, verity, TPM-reseal, escrow, image bake) ru
 a separate **build hub** — the appliance node only *receives* finished, signed
 artifacts.
 
-See [`docs/DESIGN.md`](docs/DESIGN.md).
+**nixnas is a distribution, not a personal config.** The public repo is the generic,
+parameterised core; your machine's real disks, IPs, and secrets live in a *separate,
+private overlay repo you own* that imports `nixnas` as a flake input (`templates/host`
+scaffolds one). The public core never references any private overlay.
+
+See [`docs/DESIGN.md`](docs/DESIGN.md) and [`docs/REPO-LAYOUT.md`](docs/REPO-LAYOUT.md).
 
 ## Status
 
-Early design.
+Design complete — see [`docs/DESIGN.md`](docs/DESIGN.md). Module implementation next.
 
 ## License
 
