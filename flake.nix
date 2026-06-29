@@ -22,6 +22,9 @@
       nixosModules.nixnas = import ./modules;
       nixosModules.default = self.nixosModules.nixnas;
 
+      # The hub/TUI build library (pure; the image is built LOCALLY, never remote).
+      lib = import ./lib { inherit (nixpkgs) lib; };
+
       # Demo host — proves the public core evaluates standalone, with ZERO secrets.
       # Uses only RFC-5737 / RFC-2606 / DEMO-* placeholders.
       nixosConfigurations.demo = nixpkgs.lib.nixosSystem {
