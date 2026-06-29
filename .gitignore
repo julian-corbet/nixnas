@@ -1,0 +1,16 @@
+# Nix
+result
+result-*
+.direnv/
+
+# Build artifacts / images
+*.img
+*.raw
+*.qcow2
+*.squashfs
+
+# Secrets — NEVER commit plaintext (sops-encrypted files are fine)
+*.plain
+*.dec
+keys.txt
+age.key
