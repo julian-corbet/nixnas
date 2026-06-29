@@ -4,28 +4,62 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # Planned inputs (wired up as the design lands):
-    # disko.url      = "github:nix-community/disko";       # declarative partitioning (ESP + f2fs + LUKS)
-    # sops-nix.url   = "github:Mic92/sops-nix";            # secrets (age); recovery-key escrow creds
-    # lanzaboote.url = "github:nix-community/lanzaboote";  # Secure Boot / signed UKIs
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, ... }:
+  outputs = { self, nixpkgs, disko, ... }:
     let
       systems = [ "x86_64-linux" ];
-      forAllSystems = nixpkgs.lib.genAttrs systems;
+      forAllSystems = f: nixpkgs.lib.genAttrs systems f;
+      pkgsFor = system: nixpkgs.legacyPackages.${system};
     in
     {
-      # The reusable, FOSS-clean appliance module (parameterised via options).
-      # nixosModules.nixnas = import ./modules;
+      # The reusable, FOSS-clean appliance module. All behaviour lives here,
+      # parameterised through the `nixnas.*` options (see ./modules/options.nix).
+      nixosModules.nixnas = import ./modules;
+      nixosModules.default = self.nixosModules.nixnas;
 
-      # The A/B USB image builder.
-      # packages = forAllSystems (system: { image = ...; });
+      # Demo host — proves the public core evaluates standalone, with ZERO secrets.
+      # Uses only RFC-5737 / RFC-2606 / DEMO-* placeholders.
+      nixosConfigurations.demo = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          disko.nixosModules.disko
+          self.nixosModules.nixnas
+          ./hosts/demo
+        ];
+      };
 
-      # Host instantiations + secrets live in a private overlay, never in the public core.
-      # nixosConfigurations.<host> = ...;
+      # `nix flake check` proves the demo toplevel builds without the private overlay.
+      checks = forAllSystems (system: {
+        demo-toplevel = self.nixosConfigurations.demo.config.system.build.toplevel;
+      });
 
-      inherit forAllSystems; # placeholder to keep the let-binding live until outputs land
+      # The build-hub toolchain (sign / seal / escrow run here, never on the node).
+      devShells = forAllSystems (system:
+        let pkgs = pkgsFor system; in {
+          default = pkgs.mkShell {
+            packages = with pkgs; [
+              sbsigntool
+              systemdUkify
+              tpm2-tools
+              cryptsetup
+              squashfsTools
+              sops
+              age
+              bitwarden-cli
+              jq
+            ];
+          };
+        });
+
+      # Scaffold a private host overlay that consumes this core as a flake input.
+      templates.host = {
+        path = ./templates/host;
+        description = "A private nixnas host overlay (imports nixnas as a flake input).";
+      };
     };
 }
