@@ -34,7 +34,7 @@ nixnas/
 │   │   ├── k3s.nix            # native services.k3s (+ bootstrap manifests only)
 │   │   ├── podman.nix         # virtualisation.quadlet tier-0 host glue (Docker retired)
 │   │   ├── arch-container.nix # virtualisation.incus + preseed (Arch pet, GPU device)
-│   │   ├── libvirt.nix        # virtualisation.libvirtd + NixVirt (Windows/keep VMs)
+│   │   ├── libvirt.nix        # virtualisation.libvirtd + NixVirt (Office VM only)
 │   │   └── gpu.nix            # amdgpu + ROCm, render-GID pinning, hostPath/device split
 │   ├── observability/
 │   │   └── monitoring.nix     # smartd + node-exporter + smartctl-exporter (+ cockpit/netdata opt)

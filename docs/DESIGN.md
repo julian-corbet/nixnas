@@ -14,7 +14,7 @@ Four layers, bottom to top:
 
 1. **Boot substrate** — 8 GB USB stick, GPT, FAT ESP + f2fs store. Two A/B slots, each one signed Unified Kernel Image (UKI). The OS root is a dm-verity-protected squashfs copied entirely into RAM (`copytoram`); the stick is read-only at runtime except the per-boot boot-counter rename and hub-pushed updates.
 2. **Crypto / data-at-rest** — every data device is LUKS2 with the filesystem directly on the decrypted mapper (LUKS-under-ZFS for the two pools, LUKS-under-xfs/btrfs for the SMR disks). A single passphrase (which *is* the TPM2 PIN) unlocks all of them. The RAM-root itself holds **no** secret and is integrity-only (verity), so the OS boots to a fully working state — Tailscale up, sshd up, k3s control-plane up — **before** any passphrase is entered. The passphrase gates *data*, never *boot*.
-3. **Compute** — native declarative k3s (the bulk of workloads), Podman/Quadlets (tier-0 host glue that must survive k3s being down), an Arch Linux system container (mutable pet userland + GPU desktop), and a minimal libvirt for the permanent Windows VM(s). Docker is retired.
+3. **Compute** — native declarative k3s (the bulk of workloads), Podman/Quadlets (tier-0 host glue that must survive k3s being down), an Arch Linux system container (mutable pet userland + GPU desktop), and a minimal libvirt for the **Office VM** (the only VM nixnas runs). Docker is retired.
 4. **Delivery** — a build-sign-seal-escrow-deliver pipeline that runs exclusively on the build hub. The node receives a finished, signed A/B slot and flips a pointer.
 
 ### The architectural keystone
@@ -153,7 +153,7 @@ GPT:
 | **k3s** | `services.k3s` (in-tree) | bundled containerd + runc | flannel, default `10.42.0.0/16` |
 | **Podman/Quadlets** | `virtualisation.quadlet.*` (quadlet-nix flake) | crun/runc under systemd generator | netavark + podman bridge `10.88.0.0/16` |
 | **Arch system container** | `virtualisation.incus` (recommended) | LXC | `incusbr0`, operator-chosen subnet |
-| **Windows VM(s)** | `virtualisation.libvirtd` + NixVirt | KVM/QEMU | libvirt `192.168.122.0/24` |
+| **Office VM** | `virtualisation.libvirtd` + NixVirt | KVM/QEMU | libvirt `192.168.122.0/24` |
 
 - **The real coexistence hazard is L3, not cgroups.** cgroup v2 + systemd give each its own sub-tree, no conflict. But four things rewrite host firewall/forwarding tables. Mitigations baked into the core:
   - Standardize on **nftables** (`networking.nftables.enable = true`) so all backends share one table.
@@ -188,9 +188,9 @@ Host baseline (generic core): `boot.initrd.kernelModules = [ "amdgpu" ]`, `hardw
 - **NFS:** `services.nfs.server.exports` (keep the existing posture — exported only to specific fleet peers; NFSv4-only needs just port 2049).
 - **Health:** `services.smartd` (notifications) is the direct Unraid-SMART replacement (don't schedule long self-tests on SMR drives during writes). For the at-a-glance panel: **Cockpit** (`services.cockpit` + storaged/podman/machines plugins) or **Netdata**. For history/alerts: **node-exporter + smartctl-exporter on the host** (so health survives k3s down) → Prometheus → Grafana (host or k3s).
 
-### 4.6 VMs
+### 4.6 The Office VM
 
-Keep `virtualisation.libvirtd` — minimally. Windows has no container substitute, so the permanent Windows VM stays a domain; the LUKS-under-ZFS pools present `/dev/zvol/<pool>/…` exactly as libvirt's `dev`-type disk expects. Declare domains via the **NixVirt** flake (takes libvirt XML, points `<disk>` at existing zvol paths, toggles run state) so the do-not-delete VMs are reproducible without `virsh` snowflakes. New Linux workloads go to containers/k3s, not VMs. The protected/do-not-delete zvols (Windows active/headless + placeholder zvols, the harvested desktop zvol, k3s datastore/token/PV datasets) carry over as KEEP and are never in a destroy batch.
+The only VM nixnas runs is the **Office VM**, via `virtualisation.libvirtd`. Its backing zvol lives in the **zvol folder** (a dataset under the HOT pool); the LUKS-under-ZFS pool presents `/dev/zvol/<pool>/…` exactly as libvirt's `dev`-type disk expects. Declare it via the **NixVirt** flake (libvirt XML, `<disk>` → the zvol, run-state toggle) so it is reproducible without `virsh` snowflakes. All other workloads go to containers/k3s.
 
 ### 4.7 HOT/COLD: explicit placement (shfs / FUSE union removed)
 
@@ -287,7 +287,7 @@ Exposure follows the three-door model: PUBLIC via the in-cluster tunnel (proxied
 | NFS (restricted) | `services.nfs.server.exports`, same posture | kept (scoped) |
 | shfs union `/mnt/user/…` | **REMOVED** — no FUSE union; data already on explicit single-pool datasets, apps point at the dataset mountpoint | replaced |
 | HOT⇄COLD mover-tiering | **explicit per-dataset placement** (HOT=SSD `hot`, COLD=HDD `cold`), operator-set; optional ZFS `special` vdev for speed-without-motion | replaced |
-| VMs (libvirt) | `virtualisation.libvirtd` + NixVirt, scoped to Windows | kept (minimal) |
+| Office VM (libvirt) | `virtualisation.libvirtd` + NixVirt, scoped to the Office VM (zvol in the zvol folder) | kept (minimal) |
 | LXC desktops (Unraid plugin) | Incus Arch container; no-systemd mount-race guard evaporates | replaced |
 | k3s control-plane (in LXC) | native `services.k3s` on metal | lifted onto metal |
 | GPU passthrough + shared-GPU platform | `hardware.amdgpu` + ROCm, render-GID pinned, hostPath into pods + Incus gpu device | host-bound |
@@ -302,7 +302,7 @@ Exposure follows the three-door model: PUBLIC via the in-cluster tunnel (proxied
 ## 9. Cross-cutting doctrine nixnas must honor
 
 - **No quotas / ARC is reclaimable** — never cap RAM away from ZFS ARC or set refquota to fence churn; contain runaway use at the workload boundary (pod limits, Nix `max-jobs`/`cores`), never the host/storage boundary.
-- **No data footguns** — `zfs destroy`/`rm`/`wipe` are human-gated, verify-and-REPORT; never batch unapproved/protected paths into an `rm` loop. The protected-zvol KEEP list carries over.
+- **No data footguns** — `zfs destroy`/`rm`/`wipe` are human-gated, verify-and-REPORT; never batch unapproved/protected paths into an `rm` loop.
 - **ZFS dataset checklist** — honor the four creation-immutable axes (casesensitivity/normalization/utf8only/encryption) and the content-vs-byte-exact encoding classes on any new dataset.
 - **SMR caution** applies to the SMR archive disks ONLY (not the CMR HDD pool); thermal pacing pauses transfers, never power-cycles.
 - **Local-first storage** — native ZFS/hostPath/bind; decouple to S3 only on explicit signal. nixnas is THE anchor: storage stays put, compute floats.
