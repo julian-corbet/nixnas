@@ -211,12 +211,14 @@ The Unraid union was only a *presentation veneer*: the data already lives on exp
 
 ---
 
-## 5. The build-sign-seal-deliver HUB pipeline
+## 5. Provisioning (local TUI) & updates (nix-side)
 
-**Doctrine: build on hub, never on node.** Every CPU-heavy or key-bearing step runs on the build hub; the node receives bytes and flips a pointer. nixnas as a 128 GB Ryzen box *can* itself be a build-capable `fat`-class machine, but the law is that a node never rebuilds *itself in place* past its class ceiling, and node-side convergence (autoUpgrade/Comin) is forbidden (it wedges constrained boxes). Updates are hub-pushed (deploy-rs over Tailscale) or image-routed.
+**Two distinct moments, two executors — neither is a remote build hub.**
+
+**Initial provisioning = the local TUI.** Because every image is *personalised* (your `nixnas.config`) **and** signed with *your own* Secure Boot keys, it can be neither pre-built generically nor built on the k3s it will host (chicken-and-egg). So the TUI runs the whole pipeline **locally**, on a trusted machine that holds your signing keys, and is **install-only** (it does not update):
 
 ```
-┌────────────────────  BUILD HUB  ────────────────────┐
+┌────────────────────  LOCAL (the TUI)  ────────────────────┐
 1 BUILD   nix build .#nixosConfigurations.<host> → toplevel
           mkImage: mksquashfs root → veritysetup format → root hash R
 2 SIGN    ukify build --cmdline "init=… copytoram roothash=R …" → uki.efi
@@ -226,8 +228,8 @@ The Unraid union was only a *presentation veneer*: the data already lives on exp
 4 ESCROW  ensure recovery keyslot exists; idempotent upsert to <vaultwarden-url> (token from sops)
 5 STAGE   assemble inactive-slot bundle {signed uki.efi, verity hash img, policy}
 └──────────────┬──────────────────────────────────────┘
-               │  deliver: ssh/scp over Tailscale, write the INACTIVE slot only
-┌──────────────▼──────  NAS NODE (receives only)  ─────┐
+               │  install: the local .raw overwrites the whole stick (updates: the box writes its own inactive slot)
+┌──────────────▼──────  the USB stick  ─────┐
 6 WRITE   drop signed UKI into ESP  EFI/Linux/nixnas_<slot>+3.efi
 7 SWITCH  set systemd-boot default → new slot; reboot
 8 ROLLBACK boot-counting decrements tries on each failed boot;
@@ -235,14 +237,16 @@ The Unraid union was only a *presentation veneer*: the data already lives on exp
 └──────────────────────────────────────────────────────┘
 ```
 
-- The two delivery paths mirror the fleet GUARD model: **in-place (deploy-rs, magic-rollback)** for a small closure delta under the class ceiling, vs the **image/full path** (the A/B UKI swap + automatic rollback) for a disk-layout change or oversized delta. A class-driven GUARD chooses per node: `nix eval --json` (never `--raw`), gate on the `gated` bool first, **fail-CLOSED** (empty policy → route to image), per-node marker so one image-routed host never freezes the fleet. The MC12-LE0 A/B slots *are* the image path for this machine.
-- **The node is dumb and replaceable.** Signing keys, the sops master age key, and the Vaultwarden token exist only on the hub; the node receives a signed UKI + verity + policy + a recovery slot it can't read back.
-- **Magic-rollback tmpfiles lesson:** any custom rollback/health temp path must be guaranteed by `systemd.tmpfiles`, or a reimage silently breaks rollback.
+**Updates = nix-side, on the running box.** No TUI, no re-flash: a new toplevel → new signed UKI + verity squashfs → written to the **inactive A/B slot** (`systemd-sysupdate`-style) → reboot → boot-counting rollback if the new slot fails its health gate. The live slot, `persist`, and your config are never touched.
 
-### Tooling forks to evaluate (see Decisions)
-- **`systemd-sysupdate`** is the closest upstream concept for versioned, verity-backed, boot-counted A/B image delivery — it may replace much of the bespoke deliver step.
-- **mkosi** builds exactly this class of signed+verity UKI image and integrates with systemd-repart/sysupdate — wrapping it may be far less code than a hand-rolled `mkImage`.
-- A/B at UKI granularity on bare metal has **no turnkey NixOS module** today; `boot.uki` + boot-counting + verity exist as pieces but the stitching is custom `lib/` + `modules/boot/` code.
+- **A/B + rollback live in the image / the running system**, not the TUI: systemd-boot boot-counting decrements tries on each failed boot; the health gate runs `bootctl … good`; exhausted tries → auto-fallback to the previous slot.
+- **Keys never leave your provisioning machine.** Signing keys, the sops master key, and the Vaultwarden token are used at build/provision time and are never shipped onto the stick.
+- **tmpfiles lesson:** any custom rollback/health temp path must be guaranteed by `systemd.tmpfiles`, or a re-image silently breaks rollback.
+
+### Tooling to evaluate
+- **`systemd-sysupdate`** is the closest upstream concept for the nix-side A/B update path (versioned, verity-backed, boot-counted) — it may carry most of the update half.
+- **mkosi** builds exactly this class of signed+verity image and integrates with systemd-repart — wrapping it may be far less code than a hand-rolled `lib.mkImage`.
+- A/B at UKI granularity on bare metal has **no turnkey NixOS module** today; `boot.uki` + boot-counting + verity exist as pieces, the stitching is custom `lib/` + `modules/boot/` code.
 
 ---
 
