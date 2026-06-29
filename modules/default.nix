@@ -14,9 +14,10 @@
     # ./crypto         # LUKS single-passphrase fan-out, TPM2 + PIN, recovery-key escrow
     ./storage/zfs-pools.nix  # IMPORT-ONLY pools (never create/format), stage-2 LUKS unlock, non-fatal import
     # ./storage/{smr-disks,shares}.nix   # SMR unlock+mount, samba/nfs (next)
-    # ./compute        # k3s, podman/quadlets, Incus Arch container, GPU, the Office VM
-    # ./network        # single nftables backend, per-bridge subnets
-    # ./observability  # smartd + exporters
+    ./compute/gpu.nix        # amdgpu + ROCm, render-GID pinning
+    # ./compute/{k3s,podman,arch-container,libvirt}.nix   # (next)
+    ./network/nftables.nix   # single nftables backend, ip_forward
+    ./observability/monitoring.nix   # smartd + host-level prometheus exporters
     ./appliance/base.nix     # stable identity (hostName) + Tailscale
     # ./appliance/hardening.nix          # firmware-password expectation, read-only-root (next)
   ];
