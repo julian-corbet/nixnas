@@ -17,6 +17,7 @@
     # ./compute        # k3s, podman/quadlets, Incus Arch container, GPU, the Office VM
     # ./network        # single nftables backend, per-bridge subnets
     # ./observability  # smartd + exporters
-    # ./appliance      # tailscale, hardening
+    ./appliance/base.nix     # stable identity (hostName) + Tailscale
+    # ./appliance/hardening.nix          # firmware-password expectation, read-only-root (next)
   ];
 }
