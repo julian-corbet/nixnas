@@ -204,7 +204,7 @@ Unraid's tiering is three coupled proprietary pieces with no NixOS drop-in. The 
 
 The Unraid union was only a *presentation veneer*: the data already lives on explicit single-pool datasets; shfs merely made HOT+COLD look like one path. nixnas drops the union concept rather than re-implementing it (no shfs, **no mergerfs**).
 
-- **Placement is an operator decision, per dataset.** Each dataset lives on exactly one pool — **HOT = the SSD pool, COLD = the HDD pool** — and the path is self-describing. There is no automatic mover and no transparent union; "tiering" is design-time placement set per dataset. Both pools are created **fresh** via `disko` and data is laid back down onto them, so placement is decided at build time, not migrated in place.
+- **Placement is an operator decision, per dataset.** Each dataset lives on exactly one pool — **HOT = the SSD pool, COLD = the HDD pool** — and the path is self-describing. There is no automatic mover and no transparent union; "tiering" is design-time placement set per dataset. **nixnas never creates or formats the data pools** — you build them by hand and lay your data down yourself; nixnas only **imports + LUKS-unlocks** them. `disko` in nixnas touches the **USB stick only**; your data is never touched.
 - **Optional speed-without-motion: a redundant ZFS `special` vdev** on the HDD pool (metadata + small blocks land on SSD) — most of the "hot data is fast" benefit with zero file motion and zero namespace tricks. Mirror it (`special`-vdev loss = dataset loss).
 - **If lifecycle motion is ever wanted for a specific dataset**, it is an explicit, observable `systemd.timer` job (`rsync -aHAX`/`syncoid`, copy-verify-delete, never-auto-delete-on-doubt, with a PINNED exclude-list for S3/versitygw objects + IPFS blocks whose keys must not move). Placement *policy*, off by default — not a union.
 - **sanoid/syncoid** are for snapshots + backup/offsite, never tiering (syncoid keeps the source).
@@ -280,7 +280,7 @@ Exposure follows the three-door model: PUBLIC via the in-cluster tunnel (proxied
 | Boot OS off USB (Ventoy 3-partition) | Signed UKI per A/B slot, copytoram verity squashfs, stick written only on update | replaced (LOCKED) |
 | License / flash-GUID registration | none — NixOS is free; entire licensing failure class gone | retired |
 | `md` parity array (SMR) | retiring; 5 SMR = standalone whole-disk-LUKS + xfs/btrfs, write-once, no parity | retired/host-bound |
-| Two ZFS pools, LUKS-under-ZFS | native ZFS, LUKS-under-ZFS, non-fatal import; **both pools recreated fresh** via disko, data re-laid (not in-place) | rebuilt |
+| Two ZFS pools, LUKS-under-ZFS | **operator-created** pools — nixnas only **imports + LUKS-unlocks** them, never creates/formats/destroys; `disko` touches the **USB stick only**; non-fatal import | imported |
 | LUKS unlock at array start (webUI passphrase) | single passphrase = TPM2 PIN, all devices; recovery escrow | replaced |
 | Remote unlock (none today) | stage-2 Tailscale SSH (primary) / initrd-SSH-over-Tailscale (fallback) | new |
 | SMB shares (`.cfg`, delete=destroy hazard) | `services.samba` `settings` — decoupled from dataset lifecycle | replaced |

@@ -9,23 +9,23 @@ let
 
   diskById = types.strMatching "/dev/disk/by-id/.+";
 
-  poolType = types.submodule {
+  # A pool nixnas IMPORTS. nixnas NEVER creates, formats, or destroys data pools —
+  # the operator builds them by hand. nixnas only LUKS-unlocks the members and
+  # `zpool import`s by name (topology is discovered on import, never specified here).
+  poolImport = types.submodule {
     options = {
       name = mkOption {
         type = types.str;
-        description = "ZFS pool name (e.g. the HOT pool `hot`, the COLD pool `cold`).";
+        description = "ZFS pool name to import (e.g. `hot`, `cold`). You create the pool manually; nixnas only imports it — it never creates or formats it.";
       };
-      disks = mkOption {
+      luksDevices = mkOption {
         type = types.listOf diskById;
+        default = [ ];
         description = ''
-          Member disks by stable `/dev/disk/by-id` path. LUKS-under-ZFS: each disk
-          is a LUKS2 device and ZFS sits directly on the decrypted mapper.
+          The LUKS member devices to unlock (by stable `/dev/disk/by-id` path) before
+          importing the pool. nixnas OPENS these with the single passphrase; it never
+          `luksFormat`s or wipes them.
         '';
-      };
-      topology = mkOption {
-        type = types.enum [ "single" "mirror" "raidz1" "raidz2" "raidz3" ];
-        default = "mirror";
-        description = "vdev topology across `disks`.";
       };
     };
   };
@@ -101,31 +101,30 @@ in
       };
     };
 
-    ## ── Storage: two fresh pools, explicit per-dataset placement ──────────
+    ## ── Storage: IMPORT-ONLY. nixnas never creates/formats/destroys data pools ──
+    ## You build the pools by hand; nixnas only imports + unlocks them. The only
+    ## device nixnas ever partitions/formats is the USB boot stick.
     storage = {
       pools = {
         hot = mkOption {
-          type = poolType;
-          description = "The HOT pool — SSD, fast (typically a mirror). Dataset placement here is the operator's explicit choice.";
+          type = poolImport;
+          description = "The HOT pool (SSD) to import. Operator-created; nixnas imports + LUKS-unlocks it, never creates or formats it.";
         };
         cold = mkOption {
-          type = poolType;
-          description = "The COLD pool — HDD, capacity (typically raidz). Dataset placement here is the operator's explicit choice.";
+          type = poolImport;
+          description = "The COLD pool (HDD) to import. Operator-created; nixnas imports + LUKS-unlocks it, never creates or formats it.";
         };
       };
       smrDisks = mkOption {
         type = types.attrsOf diskById;
         default = { };
         example = literalExpression ''{ archive0 = "/dev/disk/by-id/ata-…"; }'';
-        description = "Standalone whole-disk-LUKS SMR archive disks, keyed by label → by-id path. xfs/btrfs sits directly on the decrypted mapper.";
-      };
-      specialVdev = {
-        enable = mkEnableOption "a redundant ZFS `special` vdev on the COLD pool (metadata + small blocks on SSD — speed without file motion)";
-        disks = mkOption {
-          type = types.listOf diskById;
-          default = [ ];
-          description = "Mirror members for the `special` vdev (use ≥2 — a `special` vdev loss is a dataset loss).";
-        };
+        description = ''
+          Standalone whole-disk-LUKS SMR archive disks to unlock + mount, keyed by
+          label → `/dev/disk/by-id` path. nixnas unlocks and mounts the EXISTING
+          filesystem; it never formats them. Which dataset/files live HOT vs COLD is
+          the operator's manual choice — nixnas does no tiering and no FUSE union.
+        '';
       };
     };
 

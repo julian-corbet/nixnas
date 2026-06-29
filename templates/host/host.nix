@@ -12,14 +12,12 @@
     # crypto.recovery.credsSops      = config.sops.secrets."vaultwarden-escrow".path;
 
     storage.pools.hot = {
-      name = "hot"; # your HOT (SSD) pool
-      disks = [ "/dev/disk/by-id/ata-…" ];
-      topology = "mirror";
+      name = "hot"; # your HOT (SSD) pool — you create it by hand; nixnas only imports it
+      luksDevices = [ "/dev/disk/by-id/ata-…" ];
     };
     storage.pools.cold = {
-      name = "cold"; # your COLD (HDD) pool
-      disks = [ "/dev/disk/by-id/ata-…" ];
-      topology = "raidz1";
+      name = "cold"; # your COLD (HDD) pool — operator-created; nixnas imports only
+      luksDevices = [ "/dev/disk/by-id/ata-…" ];
     };
 
     compute.k3s.enable = true;

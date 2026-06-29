@@ -15,17 +15,15 @@
 
     storage.pools.hot = {
       name = "demohot";
-      disks = [ "/dev/disk/by-id/DEMO-ssd-0" "/dev/disk/by-id/DEMO-ssd-1" ];
-      topology = "mirror";
+      luksDevices = [ "/dev/disk/by-id/DEMO-ssd-0" "/dev/disk/by-id/DEMO-ssd-1" ];
     };
     storage.pools.cold = {
       name = "democold";
-      disks = [
+      luksDevices = [
         "/dev/disk/by-id/DEMO-hdd-0"
         "/dev/disk/by-id/DEMO-hdd-1"
         "/dev/disk/by-id/DEMO-hdd-2"
       ];
-      topology = "raidz1";
     };
     storage.smrDisks.archive0 = "/dev/disk/by-id/DEMO-smr-0";
 
