@@ -12,7 +12,8 @@
     # Implementation modules — added in subsequent milestones:
     # ./boot           # ram-root (copytoram + verity), signed UKIs, A/B + rollback, remote-unlock
     # ./crypto         # LUKS single-passphrase fan-out, TPM2 + PIN, recovery-key escrow
-    # ./storage        # fresh ZFS pools, explicit placement, SMR disks, shares
+    ./storage/zfs-pools.nix  # IMPORT-ONLY pools (never create/format), stage-2 LUKS unlock, non-fatal import
+    # ./storage/{smr-disks,shares}.nix   # SMR unlock+mount, samba/nfs (next)
     # ./compute        # k3s, podman/quadlets, Incus Arch container, GPU, the Office VM
     # ./network        # single nftables backend, per-bridge subnets
     # ./observability  # smartd + exporters
