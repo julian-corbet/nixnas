@@ -14,7 +14,7 @@
     ./boot/kernel.nix        # the tuned CachyOS kernel (nixnas.kernel.*)
     ./boot/secureboot.nix    # UEFI Secure Boot via lanzaboote (operator-owned keys)
     ./boot/remote-unlock.nix # headless store unlock: initrd-SSH (NIC up in initrd)
-    # ./boot/rollback.nix    # next: boot-counting auto-rollback (manual menu already works)
+    ./boot/rollback.nix      # structural failsafe: kept generations + boot-counting
 
     ./crypto/tpm2.nix        # TPM2 device access (stage-2 unlock); enrollment is first-boot
     # ./crypto/{luks,recovery-escrow}.nix   # next: LUKS store + data-pool unlock, recovery escrow

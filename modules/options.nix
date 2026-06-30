@@ -52,7 +52,22 @@ in
       tries = mkOption {
         type = types.ints.positive;
         default = 3;
-        description = "systemd-boot boot-counting attempts before automatic rollback to the previous generation.";
+        description = ''
+          Boot-counting attempts a new generation gets before it is judged bad and the
+          bootloader falls back to the previous one. Each boot decrements the counter;
+          reaching `boot-complete.target` clears it (the generation is blessed). This is the
+          AUTOMATIC failsafe layer — the manual generation menu is the guaranteed fallback.
+        '';
+      };
+      keepGenerations = mkOption {
+        type = types.ints.positive;
+        default = 8;
+        description = ''
+          How many past generations to keep bootable (the rollback menu depth, and the
+          structural failsafe). Bounded by the ESP: each kept generation is one signed UKI
+          (~80 MiB), so the default 8 fits the 1 GiB `usb.espSizeMiB`. Raise both together
+          for deeper history. (Measured Boot, a later increment, caps this at 8.)
+        '';
       };
       secureBoot = {
         enable = mkEnableOption "UEFI Secure Boot with the operator's OWN keys via lanzaboote (Microsoft keys not enrolled)";

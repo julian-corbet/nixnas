@@ -25,7 +25,29 @@
         echo -n "[get_coption] "; f2fs_io get_coption "$f" 2>&1 || true
         echo -n "[get_cblocks] "; f2fs_io get_cblocks "$f" 2>&1 || true
       fi
+      # Boot-counting WRITE half: the signed UKI is installed with a `+<tries>` counter.
+      echo "[UKIs] $(ls -1 /boot/EFI/Linux/ 2>/dev/null | tr '\n' ' ')"
       echo "=== NIXNAS-VERIFY-END ==="
+    '';
+  };
+
+  # Boot-counting BLESS half: runs as part of reaching boot-complete.target (after
+  # systemd-bless-boot), so the UKI name here reflects the post-bless state — the `+N`
+  # counter is gone once this boot was assessed good.
+  systemd.services.nixnas-verify-bless = {
+    description = "DEV: report the boot-counting state after blessing";
+    wantedBy = [ "boot-complete.target" ];
+    after = [ "systemd-bless-boot.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      StandardOutput = "journal+console";
+      StandardError = "journal+console";
+    };
+    path = [ pkgs.coreutils ];
+    script = ''
+      echo "=== NIXNAS-BLESS-START ==="
+      echo "[UKIs post-bless] $(ls -1 /boot/EFI/Linux/ 2>/dev/null | tr '\n' ' ')"
+      echo "=== NIXNAS-BLESS-END ==="
     '';
   };
 }
