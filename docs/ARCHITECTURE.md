@@ -50,11 +50,14 @@ home NAS and is **addable later as a hybrid** (§6).
                                         machine-id + the persisted SSH host key (sops age id)
 ```
 
-f2fs (flash-friendly), `noatime`. Data lives on the operator's **separate** encrypted
-ZFS pools — never on the stick. Each generation's UKI (kernel + initrd) is ~60–90 MiB,
-so the **ESP is the tighter bound** on generation count: ~8 in 768 MiB
-(`boot.loader.systemd-boot.configurationLimit`). The store side is cheap (base once +
-deltas).
+f2fs is **zstd:22-compressed** (`compress_log_size=2`/16 KiB) and mounted at **`/nix`** (so
+`/nix/var` persists under tmpfs root); compression buys faster boot off the slow stick + less
+wear. The full f2fs engineering detail — mechanics, the gen-1-via-disko seeding, the release
+pass, mount options, the kernel/ZFS combo, and the footguns — is in **[`STORAGE.md`](STORAGE.md)**;
+appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on the operator's
+**separate** encrypted ZFS pools — never on the stick. Each generation's UKI (kernel + initrd) is
+~60–90 MiB, so the **ESP is the tighter bound** on generation count: ~8 in 768 MiB
+(`boot.lanzaboote.configurationLimit`). The store side is cheap (base once + deltas).
 
 ## 3. Boot flow (impermanence, page-cache RAM)
 
