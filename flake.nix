@@ -1,16 +1,21 @@
 {
   description =
-    "nixnas — a declarative, RAM-resident NixOS NAS appliance: boots from USB into RAM, A/B-updated, Evil-Maid-hardened.";
+    "nixnas — a declarative NixOS NAS appliance: USB-boot, impermanence, generations + rollback, encrypted, Evil-Maid-hardened.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Build-VM-only: disko's vmTools image builder breaks on current nixpkgs (the new
+    # vmTools wants kernel.target, which disko's aggregateModules kernel lacks). We run
+    # the throwaway image-builder VM from a stable nixpkgs (older vmTools). The image
+    # CONTENT is unaffected — it comes from `nixpkgs` (unstable) via the host config.
+    nixpkgs-stable.url = "github:NixOS/nixpkgs/nixos-25.05";
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, disko, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, disko, ... }:
     let
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
@@ -33,6 +38,11 @@
           disko.nixosModules.disko
           self.nixosModules.nixnas
           ./hosts/demo
+          # Build the throwaway image-builder VM from stable nixpkgs (see inputs above).
+          {
+            disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
+            disko.imageBuilder.kernelPackages = nixpkgs-stable.legacyPackages.x86_64-linux.linuxPackages;
+          }
         ];
       };
 
@@ -42,9 +52,12 @@
       });
 
       # The personalised USB image. The TUI builds this locally for a real host; here
-      # `packages.image` builds the demo image (placeholder config, zero secrets).
+      # `packages.image` builds the demo image (disko, placeholder config, zero secrets).
+      # `diskoImages` builds the .raw in the nix sandbox; `diskoImagesScript` runs a VM
+      # (the path the TUI uses, since it can inject the LUKS key via --pre-format-files).
       packages = forAllSystems (system: {
-        image = self.nixosConfigurations.demo.config.system.build.image;
+        image = self.nixosConfigurations.demo.config.system.build.diskoImages;
+        imageScript = self.nixosConfigurations.demo.config.system.build.diskoImagesScript;
       });
 
       # The build-hub toolchain (sign / seal / escrow run here, never on the node).

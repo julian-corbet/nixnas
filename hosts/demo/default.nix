@@ -27,21 +27,12 @@
     };
     storage.smrDisks.archive0 = "/dev/disk/by-id/DEMO-smr-0";
 
-    compute.k3s.enable = true;
-    compute.archContainer.enable = true;
-    compute.gpu.enable = true;
-    compute.officeVm.enable = false; # the demo has no Office VM zvol
-
     tailscale.enable = true;
   };
 
-  # Minimal NixOS scaffolding so `system.build.toplevel` evaluates standalone.
-  # The real boot chain / filesystems come from the nixnas implementation modules
-  # (later milestones); for now the core ships only the option API.
-  fileSystems."/" = {
-    device = "tmpfs";
-    fsType = "tmpfs";
-  };
-  boot.loader.grub.enable = false;
+  # INCREMENT 1: let the demo image be logged into in the test VM (placeholder only;
+  # a real host authenticates via SSH keys / the unlock chain, not a root password).
+  users.users.root.initialPassword = "nixnas";
+
   system.stateVersion = "25.05";
 }

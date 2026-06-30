@@ -6,11 +6,11 @@
 # on the machine running the TUI. See docs/DESIGN.md §5.
 { lib }:
 {
-  # Build the bootable USB image (the `.raw`) for an evaluated nixnas host.
-  # `host` is a nixosSystem (e.g. `self.nixosConfigurations.<name>`), which must
-  # include `modules/boot/image.nix` (nix-native `image.repart`, not mkosi).
+  # Build the bootable USB image for an evaluated nixnas host. `host` is a
+  # nixosSystem (e.g. `self.nixosConfigurations.<name>`) that imports the nixnas
+  # module (disko on-stick layout in modules/boot/disk.nix).
   #
-  # TODO(boot-chain): today this is the entry point; it returns the signed,
-  # verity-protected, A/B image once modules/boot/image.nix is wired in.
-  mkImage = host: host.config.system.build.image;
+  # Returns disko's image builder: `diskoImages` (sandbox .raw) for a secret-free
+  # demo; the TUI uses `diskoImagesScript` to inject the LUKS key at format time.
+  mkImage = host: host.config.system.build.diskoImages;
 }

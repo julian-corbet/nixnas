@@ -1,65 +1,43 @@
-# nixnas — bootable USB image (nix-native, built on nixpkgs' image.repart verityStore).
+# nixnas — boot chain glue (UEFI + initrd) on the disko-built image.
 #
-# The nix store lives in a dm-verity-protected /usr partition; nixpkgs builds a UKI
-# that carries the verity roothash (`usrhash=…`) in its cmdline, and the systemd
-# initrd sets up dm-verity and mounts /usr. We add, in later iterations: SecureBoot
-# signing of that UKI, copytoram (RAM-load the store), and A/B slots + boot-counting.
-# See docs/DESIGN.md §2.
+# The disk LAYOUT lives in ./disk.nix; this module is the boot-time wiring:
+# systemd-boot (lanzaboote wraps it once Secure Boot lands), the serial console,
+# and the early kernel modules the initrd needs to see the USB stick + f2fs store.
 #
-# STATUS: v0 — goal is simply to BOOT a verity image in a QEMU/OVMF VM. Iterated via
-# the build(cluster) + boot(VM) loop. copytoram / SecureBoot / A-B are TODO.
-{ config, lib, modulesPath, ... }:
+# INCREMENT 1: plain systemd-boot on a removable image, root on f2fs (no LUKS / no
+# lanzaboote / no TPM2 yet) — goal is simply to BOOT the disko-f2fs-zstd image in the
+# test VM. Secure Boot signing, the LUKS+TPM2 unlock, impermanence and the CachyOS
+# kernel are layered in next, each validated in the VM.
+{ config, lib, ... }:
 let
   cfg = config.nixnas;
 in
 {
-  imports = [ "${modulesPath}/image/repart.nix" ];
-
   config = lib.mkIf cfg.enable {
+    # UEFI boot. Removable image → never write EFI variables (the stick boots on any box).
+    boot.loader.systemd-boot.enable = true;
+    boot.loader.efi.canTouchEfiVariables = false;
     boot.loader.grub.enable = false;
-    boot.initrd.systemd.enable = true; # required for the dm-verity setup generator
 
-    # Serial console (the MC12-LE0 has SOL on ttyS0; also lets a test VM be observed).
-    # ttyS0 is the LAST console= so it becomes /dev/console (systemd writes there).
+    # systemd in the initrd — the supported path for the coming TPM2-LUKS unlock + lanzaboote.
+    boot.initrd.systemd.enable = true;
+
+    # Serial console: the MC12-LE0 exposes SOL on ttyS0; it also lets the test VM be
+    # observed headlessly. ttyS0 is LAST so it becomes /dev/console.
     boot.kernelParams = [
       "console=tty0"
       "console=ttyS0,115200"
     ];
 
     # The boot device + data-pool controllers the initrd must drive. A generic image
-    # auto-detects none, so the USB boot stick (and SATA/NVMe data pools) are invisible
-    # to early userspace — and the dm-verity /usr partition never appears → boot hangs.
+    # auto-detects none, so without these the USB stick (and the f2fs store) are invisible
+    # to early userspace and boot hangs waiting for the root device.
     boot.initrd.availableKernelModules = [
       "usb_storage" "uas" "xhci_pci" "ehci_pci" # USB boot stick
       "ahci" "nvme" "sd_mod"                    # SATA / NVMe (data pools on real hardware)
       "virtio_blk" "virtio_pci" "virtio_scsi"   # VM testing
     ];
-
-    # RAM-root: / is tmpfs; the immutable store comes from the verity-protected /usr.
-    fileSystems."/" = lib.mkDefault {
-      device = "tmpfs";
-      fsType = "tmpfs";
-      options = [ "mode=0755" "size=2G" ];
-    };
-
-    image.repart = {
-      name = "nixnas";
-      verityStore = {
-        enable = true;
-        # v0: boot the UKI directly via the removable-media fallback path, so UEFI
-        # runs it with no bootloader. systemd-boot + A/B boot-counting come later.
-        ukiPath = "/EFI/BOOT/BOOTX64.EFI";
-      };
-      partitions = {
-        "00-esp".repartConfig = {
-          Type = "esp";
-          Format = "vfat";
-          Label = "ESP";
-          SizeMinBytes = "256M";
-          SizeMaxBytes = "256M";
-        };
-        # 10-store-verity (hash) + 20-store (erofs /usr) are provided by verityStore.
-      };
-    };
+    # f2fs (+ its crc32 dep) must be in the initrd to mount the store.
+    boot.initrd.kernelModules = [ "f2fs" "crc32" ];
   };
 }
