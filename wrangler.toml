@@ -1,0 +1,11 @@
+name = "nixnas"
+compatibility_date = "2026-05-09"
+
+# The project's presentation page — plain static HTML served by a Cloudflare Worker
+# (same shape as dotkeeper.corbet.ch). Content lives in ./site.
+[assets]
+directory = "./site"
+
+[[routes]]
+pattern = "nixnas.corbet.ch"
+custom_domain = true
