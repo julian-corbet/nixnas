@@ -50,6 +50,7 @@
           ./hosts/demo
           ./test/verify-image.nix   # DEV self-check (f2fs compression report on the console)
           ./test/verify-tpm2.nix    # DEV self-check (TPM2+PIN enrollment against swtpm)
+          ./test/verify-writes.nix  # DEV self-check (USB stick write-isolation)
           # The CachyOS kernel set (pkgs.cachyosKernels); modules/boot/kernel.nix reads it.
           { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
           # Build the throwaway image-builder VM from stable nixpkgs (see inputs above).
