@@ -16,7 +16,7 @@ pub fn build_image(config_path: &Path) -> Result<PathBuf> {
     let out_link = dir.join(".nixnas-image");
 
     let status = Command::new("nix")
-        .args(["build", "--print-build-logs", ".#image", "--out-link"])
+        .args(["build", "--print-build-logs", "--accept-flake-config", ".#image", "--out-link"])
         .arg(&out_link)
         .current_dir(dir)
         .status()
@@ -25,5 +25,12 @@ pub fn build_image(config_path: &Path) -> Result<PathBuf> {
     if !status.success() {
         bail!("nix build failed");
     }
-    Ok(out_link)
+
+    // `.#image` (disko diskoImages) produces a DIRECTORY containing the `.raw`; return the raw file.
+    let raw = std::fs::read_dir(&out_link)
+        .with_context(|| format!("reading built image dir {}", out_link.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .find(|p| p.extension().map_or(false, |x| x == "raw"))
+        .context("no .raw file in the built image output")?;
+    Ok(raw)
 }

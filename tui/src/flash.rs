@@ -51,10 +51,16 @@ fn removable_devices() -> Result<Vec<BlockDevice>> {
 
 pub fn flash(theme: &ColorfulTheme, config_path: &Path) -> Result<()> {
     let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let image = dir.join(".nixnas-image");
-    if !image.exists() {
-        bail!("no built image found — run `Build image` first");
-    }
+    // The disko `.#image` output is a DIRECTORY holding the `.raw`; find the raw file
+    // (caligula burns the file, not the directory).
+    let out_link = dir.join(".nixnas-image");
+    let image = std::fs::read_dir(&out_link)
+        .ok()
+        .and_then(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .find(|p| p.extension().map_or(false, |x| x == "raw"))
+        })
+        .context("no built image found — run `Build image` first")?;
 
     let devices = removable_devices()?;
     if devices.is_empty() {

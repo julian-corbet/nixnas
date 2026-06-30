@@ -1,9 +1,9 @@
 //! nixnas — a small, guided TUI to configure, build, and flash a nixnas USB stick.
 //!
 //! Deliberately narrow scope: it does NOT do updates. A running nixnas updates itself
-//! the Nix way (writes its inactive A/B slot). This tool only PROVISIONS a fresh
-//! stick: edit config -> build the personalised image LOCALLY -> optionally back the
-//! current stick up -> overwrite it.
+//! the Nix way (system.autoUpgrade builds a new generation; the bootloader keeps the
+//! previous ones for rollback). This tool only PROVISIONS a fresh stick: edit config ->
+//! build the personalised image LOCALLY -> optionally back the current stick up -> overwrite it.
 
 mod build;
 mod config;
