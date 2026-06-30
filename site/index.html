@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>nixnas &mdash; an encrypted NixOS NAS appliance, booted from RAM</title>
-  <meta name="description" content="Turn any NixOS config into a USB-bootable, RAM-resident, LUKS-encrypted NAS that survives a bad update and a missing disk. Secure Boot with your own keys, TPM2+PIN unlock, headless over SSH. The Unraid operating model, fully declarative.">
+  <title>nixnas &mdash; your declarative NixOS, secure and RAM-resident, on a USB stick</title>
+  <meta name="description" content="nixnas packages your own declarative NixOS into a secure, RAM-resident USB appliance: Secure Boot with your keys, TPM2+PIN unlock, headless over SSH, a tuned CachyOS kernel, self-updating with rollback. Bring your config and your storage — a local TUI writes your image.">
   <meta name="theme-color" content="#0b1120" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta property="og:title" content="nixnas">
-  <meta property="og:description" content="An encrypted, RAM-resident NixOS NAS appliance on a USB stick. Secure Boot + TPM2+PIN, headless unlock, rollback-safe. The Unraid model, declarative.">
+  <meta property="og:description" content="Your declarative NixOS, on a USB stick — secure, RAM-resident, self-updating. Secure Boot + TPM2 PIN, headless unlock, CachyOS-tuned. Bring your config and your storage; a local TUI writes your image.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nixnas.corbet.ch">
   <meta name="twitter:card" content="summary">
@@ -29,8 +29,8 @@
 
   <div class="hero-content">
     <h1>nixnas</h1>
-    <p class="tagline">An encrypted NixOS NAS appliance, booted from RAM</p>
-    <p class="subtitle">Turn any NixOS config into a USB-bootable, RAM-resident, LUKS-encrypted NAS that survives a bad update <em>and</em> a missing disk &mdash; the Unraid operating model, fully declarative.</p>
+    <p class="tagline">Your declarative NixOS &mdash; secure, RAM-resident, on a USB stick</p>
+    <p class="subtitle">nixnas packages <em>your own</em> NixOS config into a USB-bootable appliance: it runs from RAM, locks the boot chain end to end, self-updates with rollback, and connects to the storage you already have. You bring the declarative config &mdash; a local TUI writes your signed image.</p>
     <div class="cta">
       <a href="https://github.com/julian-corbet/nixnas" class="btn btn-primary">View on GitHub</a>
       <a href="#how" class="btn btn-secondary">How it works</a>
@@ -41,19 +41,19 @@
     <div class="terminal">
       <div class="terminal-header">
         <div class="terminal-dots"><span></span><span></span><span></span></div>
-        <span class="terminal-title">nixnas — build, flash, boot</span>
+        <span class="terminal-title">nixnas — write your image, boot from RAM</span>
       </div>
-      <pre class="terminal-body"><code><span class="prompt">$</span> nixnas                       <span class="output"># the local build + flash TUI</span>
-<span class="output">[nixnas] LUKS store passphrase: ********   (0600 temp file, shredded after the build)
+      <pre class="terminal-body"><code><span class="prompt">$</span> nixnas                       <span class="output"># a local TUI over your own flake</span>
+<span class="output">[nixnas] LUKS passphrase: ********   (0600 temp file, shredded after the build)
 [nixnas] building .#image — CachyOS kernel · LUKS f2fs-zstd store · lanzaboote-signed UKI</span>
-<span class="ok">[nixnas] ✓ nixnas.raw</span><span class="output">  — 3.4 GiB closure, zstd-compressed on the stick
+<span class="ok">[nixnas] ✓ nixnas.raw</span><span class="output">  — your config, ~3.4 GiB, zstd-compressed on the stick
 [nixnas] flashing → /dev/disk/by-id/usb-…</span>
 
 <span class="prompt">$</span> <span class="output"># first boot, headless — unlock over SSH, in the initrd:</span>
-<span class="output">[initrd] 🔐 enter PIN for the store (TPM2)   ·   ssh root@nas</span>
+<span class="output">[initrd] 🔐 enter PIN (TPM2)   ·   ssh root@box</span>
 <span class="ok">[  OK  ]</span><span class="output"> store unlocked · /nix on f2fs zstd:22 · root = tmpfs (RAM)
-[  OK  ] data pools imported: hot (HOT) · cold (COLD)</span>
-nas login: _</code></pre>
+[  OK  ] your storage unlocked + mounted — never formatted</span>
+box login: _</code></pre>
     </div>
   </div>
 </header>
@@ -66,18 +66,18 @@ nas login: _</code></pre>
     <div class="steps">
       <div class="step">
         <div class="step-num">1</div>
-        <h3>Declare</h3>
-        <p>Your host's <code>nixosConfiguration</code> imports the nixnas module and sets a handful of <code>nixnas.*</code> values. k3s, GPU, Samba, VMs are plain NixOS alongside.</p>
+        <h3>Bring your config</h3>
+        <p>Your NixOS flake imports the nixnas module and sets a handful of <code>nixnas.*</code> values. Everything you actually run &mdash; services, containers, orchestrators, shares &mdash; is your own declarative NixOS.</p>
       </div>
       <div class="step">
         <div class="step-num">2</div>
-        <h3>Build &amp; flash</h3>
-        <p>A small Rust TUI builds the image <strong>locally</strong>, signs it with <strong>your own</strong> Secure Boot keys, and flashes the stick. Nothing leaves your machine.</p>
+        <h3>Write your image</h3>
+        <p>A local Rust TUI builds the personalised image <strong>on your machine</strong>, signs it with <strong>your own</strong> Secure Boot keys, and flashes the stick. Your secrets never leave.</p>
       </div>
       <div class="step">
         <div class="step-num">3</div>
-        <h3>Boot</h3>
-        <p>Encrypted, RAM-resident, headless. One PIN unlocks the store <em>and</em> every data pool. A bad update? Boot the previous generation from the menu.</p>
+        <h3>Boot from RAM</h3>
+        <p>Encrypted, headless, running entirely in RAM. One PIN unlocks the stick <em>and</em> your storage. A bad update? Boot the previous generation from the menu.</p>
       </div>
     </div>
   </div>
@@ -85,19 +85,15 @@ nas login: _</code></pre>
 
 <section class="features">
   <div class="container">
-    <h2>Features</h2>
+    <h2>What nixnas does</h2>
     <div class="feature-grid">
       <div class="feature">
-        <h3>RAM-resident, done right</h3>
-        <p>The root is a tmpfs (impermanence); only <code>/nix</code> and the ESP persist. The booted closure is warmed into a compressed page cache &mdash; run-from-RAM without <code>copytoram</code>, and self-update still works.</p>
-      </div>
-      <div class="feature">
-        <h3>Encrypted f2fs store</h3>
-        <p>The on-stick store is LUKS2 with f2fs <code>zstd:22</code> compression &mdash; small footprint on a slow stick, fast once it's in RAM.</p>
+        <h3>Boot a Nix from USB, into RAM</h3>
+        <p>From an 8&nbsp;GB stick up. The root is a tmpfs (impermanence); only <code>/nix</code> and the ESP persist, and the closure is warmed into a compressed page cache &mdash; run-from-RAM without <code>copytoram</code>, self-update intact.</p>
       </div>
       <div class="feature">
         <h3>Secure Boot, your keys</h3>
-        <p><strong>lanzaboote</strong> signs every Unified Kernel Image with your own PK/KEK/db. The Microsoft CA is not enrolled &mdash; no unsigned kernel runs.</p>
+        <p><strong>lanzaboote</strong> signs every Unified Kernel Image with your own PK/KEK/db. The Microsoft CA is not enrolled &mdash; no unsigned kernel runs. Paired with a firmware password and measured boot, it's evil-maid hardened.</p>
       </div>
       <div class="feature">
         <h3>TPM2 + PIN unlock</h3>
@@ -108,16 +104,20 @@ nas login: _</code></pre>
         <p>No console? The NIC comes up <em>in the initrd</em> and you hand the PIN over SSH. Validated unlocking the box entirely over the network.</p>
       </div>
       <div class="feature">
-        <h3>Rollback-safe</h3>
-        <p>Every past generation stays bootable as its own signed UKI; the bootloader menu is the guaranteed rollback, with boot-counting on top. A failed update never strands you.</p>
+        <h3>Tuned for speed</h3>
+        <p>The CachyOS kernel (x86-64-v3 + ThinLTO), pulled pre-built from a binary cache &mdash; performance without a local compile. f2fs <code>zstd:22</code> keeps the slow stick small.</p>
+      </div>
+      <div class="feature">
+        <h3>Declarative &amp; rollback-safe</h3>
+        <p>The whole appliance is your git-versioned NixOS. Every past generation stays bootable as its own signed UKI; the bootloader menu is the guaranteed rollback, with boot-counting on top.</p>
       </div>
       <div class="feature">
         <h3>Self-update, never self-reboots</h3>
         <p><code>autoUpgrade</code> stages the next generation and stops &mdash; it activates on your next PIN-unlocked reboot, so a headless box is never stuck at an unlock prompt.</p>
       </div>
       <div class="feature">
-        <h3>Your data pools, untouched</h3>
-        <p>nixnas <strong>imports and unlocks</strong> the ZFS pools you built; it never creates, formats, or destroys them. The box boots even if a pool is degraded or missing.</p>
+        <h3>Bring your own storage</h3>
+        <p>Connect the storage you already have &mdash; any Linux filesystem and encryption. nixnas <strong>imports and unlocks</strong> it; it never creates, formats, or destroys it. The box boots even if a disk is missing.</p>
       </div>
       <div class="feature">
         <h3>Kind to the stick</h3>
@@ -125,15 +125,15 @@ nas login: _</code></pre>
       </div>
       <div class="feature">
         <h3>Portable disks</h3>
-        <p>Only the stick binds to the TPM. The data pools take a plain passphrase keyslot, so a disk pulled into any machine still opens &mdash; no specific box's TPM required.</p>
+        <p>Only the stick binds to the TPM. Your data carries a plain passphrase keyslot, so a disk pulled into any machine still opens &mdash; no specific box's TPM required.</p>
       </div>
       <div class="feature">
-        <h3>Tuned kernel</h3>
-        <p>The CachyOS kernel (x86-64-v3 + ThinLTO) with <code>zfs_cachyos</code>, pulled pre-built from a binary cache &mdash; speed without a local compile.</p>
+        <h3>One unlock, everything</h3>
+        <p>The PIN is the TPM2 PIN <em>and</em> your storage passphrase &mdash; entered once in the initrd, reused across the store and every volume via the kernel keyring.</p>
       </div>
       <div class="feature">
         <h3>Thin by design</h3>
-        <p>nixnas owns boot, crypto, the USB store, and kernel packaging &mdash; nothing else. Your k3s, GPU, shares and VMs are plain NixOS you declare alongside.</p>
+        <p>nixnas owns boot, crypto, the USB store, and kernel packaging &mdash; nothing else. Your services, containers, k3s, shares, VMs &mdash; whatever you run &mdash; are your own NixOS, declared alongside.</p>
       </div>
     </div>
   </div>
@@ -142,28 +142,29 @@ nas login: _</code></pre>
 <section class="architecture">
   <div class="container">
     <h2>Architecture</h2>
-    <pre class="arch-diagram"><code>  USB stick  (write-isolated)               ZFS pools  (imported, never formatted)
-  ┌────────────────────────────┐            ┌───────────────────┬───────────────────┐
-  │ ESP    signed UKIs (rollbk) │            │  HOT   (SSD)      │  COLD   (HDD)      │
-  │ LUKS2  f2fs-zstd store ──┐  │            │  images · state   │  bulk · backups   │
-  └──────────────────────────┼──┘            └─────────▲─────────┴─────────▲─────────┘
-        unlock once (TPM2+PIN)│  over SSH               │  same passphrase  │
-                              ▼  in the initrd          │  (keyring reuse)  │
-                   root = tmpfs (RAM)  ◄── /nix warmed into compressed RAM ─┘
-                              │
-                   k3s · samba · VMs  ── workloads pulled from Git at runtime (not on the stick)</code></pre>
+    <pre class="arch-diagram"><code>   USB stick  (8 GB+, write-isolated)
+     ESP     signed UKIs        -  Secure Boot (your keys) + rollback
+     store   LUKS2 + f2fs-zstd  -  the nix store = your OS
+       |
+       |  unlock once:  TPM2 + PIN  (headless, over SSH in the initrd)
+       v
+   root = tmpfs (RAM)  -  /nix warmed into compressed RAM
+       |
+       +--->  your declarative config in git   (services, containers, k3s - you bring)
+       |
+       +--->  your Linux storage               (any FS + encryption; imported, never formatted)</code></pre>
     <div class="arch-details">
       <div class="arch-detail">
         <h3>Impermanence</h3>
-        <p>The root is a tmpfs; only <code>/nix</code> and the ESP survive a reboot. The OS runs from RAM &mdash; the slow stick is spared, runtime state lives on the pools.</p>
+        <p>The root is a tmpfs; only <code>/nix</code> and the ESP survive a reboot. The OS runs from RAM &mdash; the slow stick is spared, runtime state lives on your storage.</p>
       </div>
       <div class="arch-detail">
-        <h3>One unlock, everything</h3>
-        <p>The PIN is the TPM2 PIN <em>and</em> the data-pool passphrase. Entered once in the initrd, reused across the store and every pool via the kernel keyring.</p>
+        <h3>You bring the rest</h3>
+        <p>nixnas is the boot + crypto + store + kernel mechanism. Your workloads &mdash; k3s, containers, file shares, VMs &mdash; are plain NixOS in your own git, built into the same image.</p>
       </div>
       <div class="arch-detail">
         <h3>Import-only</h3>
-        <p>nixnas unlocks and imports your existing pools. It never creates, formats, or destroys them &mdash; the only device it ever partitions is the USB stick.</p>
+        <p>nixnas unlocks and mounts your existing storage. It never creates, formats, or destroys it &mdash; the only device it ever partitions is the USB stick.</p>
       </div>
     </div>
   </div>
@@ -174,13 +175,13 @@ nas login: _</code></pre>
     <h2>Get started</h2>
     <div class="install-grid">
       <div class="install-method">
-        <h3>Scaffold a private host</h3>
-        <p>nixnas is the public core; your real disks, keys and pools live in a private overlay that imports it:</p>
+        <h3>Scaffold your host</h3>
+        <p>nixnas is the public core; your real disks, keys and config live in your own flake that imports it:</p>
         <pre><code>nix flake init -t github:julian-corbet/nixnas#host</code></pre>
-        <p>Fill in your <code>nixnas.*</code> values in <code>host.nix</code> &mdash; pools, SSH keys, the USB device.</p>
+        <p>Fill in your <code>nixnas.*</code> values in <code>host.nix</code> &mdash; storage, SSH keys, the USB device &mdash; and add whatever else you run as normal NixOS.</p>
       </div>
       <div class="install-method">
-        <h3>Build &amp; flash</h3>
+        <h3>Write &amp; flash your image</h3>
         <p>The Rust TUI builds the personalised image on your trusted machine and flashes the stick:</p>
         <pre><code>cd tui &amp;&amp; cargo run
 # → builds .#image, prompts the passphrase,
@@ -188,7 +189,7 @@ nas login: _</code></pre>
       </div>
       <div class="install-method">
         <h3>Requirements</h3>
-        <p>A UEFI x86-64 box with <strong>TPM 2.0</strong>, a <strong>&ge;8 GiB</strong> USB stick, and your own ZFS data pools whose LUKS members carry the chosen passphrase as a keyslot. Secure Boot needs your own keys enrolled + a firmware password.</p>
+        <p>A UEFI x86-64 box with <strong>TPM 2.0</strong>, an <strong>8&nbsp;GB+</strong> USB stick, and your own storage (any Linux filesystem; LUKS members carry the chosen passphrase as a keyslot). Secure Boot needs your own keys enrolled + a firmware password.</p>
       </div>
     </div>
     <div class="status-note">

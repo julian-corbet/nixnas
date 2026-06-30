@@ -219,10 +219,11 @@ workflow.
 *(Resolved by the steelman: "copytoram a tmpfs /nix/store" does NOT compose with
 autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
 
-## 10. Storage hierarchy, wear & the rescue model (the Unraid operating model)
+## 10. Storage hierarchy, wear & the rescue model
 
-- **The layers — only the smallest is on the stick.** This is the Unraid model: a tiny boot
-  medium holds the OS (in RAM), everything heavy is elsewhere.
+- **The layers — only the smallest is on the stick.** A tiny boot medium holds the OS (in
+  RAM); everything heavy lives elsewhere. (The classic appliance-NAS split: boot the OS from
+  a small write-light medium, keep data + state on the array.)
   | Layer | What | Where |
   |---|---|---|
   | OS image | the **nix store** (kernel, k3s/containerd binaries, systemd, rendered config) | **USB stick** (read into RAM; impermanence) |

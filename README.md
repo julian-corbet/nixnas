@@ -1,8 +1,10 @@
 # nixnas
 
-A fully declarative, RAM-resident NixOS appliance — a **distribution for the
-self-hosted-NAS use-case** that brings the Unraid operating model to NixOS, built to
-be adopted (and contributed to) by others, not just one machine.
+Boot **your own** declarative NixOS from a USB stick (8 GB+) into RAM — with the whole
+boot chain hardened, self-update and rollback built in, and your existing storage
+connected. nixnas is the appliance mechanism (boot, crypto, the on-stick store, the
+kernel); the workloads are plain NixOS you bring. A local TUI writes your signed image.
+Built to be adopted (and contributed to) by others, not just one machine.
 
 - **Boots from a USB stick into RAM** — the root is a tmpfs (impermanence); only `/nix`
   and the ESP persist, and the booted closure is warmed into a compressed page cache, so
@@ -11,16 +13,18 @@ be adopted (and contributed to) by others, not just one machine.
 - **Multiple signed versions, rollback**: each past generation stays bootable as its own
   signed UKI; the bootloader menu is the guaranteed manual rollback, and boot-counting
   adds automatic fallback on top.
-- **Survives storage trouble**: the OS is independent of the data pools — the box boots
-  even if a pool is degraded or missing (non-fatal import).
+- **Survives storage trouble**: the OS is independent of your data storage — the box boots
+  even if a disk is degraded or missing (non-fatal import).
 - **Encrypted at rest**: the on-stick store is LUKS2 + f2fs (zstd-compressed); a single
-  passphrase is the TPM2 PIN and unlocks the operator's data pools too — one prompt. Only the
-  stick binds to the TPM; the data pools take a plain passphrase keyslot, so a disk pulled into
-  another machine still opens — no specific box's TPM required.
+  passphrase is the TPM2 PIN and unlocks your storage too — one prompt. Only the stick binds
+  to the TPM; your data takes a plain passphrase keyslot, so a disk pulled into another
+  machine still opens — no specific box's TPM required.
+- **Bring your own storage**: nixnas imports + unlocks whatever you already use — any Linux
+  filesystem and encryption — and never creates, formats, or destroys it.
 - **Kind to the stick**: logs, `/tmp`, coredumps and swap live in RAM, so the USB takes ~no
   writes except updates — measured at **60 KiB** for ~100 MiB of log+file activity. Cheap
   sticks don't wear out. The OS runs from RAM; the heavy state (container images, data) lives
-  on the encrypted SSD/HDD pools, never the stick — the Unraid operating model on NixOS.
+  on your encrypted storage, never the stick.
 - **Evil-Maid hardened**: UEFI Secure Boot with *your own* keys (Microsoft keys not
   enrolled), signed Unified Kernel Images, and LUKS bound to TPM2 + PIN. *(Roadmap: a
   dm-verity/AEAD store hash sealed into the signed UKI.)*
