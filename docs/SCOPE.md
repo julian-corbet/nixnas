@@ -4,8 +4,8 @@ nixnas is plain NixOS plus **exactly two capabilities, and nothing else**. This 
 
 ## What nixnas IS
 
-1. **A USB-install mechanism.** It turns an evaluated `nixosConfiguration` into a bootable ~8 GB USB appliance: a RAM-resident OS (`copytoram`), **multiple** signed read-only OS versions with automatic rollback, dm-verity integrity, UEFI Secure Boot with the operator's *own* keys, and the on-stick GPT layout.
-2. **A flake-native workflow.** `lib.mkImage`, the `nixnas.*` option surface, and a small Rust TUI (`tui/`) that builds + signs + seals + escrows + flashes the stick **locally** on the machine that holds the signing keys.
+1. **A USB-install mechanism.** It turns an evaluated `nixosConfiguration` into a bootable ~8 GB USB appliance: a RAM-resident OS via **impermanence** (tmpfs root; only `/nix` + the ESP persist — not `copytoram`), **multiple** signed generations with rollback, the LUKS2 f2fs-zstd on-stick store, and UEFI Secure Boot (lanzaboote) with the operator's *own* keys. *(dm-verity store integrity is roadmap.)*
+2. **A flake-native workflow.** `lib.mkImage`, the `nixnas.*` option surface, and a small Rust TUI (`tui/`) that builds + flashes the stick **locally** on the machine that holds the signing keys (it injects the LUKS passphrase at build time and shreds it).
 
 Plus the generic capability those two imply:
 
@@ -37,22 +37,28 @@ nixnas **builds + flashes whatever declarative config the operator supplies**; i
 
 ## The precise nixnas module list
 
-Under `modules/`:
+Under `modules/` (all built + VM-validated unless noted):
 
 | Module | Role |
 |---|---|
 | `options.nix` | The `nixnas.*` public API (parameters only, no literals). |
-| `boot/image.nix` | nix-native USB image (`image.repart` verity store): read-only erofs `/usr` + UKI. **v0 here.** |
-| `boot/{secureboot,slots,remote-unlock}.nix` | *(next)* SB signing, copytoram, N-slot boot-counting/rollback, stage-2 unlock. |
-| `crypto/tpm2.nix` | TPM2 device access for stage-2 unlock. |
-| `crypto/{luks,recovery-escrow}.nix` | *(provision-time)* enrollment, recovery keyslot + Vaultwarden escrow. |
+| `boot/disk.nix` | disko GPT on the stick: ESP + LUKS2 **f2fs zstd:22** store; tmpfs root. |
+| `boot/image.nix` | UEFI + systemd-initrd glue, serial console, the initrd modules. |
+| `boot/impermanence.nix` | tmpfs root — only `/nix` + the ESP persist. |
+| `boot/kernel.nix` | the CachyOS kernel (`pkgs.cachyosKernels`) + `zfs_cachyos` + lantian cache. |
+| `boot/secureboot.nix` | **lanzaboote** Secure Boot: operator-owned PK/KEK/db, signed UKIs. |
+| `boot/remote-unlock.nix` | headless store unlock — initrd-SSH (NIC up in the initrd). |
+| `boot/rollback.nix` | kept generations (`configurationLimit`) + lanzaboote boot-counting. |
+| `crypto/tpm2.nix` | TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`. |
 | `storage/zfs-pools.nix` | **Import-only** pool unlock + non-fatal import. |
-| `storage/{smr-disks,shares}.nix` | *(next)* unlock+mount existing SMR filesystems. (`shares` belongs to the operator — see boundary note.) |
-| `appliance/base.nix` | Stable host identity. |
+| `appliance/base.nix` | Stable host identity + Tailscale. |
+| `appliance/ssh.nix` | Headless admin sshd (key-only root). |
+| `appliance/auto-upgrade.nix` | Self-update: stage-only, never self-reboot. |
+| `appliance/optimizations.nix` | Appliance defaults: zram, journald→RAM, no swap, store.preload. |
 
-**Option surface (`nixnas.*`):** `enable`, `hostName`, `boot.{tries,secureBoot,usb}`, `crypto.{tpm2,recovery}`, `storage.{pools,smrDisks}`, `tailscale` (the management / remote-unlock plane only).
+**Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.{tpm2,recovery}`, `zfs.source`, `store.preload`, `storage.{pools,smrDisks}`, `tailscale`, `autoUpgrade`.
 
-**Boundary cleanup (load-bearing):** `modules/options.nix` *today* also declares `compute.{k3s,archContainer,gpu,officeVm}` (with `gpu.renderGid`, `k3s.tokenSops`, `officeVm.{zvol,xml}`, etc.). By this scope those are **operator infra and must move out of the nixnas option surface** into the operator's own host config. Keeping them in nixnas re-imports the very split this project rejects. `storage.{pools,smrDisks}` and `tailscale` **stay** — they are the unlock + non-fatal-import + remote-unlock *mechanism*, parameterised by operator-supplied serials.
+**Thin by construction.** The option surface carries NO `compute.*` (k3s/GPU/VMs) — those were deliberately kept out. nixnas owns boot / crypto / the USB store / kernel packaging only; everything else is the operator's plain NixOS alongside the import (see "What nixnas is NOT").
 
 ## The nixnas ↔ operator boundary (concrete)
 
@@ -79,4 +85,4 @@ nixnas = {
 };
 ```
 
-The whole `toplevel` closure — nixnas mechanism **plus** the operator's k3s/samba/GPU — is what nixnas bakes into the verity `/usr`. nixnas's job begins and ends at: *build + sign + flash that closure, and bring it up encrypted, RAM-resident, and rollback-safe.*
+The whole `toplevel` closure — nixnas mechanism **plus** the operator's k3s/samba/GPU — is what nixnas bakes into the LUKS f2fs `/nix` store as generation 1. nixnas's job begins and ends at: *build + sign + flash that closure, and bring it up encrypted, RAM-resident (impermanence), and rollback-safe.*
