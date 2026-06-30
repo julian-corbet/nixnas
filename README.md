@@ -6,8 +6,9 @@ be adopted (and contributed to) by others, not just one machine.
 
 - **Boots from a USB stick** and copies itself entirely into RAM (`copytoram`) — the
   stick is spared and only touched on updates.
-- **A/B updates**: a new signed system image is written to the inactive slot and
-  atomically switched, with automatic rollback if it fails to boot.
+- **Multiple signed versions, automatic rollback**: several independent signed
+  read-only OS versions live on the stick; systemd-boot lists them; a version that
+  fails its health check rolls back to the previous one.
 - **Survives storage trouble**: the OS lives in RAM, fully independent of the data
   pools — the box boots even if a pool is degraded or missing.
 - **Encrypted at rest**: every data disk is LUKS, with the filesystem directly on the
@@ -19,31 +20,34 @@ be adopted (and contributed to) by others, not just one machine.
   seal, roll out, recovery-key escrow, rollback. *If you have to think about it,
   something has gone wrong.*
 
-## What runs on it
+## What nixnas is — and is not
 
-- **k3s**, declaratively, as the workload orchestrator.
-- **Podman + Quadlets** for host-level system containers.
-- An **Arch Linux system container** for interactive/desktop workloads.
+nixnas is the **appliance mechanism**: it turns any `nixosConfiguration` into a
+bootable, RAM-resident, encrypted, rollback-safe USB stick. The **workloads** a
+particular box runs — k3s, containers, VMs, Samba/NFS, GPU — are **plain NixOS that
+*you* declare**, in the same host, alongside `imports = [ nixnas.nixosModules.nixnas ]`.
+nixnas builds + signs + flashes whatever closure you hand it; it does not own or know
+about your k3s. See [`docs/SCOPE.md`](docs/SCOPE.md).
 
 ## Design
-
-The architecture is built on a strict split: a **generic, reusable core** (the
-`nixnas` module + image builder + the build-sign-seal-deliver pipeline) and a
-**private overlay** (host config + secrets) that never enters this repo's public
-history. All heavy work (build, sign, verity, TPM-reseal, escrow, image bake) runs on
-a separate **build hub** — the appliance node only *receives* finished, signed
-artifacts.
 
 **nixnas is a distribution, not a personal config.** The public repo is the generic,
 parameterised core; your machine's real disks, IPs, and secrets live in a *separate,
 private overlay repo you own* that imports `nixnas` as a flake input (`templates/host`
 scaffolds one). The public core never references any private overlay.
 
-See [`docs/DESIGN.md`](docs/DESIGN.md) and [`docs/REPO-LAYOUT.md`](docs/REPO-LAYOUT.md).
+A small **Rust TUI** (`tui/`) runs the build → sign → seal → escrow → flash pipeline
+**locally**, on a trusted machine that holds your Secure Boot keys — the image is
+personalised *and* self-signed, so it cannot be built generically or remotely.
+
+See [`docs/SCOPE.md`](docs/SCOPE.md) (what nixnas is / is not),
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (the decided design), and
+[`docs/REPO-LAYOUT.md`](docs/REPO-LAYOUT.md).
 
 ## Status
 
-Design complete — see [`docs/DESIGN.md`](docs/DESIGN.md). Module implementation next.
+Design decided — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). v0 boots in a VM;
+multi-version slots + Secure Boot signing next.
 
 ## License
 
