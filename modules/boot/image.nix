@@ -20,7 +20,20 @@ in
     boot.initrd.systemd.enable = true; # required for the dm-verity setup generator
 
     # Serial console (the MC12-LE0 has SOL on ttyS0; also lets a test VM be observed).
-    boot.kernelParams = [ "console=ttyS0,115200" "console=tty0" ];
+    # ttyS0 is the LAST console= so it becomes /dev/console (systemd writes there).
+    boot.kernelParams = [
+      "console=tty0"
+      "console=ttyS0,115200"
+    ];
+
+    # The boot device + data-pool controllers the initrd must drive. A generic image
+    # auto-detects none, so the USB boot stick (and SATA/NVMe data pools) are invisible
+    # to early userspace — and the dm-verity /usr partition never appears → boot hangs.
+    boot.initrd.availableKernelModules = [
+      "usb_storage" "uas" "xhci_pci" "ehci_pci" # USB boot stick
+      "ahci" "nvme" "sd_mod"                    # SATA / NVMe (data pools on real hardware)
+      "virtio_blk" "virtio_pci" "virtio_scsi"   # VM testing
+    ];
 
     # RAM-root: / is tmpfs; the immutable store comes from the verity-protected /usr.
     fileSystems."/" = lib.mkDefault {
