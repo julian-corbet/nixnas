@@ -272,5 +272,33 @@ in
         description = "Path (sops) to the Tailscale auth key.";
       };
     };
+
+    ## ── Self-update (autoUpgrade) ─────────────────────────────────────────
+    autoUpgrade = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Let the box self-update from `autoUpgrade.flake` (no effect until that is set).
+          It STAGES a new generation for the next boot — it never reboots itself (see
+          `flake`). Updating the appliance = committing to the operator's flake.
+        '';
+      };
+      flake = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "github:you/nas-config#nas";
+        description = ''
+          The operator's flake (their config that `imports = [ nixnas ]`). Null = no
+          self-update. Private flakes need pull auth the operator supplies (deploy key /
+          netrc); that, and update-on-the-8 GiB-target, is the autoUpgrade spike (ARCH §9.2).
+        '';
+      };
+      schedule = mkOption {
+        type = types.str;
+        default = "04:40";
+        description = "systemd `OnCalendar` schedule for the self-update check.";
+      };
+    };
   };
 }

@@ -38,6 +38,10 @@
     storage.smrDisks.archive0 = "/dev/disk/by-id/DEMO-smr-0";
 
     tailscale.enable = true;
+
+    # DEMO placeholder so the demo exercises the self-update wiring (never pulled here).
+    # A real host points this at its own flake; private flakes add pull auth.
+    autoUpgrade.flake = "github:DEMO/nas-config#demo";
   };
 
   # INCREMENT 1: let the demo image be logged into in the test VM (placeholder only;
