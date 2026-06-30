@@ -12,7 +12,8 @@
     ./boot/image.nix         # UEFI boot chain glue (systemd-boot, serial, initrd modules)
     ./boot/impermanence.nix  # tmpfs root; only /nix + ESP persist
     ./boot/kernel.nix        # the tuned CachyOS kernel (nixnas.kernel.*)
-    # ./boot/{secureboot,rollback,remote-unlock}.nix   # next: lanzaboote, boot-counting, initrd-SSH
+    ./boot/secureboot.nix    # UEFI Secure Boot via lanzaboote (operator-owned keys)
+    # ./boot/{rollback,remote-unlock}.nix   # next: boot-counting, initrd-SSH
 
     ./crypto/tpm2.nix        # TPM2 device access (stage-2 unlock); enrollment is first-boot
     # ./crypto/{luks,recovery-escrow}.nix   # next: LUKS store + data-pool unlock, recovery escrow

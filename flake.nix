@@ -18,9 +18,13 @@
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    lanzaboote = {
+      url = "github:nix-community/lanzaboote";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, ... }:
     let
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
@@ -41,6 +45,7 @@
         system = "x86_64-linux";
         modules = [
           disko.nixosModules.disko
+          lanzaboote.nixosModules.lanzaboote
           self.nixosModules.nixnas
           ./hosts/demo
           ./test/verify-image.nix   # DEV self-check (f2fs compression report on the console)
