@@ -18,6 +18,11 @@ in
   config = lib.mkIf cfg.enable {
     boot.kernelPackages = pkgs.cachyosKernels.${kernelAttr};
 
+    # CachyOS ZFS matches the (>upstream-cap) CachyOS kernel. Set when zfs.source=cachyos;
+    # only actually built once a data pool enables ZFS. Safety is structural (rollback +
+    # scrub), not the source — see docs/KERNEL.md §5.
+    boot.zfs.package = lib.mkIf (cfg.zfs.source == "cachyos") config.boot.kernelPackages.zfs_cachyos;
+
     # The running system pulls the CachyOS kernel + its updates from the maintainer's cache,
     # so autoUpgrade never recompiles it on the box.
     nix.settings.substituters = [ "https://attic.xuyh0120.win/lantian" ];

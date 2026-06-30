@@ -38,5 +38,8 @@
   # a real host authenticates via SSH keys / the unlock chain, not a root password).
   users.users.root.initialPassword = "nixnas";
 
+  # ZFS (the operator's data pools) requires a stable host id; a real host sets its own.
+  networking.hostId = "deadbeef";
+
   system.stateVersion = "25.05";
 }

@@ -17,8 +17,7 @@
     ./crypto/tpm2.nix        # TPM2 device access (stage-2 unlock); enrollment is first-boot
     # ./crypto/{luks,recovery-escrow}.nix   # next: LUKS store + data-pool unlock, recovery escrow
 
-    # ./storage/zfs-pools.nix  # IMPORT-ONLY pools — deferred from increment 1 (enabling ZFS needs
-                               # networking.hostId + the CachyOS kernel); re-added with data-pool unlock.
+    ./storage/zfs-pools.nix    # IMPORT-ONLY pools (never create/format); non-fatal import; stage-2 unlock
     # ./storage/{smr-disks,shares}.nix   # next: SMR unlock+mount
 
     ./appliance/base.nix          # stable identity (hostName) + Tailscale
