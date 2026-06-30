@@ -38,6 +38,7 @@
           disko.nixosModules.disko
           self.nixosModules.nixnas
           ./hosts/demo
+          ./test/verify-image.nix   # DEV self-check (f2fs compression report on the console)
           # Build the throwaway image-builder VM from stable nixpkgs (see inputs above).
           {
             disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;

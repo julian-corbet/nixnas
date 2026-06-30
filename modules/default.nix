@@ -10,6 +10,7 @@
 
     ./boot/disk.nix          # disko on-stick layout: ESP + f2fs-zstd store
     ./boot/image.nix         # UEFI boot chain glue (systemd-boot, serial, initrd modules)
+    ./boot/impermanence.nix  # tmpfs root; only /nix + ESP persist
     # ./boot/{secureboot,rollback,remote-unlock}.nix   # next: lanzaboote, boot-counting, initrd-SSH
 
     ./crypto/tpm2.nix        # TPM2 device access (stage-2 unlock); enrollment is first-boot
