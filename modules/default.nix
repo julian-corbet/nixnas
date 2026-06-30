@@ -10,7 +10,8 @@
     ./options.nix
 
     # Implementation modules — added in subsequent milestones:
-    # ./boot           # ram-root (copytoram + verity), signed UKIs, A/B + rollback, remote-unlock
+    ./boot/image.nix         # nix-native image (image.repart verityStore): verity /usr + UKI [v0]
+    # ./boot/{secureboot,ab-slots,remote-unlock}.nix   # (next: signing, copytoram, A/B)
     ./crypto/tpm2.nix        # TPM2 device access (stage-2 unlock); enrollment is provision-time
     # ./crypto/{luks,recovery-escrow}.nix   # provision-time helpers (next)
     ./storage/zfs-pools.nix  # IMPORT-ONLY pools (never create/format), stage-2 LUKS unlock, non-fatal import

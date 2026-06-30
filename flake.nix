@@ -41,6 +41,12 @@
         demo-toplevel = self.nixosConfigurations.demo.config.system.build.toplevel;
       });
 
+      # The personalised USB image. The TUI builds this locally for a real host; here
+      # `packages.image` builds the demo image (placeholder config, zero secrets).
+      packages = forAllSystems (system: {
+        image = self.nixosConfigurations.demo.config.system.build.image;
+      });
+
       # The build-hub toolchain (sign / seal / escrow run here, never on the node).
       devShells = forAllSystems (system:
         let pkgs = pkgsFor system; in {
