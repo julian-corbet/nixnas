@@ -157,23 +157,12 @@ the floor f2fs compression needs:
 So the ZFS cap puts us in the safe zone automatically — **no separate kernel pin is needed for
 f2fs** (it is in-tree and comes with the kernel).
 
-**The current combo (early 2026), confirmed against nixpkgs/OpenZFS:**
-- `boot.kernelPackages` default = `pkgs.linuxPackages` = `linux_default` = **linux 6.18** today
-  (cache-hot). `linux_latest` (7.1) is excluded — its ZFS module is marked broken.
-- `boot.zfs.package` default = `pkgs.zfs` (**stable** OpenZFS, not `zfs_unstable`). OpenZFS
-  2.3/2.4 + unstable all declare `kernelMaxSupportedMajorMinor = "7.0"` → landing band **6.18 … ≤ 7.0**.
-- **`boot.zfs.package.latestCompatibleLinuxPackages` is DEPRECATED** (now just aliases the default
-  kernel + warns) — do **not** use it.
-
-> **DECISION: take the NEWEST stable ZFS-compatible kernel, resolved dynamically at build time —
-> NO pin.** nixnas is a TUI that builds the whole USB image **locally** on the capable machine
-> where it runs (the one exception to build-on-hub), so the cache-miss / "build on the slow stick"
-> worry does **not** apply — we compile the image (and a custom-tuned kernel) locally regardless.
-> Policy: "we want ZFS → use whatever the newest kernel OpenZFS can build against is" (≈ 7.0.x
-> today), via the `linuxKernel.packages` filter (not the deprecated alias), so a future OpenZFS
-> bump auto-raises the kernel with no edit. The kernel is additionally **custom-tuned** (LTO,
-> `-march`, CachyOS-style config/patches, NAS-tailored) and built locally — see
-> [`KERNEL.md`](KERNEL.md) *(in progress)*.
+**Kernel choice lives in [`KERNEL.md`](KERNEL.md):** the **CachyOS kernel** via the
+`xddxdd/nix-cachyos-kernel` flake (auto-syncs with nixpkgs → always the current kernel, no pin)
+with **`zfs_cachyos`**, tuned `x86_64-v3` + ThinLTO. It tracks newest mainline (≈ 7.1.x), trivially
+≥ 6.12, so every f2fs compression feature holds. Running ZFS ahead of upstream's cap is safe **not**
+by software choice but **structurally** — generation rollback (OS) + scrub/snapshot/backup (pool);
+see KERNEL.md §5.
 
 **f2fs is in-tree** (`F2FS_FS = module`, `F2FS_FS_COMPRESSION = yes`; `F2FS_FS_ZSTD` is `default y`
 under compression → baked into `f2fs.ko`). Assert it at build time *without* a kernel rebuild
