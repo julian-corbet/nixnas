@@ -18,12 +18,14 @@ set -euo pipefail
 
 IMG="${1:?usage: boot-vm.sh <image.raw> [--secboot] [--mem MB] [--smp N] [--ssh PORT]}"; shift
 [ -f "$IMG" ] || { echo "no such image: $IMG" >&2; exit 1; }
-SECBOOT=0; MEM=2048; SMP=2; SSHFWD=""
+SECBOOT=0; MEM=2048; SMP=2; SSHFWD=""; PASS=""; PASS_DELAY=28
 while [ $# -gt 0 ]; do case "$1" in
   --secboot) SECBOOT=1 ;;
   --mem) MEM="${2:?}"; shift ;;
   --smp) SMP="${2:?}"; shift ;;
   --ssh) SSHFWD="$2"; shift ;;
+  --passphrase) PASS="$2"; shift ;;        # type this on the serial after the LUKS/TPM2 prompt
+  --pass-delay) PASS_DELAY="$2"; shift ;;  # seconds to wait before typing it (default 28)
   *) echo "unknown arg: $1" >&2; exit 2 ;;
 esac; shift; done
 
@@ -55,14 +57,23 @@ NET="user,id=n0"; [ -n "$SSHFWD" ] && NET="$NET,hostfwd=tcp::${SSHFWD}-:22"
 
 echo ">> booting $IMG  (mem=${MEM}MiB smp=${SMP} secboot=${SECBOOT}${SSHFWD:+ ssh=$SSHFWD->22})"
 echo ">> serial console below — Ctrl-a x to quit, Ctrl-a c for the QEMU monitor"
-exec qemu-system-x86_64 \
-  -machine q35,smm=on,accel=kvm -cpu host -smp "$SMP" -m "$MEM" \
-  -global ICH9-LPC.disable_s3=1 \
-  -global driver=cfi.pflash01,property=secure,value=on \
-  -drive if=pflash,format=raw,unit=0,readonly=on,file="$CODE" \
-  -drive if=pflash,format=raw,unit=1,file="$WORK/OVMF_VARS.fd" \
-  -chardev socket,id=chrtpm,path="$WORK/tpm/sock" \
-  -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-crb,tpmdev=tpm0 \
-  -drive if=virtio,format=raw,snapshot=on,file="$IMG" \
-  -netdev "$NET" -device virtio-net,netdev=n0 \
-  -nographic -serial mon:stdio
+QEMU=(
+  qemu-system-x86_64
+  -machine q35,smm=on,accel=kvm -cpu host -smp "$SMP" -m "$MEM"
+  -global ICH9-LPC.disable_s3=1
+  -global driver=cfi.pflash01,property=secure,value=on
+  -drive if=pflash,format=raw,unit=0,readonly=on,file="$CODE"
+  -drive if=pflash,format=raw,unit=1,file="$WORK/OVMF_VARS.fd"
+  -chardev socket,id=chrtpm,path="$WORK/tpm/sock"
+  -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-crb,tpmdev=tpm0
+  -drive if=virtio,format=raw,snapshot=on,file="$IMG"
+  -netdev "$NET" -device virtio-net,netdev=n0
+  -nographic
+)
+if [ -n "$PASS" ]; then
+  # Feed the LUKS/TPM2 passphrase to the guest serial once the unlock prompt is up.
+  echo ">> will type the passphrase on serial after ${PASS_DELAY}s"
+  { sleep "$PASS_DELAY"; printf '%s\n' "$PASS"; sleep 100000; } | "${QEMU[@]}" -serial stdio
+else
+  exec "${QEMU[@]}" -serial mon:stdio
+fi

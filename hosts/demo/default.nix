@@ -9,6 +9,10 @@
     enable = true;
     hostName = "demo";
 
+    # Reference-box kernel tuning (a generic adopter would leave march at the x86_64-v1
+    # default; we build for a known x86-64-v3 CPU). variant=latest, lto=thin, eevdf are defaults.
+    kernel.march = "x86_64-v3";
+
     boot.secureBoot.enable = true;
     crypto.tpm2.enable = true;
     crypto.recovery.vaultwardenUrl = "https://vault.demo.invalid";

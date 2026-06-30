@@ -9,13 +9,18 @@
     # the throwaway image-builder VM from a stable nixpkgs (older vmTools). The image
     # CONTENT is unaffected — it comes from `nixpkgs` (unstable) via the host config.
     nixpkgs-stable.url = "github:NixOS/nixpkgs/nixos-25.05";
+    # The CachyOS kernel (tuned, pre-built, binary-cached). `release` branch = pre-built
+    # variants; the `pinned` overlay (applied below) keeps cache hits. NOT made to follow
+    # our nixpkgs — the pinned kernels are built against its own lock, which is what the
+    # lantian cache was built for. See docs/KERNEL.md.
+    nix-cachyos-kernel.url = "github:xddxdd/nix-cachyos-kernel/release";
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-stable, disko, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, ... }:
     let
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
@@ -39,6 +44,8 @@
           self.nixosModules.nixnas
           ./hosts/demo
           ./test/verify-image.nix   # DEV self-check (f2fs compression report on the console)
+          # The CachyOS kernel set (pkgs.cachyosKernels); modules/boot/kernel.nix reads it.
+          { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
           # Build the throwaway image-builder VM from stable nixpkgs (see inputs above).
           {
             disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
