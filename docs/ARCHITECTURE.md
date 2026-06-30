@@ -40,15 +40,21 @@ is rejected for **version density, flash wear, and custom surface** on a self-up
 8 GB box. Its one genuine edge (integrity of executed userspace) is low-severity for a
 home NAS and is **addable later as a hybrid** (§6).
 
-## 2. On-stick layout (8 GB USB, GPT)
+## 2. On-stick layout (GPT, adaptive to stick size)
+
+Only **two** partitions, sized **proportionally to the stick** — the operator brings whatever
+USB they have and nixnas lays it out:
 
 ```
-#1  ESP        FAT32         ~768 MiB  lanzaboote-signed systemd-boot + one signed UKI
-                                        per generation + loader/ entries
-#2  nixos      f2fs-in-LUKS2 ~6.3 GiB  the NixOS system: persistent /nix/store (all kept
-                                        generations) + the nix profile/generation list +
-                                        machine-id + the persisted SSH host key (sops age id)
+#1  ESP    FAT32          ~1 GiB (1–2)   lanzaboote-signed systemd-boot + one signed UKI per
+                                          generation + loader/ entries
+#2  nixos  f2fs-in-LUKS2  REST of stick  the NixOS system: persistent /nix (store = all kept
+                                          generations; /nix/var = db/profiles/gcroots) +
+                                          machine-id + the persisted SSH host key (sops age id)
 ```
+
+Sizing rule: **ESP = 1 GiB default (2 GiB on a larger stick), f2fs = everything else.**
+8 GB stick → ~1 GiB ESP + ~7 GiB f2fs; 16 GB → 2 GiB ESP + 14 GiB f2fs; etc.
 
 f2fs is **zstd:22-compressed** (`compress_log_size=2`/16 KiB) and mounted at **`/nix`** (so
 `/nix/var` persists under tmpfs root); compression buys faster boot off the slow stick + less
@@ -56,22 +62,29 @@ wear. The full f2fs engineering detail — mechanics, the gen-1-via-disko seedin
 pass, mount options, the kernel/ZFS combo, and the footguns — is in **[`STORAGE.md`](STORAGE.md)**;
 appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on the operator's
 **separate** encrypted ZFS pools — never on the stick. Each generation's UKI (kernel + initrd) is
-~60–90 MiB, so the **ESP is the tighter bound** on generation count: ~8 in 768 MiB
+~80–150 MiB, so the **ESP is the bound on generation count** — ~8 in 1 GiB, ~16 in 2 GiB
 (`boot.lanzaboote.configurationLimit`). The store side is cheap (base once + deltas).
 
-## 3. Boot flow (impermanence, page-cache RAM)
+## 3. Boot flow (headless, impermanence, compressed RAM)
 
 1. UEFI — **Secure Boot, operator-only keys, MS 3rd-party CA removed, firmware password**.
 2. **lanzaboote-signed `systemd-boot`** shows the generation menu.
-3. The selected generation's **signed UKI** runs; its **signed initrd** prompts the
-   **single passphrase** → unlocks the LUKS `nixos` partition. *Secure Boot guarantees
-   the prompt is trusted — a maid cannot phish the passphrase with a tampered initrd.*
-4. **Root `/` is tmpfs** (impermanence); the **real persistent `/nix/store`** is mounted
-   read-write from the unlocked LUKS partition; only `/nix`, the ESP, and the host key
-   persist. Hot store paths are served from the **page cache** (RAM-fast after first
-   touch); the stick is barely read at runtime.
-5. The stateless OS comes up; the operator's **data pools** import **non-fatally** (same
-   passphrase via kernel-keyring reuse).
+3. The selected generation's **signed UKI** runs; its **signed initrd** brings up the network and
+   **prompts for the single passphrase REMOTELY** — the box is **headless**, nobody is at the
+   console (§6). Secure Boot guarantees the prompt is trusted: a maid cannot phish it with a
+   tampered initrd.
+4. **Root `/` is tmpfs** (impermanence); the real persistent **`/nix`** is mounted read-write from
+   the unlocked LUKS partition; only `/nix`, the ESP, and the host key persist. The stick is **not
+   loaded wholesale into RAM** — hot store paths are **page-cached on demand** and self-limiting
+   (cold pages drop and re-read from the compressed f2fs). Working memory is kept small by **zram**
+   (compressed swap, 20 % of RAM, no disk swap) + f2fs **`compress_cache`** (compressed store
+   blocks cached in RAM) — so the appliance fits boxes with far less than 128 GB.
+5. The stateless OS comes up; **sshd + Tailscale** start for headless admin; the operator's **data
+   pools** import **non-fatally** — the **same one passphrase** opens the store (initrd) *and* every
+   pool (stage-2) via kernel-keyring reuse. **One authentication, everything unlocks.**
+6. **`system.autoUpgrade` pulls the operator's config flake from their private Git** (deploy key via
+   sops-nix) and builds the next generation. The flake is *not* part of nixnas — it is how the
+   declarative system config is loaded; nixnas only provides the mechanism.
 
 ## 4. Updates — autonomous, native
 
@@ -114,11 +127,24 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   hardware** (`systemd-cryptenroll --tpm2-device=auto --tpm2-with-pin`) — PCRs are
   hardware-specific, so a build machine cannot seal to the target TPM. The operator enrolls
   the **same passphrase** on their self-built pools (nixnas never formats them).
-- **Remote unlock transport.** The store is encrypted, so the first prompt is in the
-  **initrd** (`boot.initrd.systemd.enable`). Primary: **IPMI Serial-over-LAN** — a separate
-  trust domain, no SSH host key on the plaintext ESP. Optional: **initrd-SSH over LAN**
-  (`boot.initrd.network.ssh`, convenient; its host key lives in the *signed* UKI but on the
-  *plaintext* ESP, so a stolen-stick clone could phish the PIN — SOL is preferred).
+- **Headless remote unlock (mandatory).** The box is **headless** — nobody can type at the
+  console, so the in-initrd PIN prompt must be reachable over the network. nixnas ships this:
+  - **Primary: initrd-SSH** (`boot.initrd.network.ssh` + `boot.initrd.systemd.enable`) — bring
+    up the NIC in the initrd, SSH in, hand the PIN to the password agent. Works for the general
+    distro (no special hardware). *Caveat:* the initrd-SSH host key sits in the *signed* UKI but
+    on the *plaintext* ESP → keep it LAN/tailnet-reachable, never internet-exposed.
+  - **Where present: IPMI Serial-over-LAN** (example-host) — separate trust domain, no SSH key
+    on the ESP; the cleaner channel.
+  - **Tailscale-in-initrd** (unlock from anywhere) is **exotic** (tailscaled + state + tun in the
+    initrd) — a spike, not the baseline. Pragmatic "from anywhere" = initrd-SSH on the LAN reached
+    *through* a Tailscale node elsewhere.
+  The **running** system always ships **sshd + Tailscale** as appliance defaults (operator supplies
+  the tailnet auth key) — headless admin once booted.
+- **Operational tension (security-concept knob).** Headless + PIN-every-boot means **every** boot
+  needs a working remote path; if the network is down at boot, the NAS stays locked until reachable.
+  The strict choice (current default) maximises evil-maid resistance. The alternative —
+  **TPM2 PCR-only auto-unlock** (no PIN; box self-recovers after a power cut; PIN only on tamper) —
+  trades some resistance for unattended resilience. Exposed as a knob; default = strict.
 - **The evil-maid defense is signed boot, not encryption.** Honest framing:
   **confidentiality-by-encryption + integrity-by-signed-boot.** Default LUKS2 aes-xts is
   *unauthenticated and malleable* — it gives confidentiality, **not** integrity; and the

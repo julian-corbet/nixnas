@@ -98,8 +98,13 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
   so `system.autoUpgrade` *downloads* prebuilt, signed closures (the "build on hub, never on node"
   doctrine). Then the only `/nix` writes are the new closure itself — no build intermediates
   hammering the slow flash, and no transient-ENOSPC mid-build (STORAGE.md §6 footgun 5).
-- ⬢ `zramSwap.enable = true; zramSwap.algorithm = "zstd"; zramSwap.memoryPercent = 50;` —
-  compressed RAM swap absorbs memory pressure during activation with zero flash writes.
+- ⬢ **`zramSwap.enable = true; zramSwap.algorithm = "zstd"; zramSwap.memoryPercent = 20;`** (default)
+  + **no disk swap.** This is the **RAM-compression** lever: the appliance keeps its writable working
+  set (tmpfs root + anon memory) small by compressing cold pages *in RAM* instead of writing them —
+  zero flash writes, and it makes nixnas fit boxes with far less than 128 GB. (Pairs with f2fs
+  `compress_cache`, which caches *compressed* store blocks in RAM — STORAGE.md §4 / OPTIMIZATIONS §3.)
+  Note: the stick is **not** copied wholesale into RAM (that was the dropped copytoram idea); only hot
+  store paths are page-cached on demand, and that cache is self-limiting.
 - ⬢ `boot.tmp.useTmpfs = true;` (from §1); if any local build ever runs, keep its `TMPDIR` in RAM.
 
 ## Out of scope (operator territory — flag, don't tune here)
