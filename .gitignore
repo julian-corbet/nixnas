@@ -27,3 +27,6 @@ keys.txt
 age.key
 result*
 build-*.log
+
+# Wrangler local state (Cloudflare deploy cache)
+.wrangler/
