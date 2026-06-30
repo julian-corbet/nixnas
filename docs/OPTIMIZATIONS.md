@@ -92,7 +92,7 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
   covers store integrity. f2fs has no default data checksums; rely on Nix signatures +
   reproducibility rather than fs-level data checksums (this is also what justifies `fsck.mode=skip`).
 
-## 5. zram / build placement — surviving on-box autoUpgrade on a tiny store
+## 5. RAM: compressed store-in-RAM, zram, build placement (the slow-stick answer)
 
 - ◯ **Biggest lever — never build on the box:** `nix.settings.substituters = [ "<hub cache>" ];`
   so `system.autoUpgrade` *downloads* prebuilt, signed closures (the "build on hub, never on node"
@@ -105,6 +105,15 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
   `compress_cache`, which caches *compressed* store blocks in RAM — STORAGE.md §4 / OPTIMIZATIONS §3.)
   Note: the stick is **not** copied wholesale into RAM (that was the dropped copytoram idea); only hot
   store paths are page-cached on demand, and that cache is self-limiting.
+- ⬢ **`nixnas.store.preload` — "copytoram done right" for a slow stick.** A low-priority post-boot
+  service warms the booted generation's closure into the (compress-)cache (`vmtouch`-style), so after
+  warmup **runtime reads come from RAM, the stick is untouched, no cold-path stalls** — copytoram's
+  one real win, but it (a) keeps self-update working (writes still hit the persistent stick store) and
+  (b) costs ~⅓ the RAM of classic copytoram because `compress_cache` holds the blocks **compressed**
+  (zstd:22), not decompressed. **Does NOT speed the cold boot** — the closure is read from the stick
+  once regardless (zstd:22 already cuts that ~2–3×). Default: **on** for the reference box (128 GB);
+  **RAM-gated** for the general distro (on only when RAM comfortably exceeds the closure, else
+  demand-paged + `compress_cache` alone). A fast USB-3 stick makes the whole question moot.
 - ⬢ `boot.tmp.useTmpfs = true;` (from §1); if any local build ever runs, keep its `TMPDIR` in RAM.
 
 ## Out of scope (operator territory — flag, don't tune here)
