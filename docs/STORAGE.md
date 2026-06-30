@@ -165,11 +165,15 @@ f2fs** (it is in-tree and comes with the kernel).
 - **`boot.zfs.package.latestCompatibleLinuxPackages` is DEPRECATED** (now just aliases the default
   kernel + warns) — do **not** use it.
 
-> **DECISION: pin the stock cached default** — `boot.kernelPackages = pkgs.linuxPackages`,
-> `boot.zfs.package = pkgs.zfs`. The "newest-ZFS-compatible filter" idiom (NixOS wiki) can select
-> a kernel that is **not** in `cache.nixos.org`, forcing a from-source kernel build **on the slow
-> stick** — a direct hit to goal #1. The stock default is recent (6.18), ZFS-compatible, and
-> pre-built. Only escalate if a newer kernel is genuinely required.
+> **DECISION: take the NEWEST stable ZFS-compatible kernel, resolved dynamically at build time —
+> NO pin.** nixnas is a TUI that builds the whole USB image **locally** on the capable machine
+> where it runs (the one exception to build-on-hub), so the cache-miss / "build on the slow stick"
+> worry does **not** apply — we compile the image (and a custom-tuned kernel) locally regardless.
+> Policy: "we want ZFS → use whatever the newest kernel OpenZFS can build against is" (≈ 7.0.x
+> today), via the `linuxKernel.packages` filter (not the deprecated alias), so a future OpenZFS
+> bump auto-raises the kernel with no edit. The kernel is additionally **custom-tuned** (LTO,
+> `-march`, CachyOS-style config/patches, NAS-tailored) and built locally — see
+> [`KERNEL.md`](KERNEL.md) *(in progress)*.
 
 **f2fs is in-tree** (`F2FS_FS = module`, `F2FS_FS_COMPRESSION = yes`; `F2FS_FS_ZSTD` is `default y`
 under compression → baked into `f2fs.ko`). Assert it at build time *without* a kernel rebuild
