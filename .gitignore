@@ -9,6 +9,17 @@ result-*
 *.qcow2
 *.squashfs
 
+# Rust (TUI) build artifacts
+tui/target/
+
+# TUI working files (transient build out-links + the shredded LUKS passphrase file)
+.nixnas-image
+.nixnas-luks-pass
+
+# Operator template: the initrd-SSH host key is generated per private repo, never shipped here
+templates/host/initrd_host_ed25519_key
+templates/host/initrd_host_ed25519_key.pub
+
 # Secrets — NEVER commit plaintext (sops-encrypted files are fine)
 *.plain
 *.dec
