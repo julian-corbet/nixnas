@@ -62,6 +62,32 @@ in
           description = "Path (provided by sops, build-machine only) to the Secure Boot `db` signing key. Never on the node.";
         };
       };
+      remoteUnlock = {
+        enable = mkOption {
+          type = types.bool;
+          default = true;
+          description = ''
+            initrd-SSH for the headless store unlock (MANDATORY by default): the box has
+            no console, so the in-initrd PIN/passphrase prompt is reached over SSH. The NIC
+            comes up in the initrd; you `ssh root@<box>` (keys in `admin.authorizedKeys`)
+            and hand the secret to the password agent. Keep it LAN/tailnet-only — the initrd
+            host key sits on the plaintext ESP. Where IPMI-SOL exists, that channel can
+            replace this (set false). ARCHITECTURE §6.
+          '';
+        };
+        hostKeyPath = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          description = ''
+            Persistent initrd-SSH host key — the box's stable unlock identity across
+            re-images. A Nix path to a BUILD-MACHINE key file (NOT /run/secrets: it is
+            embedded in the initrd, which is assembled before any disk is unlocked). The TUI
+            writes the operator's key and points this at it. Required when
+            `boot.remoteUnlock.enable` is true. The key lands on the plaintext ESP (inside
+            the signed UKI) — hence LAN/tailnet-only.
+          '';
+        };
+      };
       usb = {
         device = mkOption {
           type = types.str;
@@ -210,6 +236,19 @@ in
     };
 
     ## ── Appliance plumbing ────────────────────────────────────────────────
+    admin = {
+      authorizedKeys = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = literalExpression ''[ "ssh-ed25519 AAAA… you@host" ]'';
+        description = ''
+          SSH public keys that may log in as root — for BOTH the running system (headless
+          admin once booted) and the initrd (remote store unlock). The box is headless and
+          key-only: password login is off, so at least one key is required for any access.
+        '';
+      };
+    };
+
     tailscale = {
       enable = mkEnableOption "Tailscale — headless management plane + remote LUKS unlock path";
       authKeySops = mkOption {

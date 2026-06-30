@@ -3,11 +3,17 @@
 # Every value is an RFC-5737 (203.0.113.0/24) / RFC-2606 (.invalid) / DEMO-*
 # placeholder. This host ships in the PUBLIC repo; the real machine lives in a
 # separate, private overlay (see ../../templates/host).
-{ ... }:
+{ lib, ... }:
 {
   nixnas = {
     enable = true;
     hostName = "demo";
+
+    # Throwaway DEMO key (test/ssh/demo_key) — for the test VM only. A real host lists the
+    # operator's own keys here; they authorise BOTH the initrd remote-unlock and admin sshd.
+    admin.authorizedKeys = [ (lib.fileContents ../../test/ssh/demo_key.pub) ];
+    # Throwaway DEMO initrd-SSH host key — test VM only (a real host's key is TUI-written).
+    boot.remoteUnlock.hostKeyPath = ../../test/ssh/demo_initrd_host_ed25519_key;
 
     # Reference-box kernel tuning (a generic adopter would leave march at the x86_64-v1
     # default; we build for a known x86-64-v3 CPU). variant=latest, lto=thin, eevdf are defaults.
