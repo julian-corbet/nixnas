@@ -208,9 +208,44 @@ workflow.
 2. **autoUpgrade against a private flake** — pull auth (deploy key via sops-nix), root git
    `safe.directory`, end-to-end build-once-then-self-update on the 8 GB target.
 3. **Keyring reuse across switch-root** — confirm one PIN entry in the initrd unlocks the
-   stage-2 data pools (transport DECIDED: IPMI-SOL primary, initrd-SSH-over-LAN optional).
+   stage-2 data pools (primary transport DECIDED: **initrd-SSH** — generic, every box;
+   IPMI-SOL is an optional cleaner channel where a BMC exists, not the default).
 4. **The anti-rollback counter** — TPM2-NV implementation + the version policy.
 5. **Generation count vs ESP size** on 8 GB (one ~80 MiB UKI per generation).
+6. **TPM-sealed initrd-SSH host key** (§10) — seal the host key to PCR 7 so it is never on
+   the plaintext ESP; unseal in the initrd before sshd. Removes the one evil-maid wart of
+   initrd-SSH generically (no IPMI needed). Needs the unseal-before-sshd unit ordering.
 
 *(Resolved by the steelman: "copytoram a tmpfs /nix/store" does NOT compose with
 autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
+
+## 10. Storage hierarchy, wear & the rescue model (the Unraid operating model)
+
+- **The layers — only the smallest is on the stick.** This is the Unraid model: a tiny boot
+  medium holds the OS (in RAM), everything heavy is elsewhere.
+  | Layer | What | Where |
+  |---|---|---|
+  | OS image | the **nix store** (kernel, k3s/containerd binaries, systemd, rendered config) | **USB stick** (read into RAM; impermanence) |
+  | Runtime state | **container images**, the kine DB, app PVCs, persistent logs | **HOT pool** (SSD, e.g. `hot`) |
+  | Bulk | media, backups | **COLD pool** (HDD, e.g. `cold`) |
+  | Workloads | the k8s/Argo manifests (what runs) | **Git** (pulled at runtime) |
+  The nix store holds *programs*, never *container images* — containerd keeps those in its own
+  store (the ZFS snapshotter dataset on HOT). So the stick stays ~3–4 GiB no matter how many
+  apps run.
+- **HOT / COLD are nixnas concepts.** `storage.pools.hot` / `.cold` already name the imported
+  pools; a **persistence-routing layer** (`storage.persist.{hot,cold}`, *planned*) bind-mounts
+  the chosen state paths (`/var/lib/rancher`, containerd, …) from the tmpfs root onto datasets
+  on the respective pool. This is also where the k3s-state binds live (impermanence needs them).
+- **Where /nix lives.** DEFAULT = on the stick → self-contained, **boots even if a pool is
+  missing**. OPT-IN `storage.storeOnHot` (*planned*) relocates the store to HOT for speed,
+  redefining HOT as the boot-required system pool and COLD as boot-optional bulk.
+- **Wear isolation (measured).** Cheap USB sticks have no SSD-grade flash management and die /
+  go slow under a steady write stream. So logs (journald `volatile`), `/tmp`, coredumps and
+  swap (zram) all live in RAM; the stick takes ~no writes except updates. `test/verify-writes.nix`
+  proves it: generating ~100 MiB of logs+files moved **60 KiB** to the stick. Persistent
+  "emergency" logs are opt-in (`store.persistLogs`, *planned*) and route to **HOT**, not the stick.
+- **The rescue model (data pools are portable).** Only the **stick store** binds to the TPM
+  (TPM2+PIN). The data pools (HOT/COLD + the SMR drives) carry a **plain LUKS2 passphrase
+  keyslot** — the same secret as the PIN, reused via the kernel keyring — and are **never
+  TPM-bound**. So a pool member pulled into another machine unlocks with the passphrase alone;
+  no specific box's TPM is required. nixnas only imports + unlocks them, never reformats.

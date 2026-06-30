@@ -14,7 +14,13 @@ be adopted (and contributed to) by others, not just one machine.
 - **Survives storage trouble**: the OS is independent of the data pools — the box boots
   even if a pool is degraded or missing (non-fatal import).
 - **Encrypted at rest**: the on-stick store is LUKS2 + f2fs (zstd-compressed); a single
-  passphrase is the TPM2 PIN and unlocks the operator's data pools too — one prompt.
+  passphrase is the TPM2 PIN and unlocks the operator's data pools too — one prompt. Only the
+  stick binds to the TPM; the data pools take a plain passphrase keyslot, so a disk pulled into
+  another machine still opens — no specific box's TPM required.
+- **Kind to the stick**: logs, `/tmp`, coredumps and swap live in RAM, so the USB takes ~no
+  writes except updates — measured at **60 KiB** for ~100 MiB of log+file activity. Cheap
+  sticks don't wear out. The OS runs from RAM; the heavy state (container images, data) lives
+  on the encrypted SSD/HDD pools, never the stick — the Unraid operating model on NixOS.
 - **Evil-Maid hardened**: UEFI Secure Boot with *your own* keys (Microsoft keys not
   enrolled), signed Unified Kernel Images, and LUKS bound to TPM2 + PIN. *(Roadmap: a
   dm-verity/AEAD store hash sealed into the signed UKI.)*
