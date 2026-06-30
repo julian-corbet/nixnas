@@ -61,20 +61,20 @@ wire-up against the flake's `cachyosKernels` set; the flake exposes them as
   v3 world-build) or keep the kernel pulled from lantian and apply v3 only to the userland. Settle when
   v3 scope is locked.
 
-## 4. Tuning — our choices + the knobs
+## 4. Tuning — our choices + the options
 
-| Knob (flake param) | nixnas reference-box value | General-distro default | Note |
+| Option (flake param) | nixnas reference-box value | General-distro default | Note |
 |---|---|---|---|
 | variant | `latest` | `latest` (or `lts` for stability) | `server` = EEVDF + lazy-preempt; `hardened` = +linux-hardened |
 | `processorOpt` | **`x86_64-v3`** (Zen3 = 5950X) | `x86_64-v1` (boots anywhere) | v3 = AVX2/FMA/BMI2; helps ZFS fletcher4/zstd, AES-NI, memcpy. `native`/`znver3` only because we build locally |
 | `lto` | **`thin`** | `thin` | ThinLTO = cheap + measurable; `full` is RAM-heavy for little gain |
-| `cpusched` | `eevdf` (server-correct) | `eevdf` | `bore` is a legit pick given the interactive Cachy LXC desktop — a preference knob, not a perf must |
+| `cpusched` | `eevdf` (server-correct) | `eevdf` | `bore` is a legit pick given the interactive Cachy LXC desktop — a preference option, not a perf must |
 
 Exposed as `nixnas.kernel.{variant,march,lto,cpusched}` with these defaults. The reference box maxes
 speed (`latest` + `x86_64-v3` + `thin` LTO); a general adopter who doesn't build for a known CPU stays
 on the portable `x86_64-v1`.
 
-**ZFS source** is a knob too — `nixnas.zfs.source = cachyos | upstream`:
+**ZFS source** is an option too — `nixnas.zfs.source = cachyos | upstream`:
 - **`cachyos`** (our default): matches `linux-cachyos-latest` (which is newer than upstream's ZFS cap).
 - **`upstream`**: stock `zfs_2_4`, but then the kernel must stay **at/under the OpenZFS cap** (≈ 7.0.x) —
   i.e. pair with `linux-cachyos-lts` (6.18.x) or `-hardened` (7.0.x), which are under the cap. The

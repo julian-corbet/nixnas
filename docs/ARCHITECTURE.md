@@ -140,11 +140,11 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
     *through* a Tailscale node elsewhere.
   The **running** system always ships **sshd + Tailscale** as appliance defaults (operator supplies
   the tailnet auth key) — headless admin once booted.
-- **Operational tension (security-concept knob).** Headless + PIN-every-boot means **every** boot
+- **Operational tension (security-concept option).** Headless + PIN-every-boot means **every** boot
   needs a working remote path; if the network is down at boot, the NAS stays locked until reachable.
   The strict choice (current default) maximises evil-maid resistance. The alternative —
   **TPM2 PCR-only auto-unlock** (no PIN; box self-recovers after a power cut; PIN only on tamper) —
-  trades some resistance for unattended resilience. Exposed as a knob; default = strict.
+  trades some resistance for unattended resilience. Exposed as an option; default = strict.
 - **The evil-maid defense is signed boot, not encryption.** Honest framing:
   **confidentiality-by-encryption + integrity-by-signed-boot.** Default LUKS2 aes-xts is
   *unauthenticated and malleable* — it gives confidentiality, **not** integrity; and the

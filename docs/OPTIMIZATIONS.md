@@ -73,7 +73,7 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
 - ◯ `mode=lfs` (default `adaptive`) — pure-sequential suits a write-once store on sequential flash
   but raises GC pressure; **benchmark on the real stick** before adopting. Leave `adaptive` unless
   measured.
-- GC knobs (`atgc`, `gc_merge`, `background_gc`): store is read-mostly → defaults are fine, don't
+- GC options (`atgc`, `gc_merge`, `background_gc`): store is read-mostly → defaults are fine, don't
   over-tune.
 
 ## 4. Boot integrity & lanzaboote / UKI hygiene

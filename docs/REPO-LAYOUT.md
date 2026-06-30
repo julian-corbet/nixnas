@@ -13,7 +13,7 @@ nixnas/
 │
 ├── modules/                  # → nixosModules.nixnas (imports all below)
 │   ├── default.nix
-│   ├── options.nix           # the WHOLE public API surface (typed knobs, no literals)
+│   ├── options.nix           # the WHOLE public API surface (typed options, no literals)
 │   ├── boot/
 │   │   ├── ram-root.nix       # copytoram + verity squashfs overlay (custom initrd service)
 │   │   ├── uki.nix            # boot.uki / ukify, one self-contained signed UKI per slot
