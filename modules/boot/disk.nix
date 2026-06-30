@@ -11,9 +11,12 @@
 # runs the installer in a throwaway VM, then drops the `.raw`. The store is the only
 # device nixnas ever formats — the operator's data pools are import-only.
 #
-# INCREMENT 1b: tmpfs root + /nix on f2fs (impermanence); the store is still plaintext —
-# LUKS is the next increment. See docs/STORAGE.md §4.
-{ config, lib, ... }:
+# The store is LUKS2-encrypted (single passphrase = the future TPM2 PIN). `passwordFile`
+# (not settings.keyFile) gives an INTERACTIVE runtime unlock prompt — correct here, because a
+# keyfile would live INSIDE the encrypted store and so be unavailable at unlock time. The demo
+# formats with the passphrase "nixnas-demo"; a real host's passphrase is supplied by the TUI at
+# format time (and TPM2-PIN enrolment is a later increment). See docs/STORAGE.md §4, ARCHITECTURE §6.
+{ config, lib, pkgs, ... }:
 let
   cfg = config.nixnas;
 in
@@ -48,6 +51,11 @@ in
             nixos = {
               size = "100%";
               content = {
+                type = "luks";
+                name = "cryptstore";
+                # Format-time passphrase; runtime is an interactive prompt (see header).
+                passwordFile = "${pkgs.writeText "nixnas-demo-luks" "nixnas-demo"}";
+                content = {
                 type = "filesystem";
                 format = "f2fs";
                 mountpoint = "/nix";
@@ -64,6 +72,7 @@ in
                   "lazytime"
                   "nodiscard"
                 ];
+                };
               };
             };
           };
