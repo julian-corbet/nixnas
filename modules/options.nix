@@ -119,6 +119,18 @@ in
     crypto = {
       tpm2 = {
         enable = mkEnableOption "bind LUKS unlock to TPM2 + PIN (the single passphrase IS the PIN, required every boot)";
+        requirePin = mkOption {
+          type = types.bool;
+          default = true;
+          description = ''
+            STRICT (default): the TPM2 unlock also needs the PIN on EVERY boot — a
+            powered-off box never auto-decrypts (max evil-maid resistance), but every
+            boot needs an operator to enter the PIN (headless ⇒ over the remote-unlock
+            channel). The alternative (false) is TPM2 PCR-only auto-unlock: the box
+            self-recovers after a power cut and only demands the recovery key on TAMPER
+            (PCR mismatch), trading some resistance for unattended resilience. ARCH §6.
+          '';
+        };
         pcrs = mkOption {
           type = types.listOf types.ints.unsigned;
           default = [ 7 ];
