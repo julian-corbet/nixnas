@@ -96,9 +96,26 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
 
 ## 6. Crypto / Evil-Maid — honest
 
-- **LUKS2** on the OS store **and** the operator's data pools; **single passphrase that
-  *is* the TPM2 PIN**; one **recovery keyslot** escrowed off-box. `systemd-cryptsetup`
-  reuses the entered secret across devices via the kernel keyring → entered **once**.
+- **Unlock model (DECIDED): TPM2-with-PIN, the PIN is required on EVERY boot — no
+  unattended reboot, by design ("kein unbefugter Zugriff").** A single passphrase *is* the
+  TPM2 PIN *and* is the same secret enrolled on the operator's data pools. The TPM releases
+  the store key only if PCRs match (untampered boot chain) **and** the PIN is entered; a
+  changed/tampered state makes the TPM refuse → the off-box **recovery keyslot** (mandatory)
+  is the fallback. A stolen, powered-off box therefore **never auto-decrypts**.
+- **Entered once.** The store is unlocked in the **initrd**; the data pools in **stage-2**
+  (non-fatal). `systemd-cryptsetup` caches the entered secret in the kernel keyring and
+  reuses it across devices → one prompt unlocks the store + all pools. *(Spike: confirm the
+  keyring survives the initrd→stage-2 switch-root.)*
+- **Build-time vs first-boot.** `lib.mkImage` enrolls only the **passphrase keyslot** on the
+  store (hardware-independent). The **TPM2 keyslot is enrolled on first boot on the real
+  hardware** (`systemd-cryptenroll --tpm2-device=auto --tpm2-with-pin`) — PCRs are
+  hardware-specific, so a build machine cannot seal to the target TPM. The operator enrolls
+  the **same passphrase** on their self-built pools (nixnas never formats them).
+- **Remote unlock transport.** The store is encrypted, so the first prompt is in the
+  **initrd** (`boot.initrd.systemd.enable`). Primary: **IPMI Serial-over-LAN** — a separate
+  trust domain, no SSH host key on the plaintext ESP. Optional: **initrd-SSH over LAN**
+  (`boot.initrd.network.ssh`, convenient; its host key lives in the *signed* UKI but on the
+  *plaintext* ESP, so a stolen-stick clone could phish the PIN — SOL is preferred).
 - **The evil-maid defense is signed boot, not encryption.** Honest framing:
   **confidentiality-by-encryption + integrity-by-signed-boot.** Default LUKS2 aes-xts is
   *unauthenticated and malleable* — it gives confidentiality, **not** integrity; and the
@@ -127,8 +144,10 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   dm-integrity/AEAD** on the persistent store, with the root hash **sealed into the
   already-signed UKI**. Captures verity's one genuine integrity edge without its
   version-density, flash-wear, and run-from-RAM costs.
-- **Remote unlock:** the OS store is encrypted, so the first unlock is in the **initrd** —
-  local passphrase (BMC/SOL) or initrd-SSH-over-Tailscale for a headless box (§9).
+- **No self-reboot.** Because the PIN is required every boot, `autoUpgrade` runs with
+  `allowReboot = false`: a new generation is staged (`nixos-rebuild boot`) and only
+  activates on the next operator-initiated, PIN-unlocked reboot. The box must never reboot
+  itself into a PIN prompt no one is at.
 
 ## 7. The flake / TUI workflow
 
@@ -159,7 +178,8 @@ workflow.
    it; manual generation-menu rollback is the guaranteed fallback.
 2. **autoUpgrade against a private flake** — pull auth (deploy key via sops-nix), root git
    `safe.directory`, end-to-end build-once-then-self-update on the 8 GB target.
-3. **First-unlock transport** — initrd passphrase (BMC/SOL) vs initrd-SSH-over-Tailscale.
+3. **Keyring reuse across switch-root** — confirm one PIN entry in the initrd unlocks the
+   stage-2 data pools (transport DECIDED: IPMI-SOL primary, initrd-SSH-over-LAN optional).
 4. **The anti-rollback counter** — TPM2-NV implementation + the version policy.
 5. **Generation count vs ESP size** on 8 GB (one ~80 MiB UKI per generation).
 
