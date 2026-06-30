@@ -2,7 +2,7 @@
 #
 # Tailscale is both the management plane and the path for stage-2 remote LUKS unlock
 # (the OS boots fully into RAM with no secret, so you SSH in over the tailnet and
-# answer the data-pool passphrase — see docs/DESIGN.md §3.6).
+# answer the data-pool passphrase — see docs/ARCHITECTURE.md §6).
 { config, lib, ... }:
 let
   cfg = config.nixnas;

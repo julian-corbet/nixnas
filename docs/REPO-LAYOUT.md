@@ -1,111 +1,94 @@
 ## Two-repo boundary (privacy = flake-input boundary, not .gitignore)
 
+The PUBLIC repo is the generic, thin appliance core. Your machine's real disks, keys,
+and secrets live in a SEPARATE PRIVATE repo that imports nixnas as a flake input
+(`templates/host/` scaffolds one). The public core never references the private overlay.
+
 ```
 # ── PUBLIC: github.com/<you>/nixnas ─────────────────────────────────
 nixnas/
-├── flake.nix                 # inputs: nixpkgs, disko, sops-nix, flake-parts,
-│                             #   (systemd-stub/ukify via nixpkgs) — NO private input
+├── flake.nix                 # inputs: nixpkgs (unstable) + nixpkgs-stable (image-builder VM),
+│                             #   disko, lanzaboote, nix-cachyos-kernel — NO private input
 ├── flake.lock
-├── LICENSE                   # MIT | Apache-2.0 | AGPL-3.0  ← user's pick
-├── README.md  CONTRIBUTING.md
-├── docs/{architecture,porting,threat-model,boot-chain,crypto}.md
-├── .github/workflows/ci.yml  # nix flake check + build demo toplevel + build image + swtpm smoke
+├── LICENSE                   # Apache-2.0
+├── README.md
+├── docs/                     # ARCHITECTURE, SCOPE, STORAGE, KERNEL, OPTIMIZATIONS, REPO-LAYOUT
 │
-├── modules/                  # → nixosModules.nixnas (imports all below)
+├── modules/                  # → nixosModules.nixnas (default.nix imports all below)
 │   ├── default.nix
-│   ├── options.nix           # the WHOLE public API surface (typed options, no literals)
+│   ├── options.nix           # the WHOLE public API surface (typed `nixnas.*`, no literals)
 │   ├── boot/
-│   │   ├── ram-root.nix       # copytoram + verity squashfs overlay (custom initrd service)
-│   │   ├── uki.nix            # boot.uki / ukify, one self-contained signed UKI per slot
-│   │   ├── secureboot.nix     # own PK/KEK/db, MS keys NOT enrolled (sbctl/sbsign) — no lanzaboote
-│   │   ├── ab-slots.nix       # A/B layout + systemd-boot boot-counting + health-gate "good"
-│   │   └── remote-unlock.nix  # stage-2 Tailscale-SSH unlock (primary) + initrd-SSH fallback
+│   │   ├── disk.nix           # disko GPT on the stick: ESP + LUKS2 f2fs-zstd:22 store; tmpfs root
+│   │   ├── image.nix          # UEFI + systemd-initrd glue, serial console, initrd modules
+│   │   ├── impermanence.nix   # tmpfs root — only /nix + the ESP persist (RAM-resident, not copytoram)
+│   │   ├── kernel.nix         # the CachyOS kernel (pkgs.cachyosKernels) + zfs_cachyos + lantian cache
+│   │   ├── secureboot.nix     # lanzaboote Secure Boot: operator-owned PK/KEK/db, signed UKIs
+│   │   ├── remote-unlock.nix  # headless store unlock — initrd-SSH (NIC up in the initrd)
+│   │   └── rollback.nix       # kept generations (configurationLimit) + lanzaboote boot-counting
 │   ├── crypto/
-│   │   ├── luks.nix           # LUKS-direct-on-mapper, single-secret keyring fan-out
-│   │   ├── tpm2.nix           # systemd-cryptenroll TPM2+PIN, PCR7 baseline / signed-PCR11 phase2
-│   │   └── recovery-escrow.nix# recovery keyslot → Vaultwarden API (URL is an OPTION)
+│   │   └── tpm2.nix           # TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`
 │   ├── storage/
-│   │   ├── zfs-pools.nix      # LUKS-under-ZFS, non-fatal Wants-only import, by-id devNodes
-│   │   ├── smr-disks.nix      # LUKS-under-xfs/btrfs, whole-disk, serial-keyed (param map)
-│   │   ├── disko-profiles.nix # reusable disko layout FUNCTIONS (no serials)
-│   │   ├── shares.nix         # services.samba (settings schema) + samba-wsdd + nfs.server
-│   │   └── tiering.nix        # mergerfs union + custom systemd-timer mover (age + pinned-exclude)
-│   ├── compute/
-│   │   ├── k3s.nix            # native services.k3s (+ bootstrap manifests only)
-│   │   ├── podman.nix         # virtualisation.quadlet tier-0 host glue (Docker retired)
-│   │   ├── arch-container.nix # virtualisation.incus + preseed (Arch pet, GPU device)
-│   │   ├── libvirt.nix        # virtualisation.libvirtd + NixVirt (Office VM only)
-│   │   └── gpu.nix            # amdgpu + ROCm, render-GID pinning, hostPath/device split
-│   ├── observability/
-│   │   └── monitoring.nix     # smartd + node-exporter + smartctl-exporter (+ cockpit/netdata opt)
-│   ├── network/
-│   │   └── nftables.nix       # single nft backend, per-bridge subnets, ip_forward, trusted ifaces
+│   │   └── zfs-pools.nix      # IMPORT-ONLY data pools (never create/format), non-fatal, stage-2 unlock
 │   └── appliance/
-│       ├── tailscale.nix      # tailscaled, auth-key from sops (option path)
-│       └── hardening.nix      # firmware-password expectation, read-only-root posture
+│       ├── base.nix           # stable hostName + Tailscale
+│       ├── ssh.nix            # headless admin sshd (key-only root)
+│       ├── auto-upgrade.nix   # self-update: stage-only, never self-reboot
+│       └── optimizations.nix  # appliance defaults: zram, journald→RAM, no swap, store.preload
 │
-├── lib/                       # → lib.* (the HUB pipeline, pure; never runs on node)
-│   ├── default.nix
-│   ├── mkImage.nix            # build one A/B slot: squashfs + verity + roothash  (eval mkosi fork)
-│   ├── signUki.nix            # ukify + sbsign/sbctl wrapper
-│   ├── verity.nix             # veritysetup format → roothash → embed in signed cmdline
-│   ├── sealTpm.nix            # systemd-measure sign → PCR policy for cryptenroll
-│   ├── escrow.nix             # idempotent recovery-key upsert to Vaultwarden (bw CLI)
-│   └── deliver.nix            # write INACTIVE slot over Tailscale + arm switch (eval sysupdate)
+├── lib/default.nix           # mkImage — the TUI's build entry (host → diskoImages); pure, hub-side
 │
-├── packages/
-│   ├── image.nix             # packages.<sys>.image : function over a nixosConfiguration
-│   └── hub-cli.nix           # `nixnas-hub build|sign|seal|escrow|deliver|switch`
+├── hosts/demo/default.nix    # FAKE zero-secrets host so the public repo builds standalone
+│                             #   (DEMO-* / RFC-5737 / .invalid placeholders; demo LUKS pass `nixnas-demo`)
 │
-├── hosts/demo/               # FAKE host so the public repo builds standalone
-│   ├── default.nix           #   RFC-5737/2606 placeholders (203.0.113.x, demo.invalid)
-│   └── disko-demo.nix        #   /dev/disk/by-id/DEMO-* placeholders
+├── templates/host/{flake,host}.nix   # scaffold a private overlay (the operator copies + fills in)
 │
-├── templates/host/{flake,host}.nix   # scaffold a private overlay
-└── checks/{build-demo,eval-options}.nix
+├── test/                     # boot-vm.sh (QEMU+OVMF+swtpm), remote-unlock-test.sh,
+│   │                         #   verify-image.nix / verify-tpm2.nix (DEV self-checks), ssh/ (demo keys)
+│   └── …
+└── tui/                      # the Rust TUI: build the image locally + flash (caligula)
 
 # flake outputs (public core):
-#   nixosModules.nixnas / .default
-#   lib                          (mkImage/signUki/verity/sealTpm/escrow/deliver)
-#   packages.<sys>.{image, hub-cli, default=hub-cli}
-#   nixosConfigurations.demo     (proves the core stands alone)
-#   checks.<sys>.{build-demo, eval-options}
-#   devShells.<sys>.default      (sbsigntools, tpm2-tools, ukify, sops, age, jq, bw)
-#   templates.host
+#   nixosModules.nixnas
+#   lib.mkImage
+#   packages.x86_64-linux.{image, imageScript}   (the TUI builds `.#image`)
+#   nixosConfigurations.demo                      (proves the core stands alone)
+#   checks.<sys>.demo-toplevel
 
-# ── PRIVATE: github.com/<you>/nixnas-hosts (never open-sourced) ──────
-nixnas-hosts/
-├── flake.nix                 # inputs.nixnas.url = "github:<you>/nixnas";
-├── flake.lock
-├── .sops.yaml                # SAME per-machine-age-recipient format as the fleet's existing setup
-├── hosts/nas/
-│   ├── default.nix           # imports nixnas.nixosModules.nixnas; sets EVERY option literal here
-│   ├── disko.nix             # real /dev/disk/by-id/ata-… serials live ONLY here
-│   └── hardware.nix          # nixos-generate-config output for the real board
-├── secrets/
-│   ├── nas.yml               # sops+age: luks recovery key, vaultwarden token, TS authkey, k3s token
-│   └── secureboot/{pk,kek,db}.yml   # SecureBoot PRIVATE keys, sops-encrypted (public certs may be plain)
-└── modules/                  # rare host-private glue
+# ── PRIVATE: github.com/<you>/nixnas-config (never open-sourced) ─────
+nixnas-config/
+├── flake.nix                 # inputs.nixnas.url = "github:<you>/nixnas"; mirrors the demo's
+│                             #   image machinery (disko + lanzaboote + cachyos overlay + stable builder)
+├── host.nix                  # imports nixnas.nixosModules.nixnas; sets EVERY option literal here
+├── initrd_host_ed25519_key   # the box's initrd-SSH host key (git-tracked; flakes only see tracked files)
+└── secrets/                  # sops+age: Tailscale authkey, Vaultwarden escrow creds, etc.
+                              # (the LUKS passphrase is NOT stored — the TUI prompts + shreds it)
 ```
 
-### The only file pairing generic module with private literals
-`nixnas-hosts/hosts/nas/default.nix`:
+### The only file pairing the generic module with private literals
+`nixnas-config/host.nix` (see `templates/host/host.nix`):
 ```nix
-{ nixnas, config, ... }: {
-  imports = [ nixnas.nixosModules.nixnas ./disko.nix ./hardware.nix ];
+{ lib, ... }: {
   nixnas = {
-    hostName                   = "…";                       # private literal
-    tailscale.tags             = [ "tag:nas" ];
-    crypto.vaultwardenUrl      = "https://…";               # private literal
-    storage.zfs.ssdPool.disks  = [ "/dev/disk/by-id/…" ];   # serials, private
-    storage.smr.disks          = { "<label>" = "/dev/disk/by-id/…"; };
-    boot.secureboot.keysSops   = config.sops.secrets."secureboot/db".path;
+    enable   = true;
+    hostName = "nas";                                    # private literal
+    admin.authorizedKeys = [ "ssh-ed25519 …" ];          # your keys
+    boot.remoteUnlock.hostKeyPath = ./initrd_host_ed25519_key;
+    boot.usb.device = "/dev/disk/by-id/usb-…";           # the ONLY device nixnas partitions
+    storage.pools.hot.luksDevices = [ "/dev/disk/by-id/ata-…" ];  # serials, private
+    boot.secureBoot.enable = true;
+    crypto.tpm2.enable     = true;
+    autoUpgrade.flake      = "github:you/nas-config#nas";
     # all BEHAVIOUR comes from the public module; only DATA lives here.
+    # k3s / GPU / Samba / VMs are plain NixOS you add ALONGSIDE — NOT nixnas.* (see SCOPE.md).
   };
+  system.stateVersion = "25.05";
 }
 ```
 
 ### Public/private delineation rule
-- **Public core holds:** every mechanism, every typed option, the hub pipeline, the demo host with fake values. No hostname, IP, serial, URL, or fleet-topology fact — not even in comments or git history.
-- **Private overlay holds:** all literals (serials/IPs/hostnames/URLs), all sops ciphertext, the real `nixosConfigurations`. It *imports* the public core; the public core never references it.
-
+- **Public core holds:** every mechanism, every typed option, the build library, the demo
+  host with fake values. No hostname, IP, serial, URL, or fleet-topology fact — not even in
+  comments or git history.
+- **Private overlay holds:** all literals (serials/IPs/hostnames/URLs), all sops ciphertext,
+  the initrd host key, the real `nixosConfigurations`. It *imports* the public core; the
+  public core never references it.

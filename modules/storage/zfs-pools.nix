@@ -7,7 +7,7 @@
 #
 # STATUS: first draft. The stage-2 unlock + non-fatal ZFS import ordering is the
 # classic systemd+ZFS footgun and MUST be verified under a pulled-disk test on real
-# hardware (see docs/DESIGN.md §3.5 and §10).
+# hardware (see docs/ARCHITECTURE.md §6).
 { config, lib, ... }:
 let
   cfg = config.nixnas;
