@@ -53,8 +53,14 @@ in
               content = {
                 type = "luks";
                 name = "cryptstore";
-                # Format-time passphrase; runtime is an interactive prompt (see header).
-                passwordFile = "${pkgs.writeText "nixnas-demo-luks" "nixnas-demo"}";
+                # Format-time passphrase (becomes the recovery keyslot; TPM2+PIN is enrolled
+                # later on hardware). The operator's passphrase comes from the TUI via
+                # `boot.usb.luksPassphraseFile`; null = the public demo passphrase. Either way
+                # it is a store path so disko can read it inside the image-builder VM.
+                passwordFile =
+                  if cfg.boot.usb.luksPassphraseFile != null
+                  then builtins.path { path = cfg.boot.usb.luksPassphraseFile; name = "nixnas-luks-pass"; }
+                  else "${pkgs.writeText "nixnas-demo-luks" "nixnas-demo"}";
                 content = {
                 type = "filesystem";
                 format = "f2fs";

@@ -125,6 +125,19 @@ in
           default = 1024;
           description = "FAT ESP size: lanzaboote-signed systemd-boot + one signed UKI per kept generation (~8 per GiB).";
         };
+        luksPassphraseFile = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          description = ''
+            Build-machine path to the file holding the store's LUKS passphrase, used ONCE to
+            `luksFormat` the store at image-build time (it becomes the recovery keyslot; the
+            TPM2+PIN keyslot is enrolled later on the real hardware). The TUI writes the
+            operator's passphrase to a gitignored file and points this at it, then shreds it
+            after the build. Null = the public demo passphrase `nixnas-demo`. NOTE: whatever
+            this contains is briefly a world-readable store path on the BUILD machine — build
+            on a trusted box. See docs/ARCHITECTURE §6.
+          '';
+        };
       };
     };
 
