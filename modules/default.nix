@@ -16,12 +16,10 @@
     # ./crypto/{luks,recovery-escrow}.nix   # provision-time helpers (next)
     ./storage/zfs-pools.nix  # IMPORT-ONLY pools (never create/format), stage-2 LUKS unlock, non-fatal import
     # ./storage/{smr-disks,shares}.nix   # SMR unlock+mount, samba/nfs (next)
-    ./compute/gpu.nix        # amdgpu + ROCm, render-GID pinning
-    ./compute/k3s.nix        # native declarative k3s (server scaffold)
-    # ./compute/{podman,arch-container,libvirt}.nix   # (next)
-    ./network/nftables.nix   # single nftables backend, ip_forward
-    ./observability/monitoring.nix   # smartd + host-level prometheus exporters
-    ./appliance/base.nix     # stable identity (hostName) + Tailscale
+    ./appliance/base.nix     # stable identity (hostName)
+    # NOTE: k3s / GPU / nftables / monitoring / shares / the Arch LXC / the Office VM /
+    # the apps are NOT nixnas — they are plain NixOS the operator declares in their own
+    # repo alongside `imports = [ nixnas ]`. See docs/SCOPE.md.
     # ./appliance/hardening.nix          # firmware-password expectation, read-only-root (next)
   ];
 }
