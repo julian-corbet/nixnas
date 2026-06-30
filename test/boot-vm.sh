@@ -73,7 +73,7 @@ QEMU=(
 if [ -n "$PASS" ]; then
   # Feed the LUKS/TPM2 passphrase to the guest serial once the unlock prompt is up.
   echo ">> will type the passphrase on serial after ${PASS_DELAY}s"
-  { sleep "$PASS_DELAY"; printf '%s\n' "$PASS"; sleep 100000; } | "${QEMU[@]}" -serial stdio
+  { sleep "$PASS_DELAY"; printf '%s\n' "$PASS"; sleep 100000; } | "${QEMU[@]}" -serial mon:stdio
 else
   exec "${QEMU[@]}" -serial mon:stdio
 fi
