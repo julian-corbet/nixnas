@@ -21,14 +21,20 @@
 #          initrd password agent over SSH and confirm the box reaches login — headless,
 #          with a host key that was never on the plaintext ESP.
 #
-# Usage: test/seal-2boot-test.sh <image.raw> [--pass nixnas-demo] [--port 2222]
+# --tamper NEGATIVE proof: boot #2 runs against a FRESH TPM (different SRK) — the seal MUST
+#          then fail to unseal, sshd must NOT come up, the box must fall back to serial. This is
+#          what proves the key is genuinely bound to THIS box's TPM, not decryptable by any TPM.
+#          In tamper mode a NON-unlock is the PASS.
+#
+# Usage: test/seal-2boot-test.sh <image.raw> [--pass nixnas-demo] [--port 2222] [--tamper]
 set -uo pipefail
 
 IMG="${1:?usage: seal-2boot-test.sh <image.raw>}"; shift || true
-PASS="nixnas-demo"; PORT=2222
+PASS="nixnas-demo"; PORT=2222; TAMPER=0
 while [ $# -gt 0 ]; do case "$1" in
   --pass) PASS="$2"; shift ;;
   --port) PORT="$2"; shift ;;
+  --tamper) TAMPER=1 ;;
   *) echo "unknown arg: $1" >&2; exit 2 ;;
 esac; shift; done
 [ -f "$IMG" ] || { echo "no such image: $IMG" >&2; exit 1; }
@@ -48,8 +54,11 @@ SWTPM_PID=""
 # cleanup also reaps any qemu still bound to THIS run's unique scratch path. $SCRATCH is an
 # mktemp path that never appears in this script's own cmdline, so the match can't self-target.
 cleanup(){
-  pkill -f "$SCRATCH" 2>/dev/null || true
+  pkill -f "$SCRATCH" 2>/dev/null || true   # pkill excludes its own PID; $SCRATCH is unique to this run
   [ -n "$SWTPM_PID" ] && kill "$SWTPM_PID" 2>/dev/null || true
+  # Wait for the qemu to actually release the SSH-forward port, so a chained next run doesn't
+  # race the port-free guard (killing qemu is async; the socket lingers a moment).
+  for _ in $(seq 1 30); do ss -ltn 2>/dev/null | grep -q ":${PORT} " || break; sleep 0.3; done
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -72,13 +81,17 @@ cp "$FWDIR/OVMF_VARS.4m.fd" "$WORK/OVMF_VARS.fd"   # persistent UEFI vars, reuse
 # Secure-Boot-state) value — which is why seal (boot #1 stage-2) and unseal (boot #2 initrd)
 # agree. Reusing one long-lived swtpm would instead DOUBLE-extend PCR 7 and break the unseal.
 mkdir -p "$WORK/tpm"
-start_swtpm() {
+TPM_SOCK="$WORK/tpm/sock"   # run_qemu reads this; start_swtpm may repoint it (tamper = fresh TPM)
+start_swtpm() {            # start_swtpm [statedir]  (default: the persistent $WORK/tpm)
+  local dir="${1:-$WORK/tpm}"
+  mkdir -p "$dir"
   [ -n "$SWTPM_PID" ] && kill "$SWTPM_PID" 2>/dev/null || true
-  rm -f "$WORK/tpm/sock" "$WORK/tpm/pid"
-  swtpm socket --tpm2 --tpmstate dir="$WORK/tpm" \
-    --ctrl type=unixio,path="$WORK/tpm/sock" --pid file="$WORK/tpm/pid" --daemon
-  for _ in $(seq 1 25); do [ -S "$WORK/tpm/sock" ] && break; sleep 0.2; done
-  SWTPM_PID="$(cat "$WORK/tpm/pid")"
+  rm -f "$dir/sock" "$dir/pid"
+  swtpm socket --tpm2 --tpmstate dir="$dir" \
+    --ctrl type=unixio,path="$dir/sock" --pid file="$dir/pid" --daemon
+  for _ in $(seq 1 25); do [ -S "$dir/sock" ] && break; sleep 0.2; done
+  SWTPM_PID="$(cat "$dir/pid")"
+  TPM_SOCK="$dir/sock"
 }
 
 SSH=(ssh -i "$KEY" -p "$PORT"
@@ -94,7 +107,7 @@ run_qemu() { # run_qemu <logfile>
     -global driver=cfi.pflash01,property=secure,value=on \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$FWDIR/OVMF_CODE.4m.fd" \
     -drive if=pflash,format=raw,unit=1,file="$WORK/OVMF_VARS.fd" \
-    -chardev socket,id=chrtpm,path="$WORK/tpm/sock" \
+    -chardev socket,id=chrtpm,path="$TPM_SOCK" \
     -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-crb,tpmdev=tpm0 \
     -drive if=virtio,format=raw,file="$SCRATCH" \
     -netdev "user,id=n0,hostfwd=tcp::${PORT}-:22" -device virtio-net,netdev=n0 \
@@ -133,8 +146,13 @@ kill "$VM1" 2>/dev/null || true; wait "$VM1" 2>/dev/null || true; rm -f "$FIFO1"
 
 # ─────────────────────────────── BOOT #2 — unseal ─────────────────────────────
 LOG2="$WORK/boot2.log"
-echo ">> BOOT #2: NO serial passphrase — initrd must unseal the host key to bring up sshd …"
-start_swtpm   # fresh PCRs against the same persisted SRK/NV; firmware re-extends PCR 7 to seal-time value
+if [ "$TAMPER" = 1 ]; then
+  echo ">> BOOT #2 (TAMPER): fresh TPM (different SRK) — unseal MUST fail, sshd MUST NOT come up …"
+  start_swtpm "$WORK/tpm-fresh"   # a brand-new TPM: different storage seed ⇒ cannot unseal boot #1's cred
+else
+  echo ">> BOOT #2: NO serial passphrase — initrd must unseal the host key to bring up sshd …"
+  start_swtpm   # fresh PCRs against the same persisted SRK/NV; firmware re-extends PCR 7 to seal-time value
+fi
 run_qemu < /dev/null > "$LOG2" 2>&1 &
 VM2=$!
 kill_vm2(){ kill "$VM2" 2>/dev/null; pkill -P "$VM2" 2>/dev/null; }
@@ -147,6 +165,22 @@ for _ in $(seq 1 60); do
   if "${SSH[@]}" -o BatchMode=yes true 2>/dev/null; then up=1; break; fi
   sleep 2
 done
+
+# ── TAMPER mode: a NON-unlock is the PASS (the wrong TPM must not be able to unseal). ──
+if [ "$TAMPER" = 1 ]; then
+  echo "================ RESULT (TAMPER) ================"
+  if [ "$up" = 1 ]; then
+    echo "FAIL — initrd-SSH came up on a DIFFERENT TPM. The key is NOT bound to this box's TPM!"
+    tail -30 "$LOG2"; exit 1
+  fi
+  echo "PASS — a fresh/wrong TPM could NOT unseal the host key; initrd-SSH stayed down."
+  echo "       Proof the key is genuinely sealed to THIS box's TPM (SRK), not any TPM."
+  echo "       credential-load failure on the serial:"
+  grep -aiE "credential|initrd-hostkey|LoadCredential|decrypt|tpm" "$LOG2" | tail -12
+  exit 0
+fi
+
+# ── Positive mode: initrd-SSH must come up (proves the unseal), then unlock to login. ──
 if [ "$up" != 1 ]; then
   echo "!! initrd-SSH never came up in boot #2 — the initrd unseal FAILED."
   cp "$LOG2" /tmp/nixnas-boot2-serial.log 2>/dev/null || true

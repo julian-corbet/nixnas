@@ -43,9 +43,9 @@ nixnas/
 │
 ├── templates/host/{flake,host}.nix   # scaffold a private overlay (the operator copies + fills in)
 │
-├── test/                     # boot-vm.sh (QEMU+OVMF+swtpm), remote-unlock-test.sh,
-│   │                         #   seal-2boot-test.sh (power-cycle: seal→unseal→initrd-SSH), and DEV
-│   │                         #   self-checks baked into the demo: verify-image / verify-tpm2 /
+├── test/                     # boot-vm.sh (QEMU+OVMF+swtpm); seal-2boot-test.sh (power-cycle:
+│   │                         #   seal→unseal→initrd-SSH→unlock, + --tamper wrong-TPM fail-closed);
+│   │                         #   DEV self-checks baked into the demo: verify-image / verify-tpm2 /
 │   │                         #   verify-sealed-hostkey / verify-recovery / verify-writes; ssh/ (demo keys)
 │   └── …
 └── tui/                      # the Rust TUI: build the image locally + flash (caligula)

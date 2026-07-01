@@ -51,6 +51,26 @@ test/boot-vm.sh nixnas.raw --mem 4096 --smp 4
   Quit with `Ctrl-a x`; QEMU monitor with `Ctrl-a c`.
 - A per-run swtpm + a writable copy of the UEFI vars live in a temp dir, cleaned up on exit.
 
+## 3. The sealed initrd-SSH host key — real power-cycle proof
+
+`boot-vm.sh` uses `snapshot=on` + a fresh swtpm, so it cannot test anything that must survive a
+reboot. The TPM-sealed initrd-SSH host key does: it is sealed on boot #1 and must be **unsealed by
+the initrd on boot #2**. `seal-2boot-test.sh` gives it a *persistent* disk copy + a per-boot swtpm
+against one persistent TPM state dir (so PCR 7 matches across boots), and drives a genuine two-boot
+cycle:
+
+```sh
+test/seal-2boot-test.sh nixnas.raw            # boot#1 seals → boot#2 initrd unseals → initrd-SSH
+                                              #   comes up → store unlocked over SSH → login  (PASS)
+test/seal-2boot-test.sh nixnas.raw --tamper   # boot#2 on a FRESH/wrong TPM: unseal MUST fail,
+                                              #   sshd MUST NOT come up — fail-closed  (PASS = no unlock)
+```
+
+The positive run proves the box unlocks headlessly with a host key that was never plaintext on the
+ESP; `--tamper` proves the key is genuinely bound to *this* box's TPM (a different SRK cannot unseal
+it). Both are deterministic. (swtpm PCRs still differ from real hardware — these prove the
+*mechanism*; the production PCR policy is a hardware spike, `docs/ARCHITECTURE.md` §9.)
+
 ## Known limits / next steps
 
 - **`--secboot` enforces signatures but with the firmware's default key set.** Testing
