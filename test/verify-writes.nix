@@ -14,9 +14,11 @@
   systemd.services.nixnas-verify-writes = {
     description = "DEV: prove the USB stick takes ~no writes during steady-state activity";
     wantedBy = [ "multi-user.target" ];
-    # Run last, after the other DEV checks + first-boot writers (SB keys, TPM enroll) have settled,
-    # so we measure STEADY STATE, not the one-time boot writes.
-    after = [ "multi-user.target" "nixnas-verify.service" "nixnas-verify-tpm2.service" ];
+    # Run last, after the other DEV checks + first-boot writers (SB keys, TPM enroll,
+    # initrd-SSH host key seal) have settled, so we measure STEADY STATE, not the one-time
+    # boot writes.
+    after = [ "multi-user.target" "nixnas-verify.service" "nixnas-verify-tpm2.service"
+              "nixnas-seal-hostkey.service" ];
     path = [ pkgs.coreutils pkgs.util-linux pkgs.systemd pkgs.gawk ];
     serviceConfig = {
       Type = "oneshot";

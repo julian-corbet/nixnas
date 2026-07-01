@@ -17,7 +17,7 @@
     ./boot/rollback.nix      # structural failsafe: kept generations + boot-counting
 
     ./crypto/tpm2.nix        # TPM2+PIN store unlock (only the stick); first-boot enrollment
-    # ./crypto/recovery-escrow.nix   # roadmap: recovery-key escrow to Vaultwarden
+    ./crypto/recovery-escrow.nix   # break-glass recovery keyslot, escrowed to Vaultwarden (hub-side)
 
     ./storage/connect.nix    # connect your storage: stage-2 LUKS unlock + optional ZFS import
                              # (thin — mounting itself is native NixOS: fileSystems / boot.zfs)

@@ -12,8 +12,10 @@
     # Throwaway DEMO key (test/ssh/demo_key) — for the test VM only. A real host lists the
     # operator's own keys here; they authorise BOTH the initrd remote-unlock and admin sshd.
     admin.authorizedKeys = [ (lib.fileContents ../../test/ssh/demo_key.pub) ];
-    # Throwaway DEMO initrd-SSH host key — test VM only (a real host's key is TUI-written).
-    boot.remoteUnlock.hostKeyPath = ../../test/ssh/demo_initrd_host_ed25519_key;
+    # sealHostKey = true (default) + crypto.tpm2.enable = true → the initrd-SSH host key is
+    # generated and TPM2-sealed on first boot; no plaintext key needed here. A real host gets
+    # the same behaviour automatically. The bootstrap caveat (first boot needs serial/IPMI-SOL)
+    # is documented in modules/boot/remote-unlock.nix.
 
     # Reference-box kernel tuning (a generic adopter would leave march at the x86_64-v1
     # default; we build for a known x86-64-v3 CPU). variant=latest, lto=thin, eevdf are defaults.

@@ -11,7 +11,13 @@ in
 {
   config = lib.mkIf cfg.enable {
     # ── Kill avoidable stick writes (only /nix + ESP persist; root is tmpfs) ──
-    services.journald.storage = "volatile";              # logs to RAM, never /var/log/journal
+    # Logs → RAM by default. `store.persistLogs` (temporary debug) instead keeps the journal
+    # on the stick's store so it survives a reboot/crash — writes the stick, hence off by default.
+    services.journald.storage = if cfg.store.persistLogs then "persistent" else "volatile";
+    systemd.tmpfiles.rules = lib.mkIf cfg.store.persistLogs [ "d /nix/nixnas/journal 0700 root root - -" ];
+    fileSystems."/var/log/journal" = lib.mkIf cfg.store.persistLogs {
+      device = "/nix/nixnas/journal"; fsType = "none"; options = [ "bind" ]; neededForBoot = true;
+    };
     systemd.coredump.settings.Coredump.Storage = "none";   # don't spool coredumps
     boot.tmp.useTmpfs = true;                            # /tmp in RAM
     documentation.enable = lib.mkDefault false;          # smaller closure → fewer bytes per update

@@ -53,9 +53,11 @@
           impermanence.nixosModules.impermanence
           self.nixosModules.nixnas
           ./hosts/demo
-          ./test/verify-image.nix   # DEV self-check (f2fs compression report on the console)
-          ./test/verify-tpm2.nix    # DEV self-check (TPM2+PIN enrollment against swtpm)
-          ./test/verify-writes.nix  # DEV self-check (USB stick write-isolation)
+          ./test/verify-image.nix          # DEV self-check (f2fs compression report on the console)
+          ./test/verify-tpm2.nix           # DEV self-check (TPM2+PIN enrollment against swtpm)
+          ./test/verify-sealed-hostkey.nix # DEV self-check (TPM2-sealed initrd SSH host key)
+          ./test/verify-recovery.nix       # DEV self-check (break-glass recovery keyslot, loopback LUKS)
+          ./test/verify-writes.nix         # DEV self-check (USB stick write-isolation)
           # The CachyOS kernel set (pkgs.cachyosKernels); modules/boot/kernel.nix reads it.
           { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
           # Build the throwaway image-builder VM from stable nixpkgs (see inputs above).
@@ -78,6 +80,9 @@
       packages = forAllSystems (system: {
         image = self.nixosConfigurations.demo.config.system.build.diskoImages;
         imageScript = self.nixosConfigurations.demo.config.system.build.diskoImagesScript;
+        # The hub-side break-glass escrow tool (`nix run .#escrow-recovery -- enroll ...`).
+        # Built per-host by the TUI; this demo build is for discovery/inspection.
+        escrow-recovery = self.nixosConfigurations.demo.config.system.build.nixnasEscrowRecovery;
       });
 
       # The build-hub toolchain (sign / seal / escrow run here, never on the node).

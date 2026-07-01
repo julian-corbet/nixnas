@@ -69,16 +69,26 @@ in
             replace this (set false). ARCHITECTURE §6.
           '';
         };
+        sealHostKey = mkOption {
+          type = types.bool;
+          default = true;
+          description = ''
+            TPM-seal the initrd-SSH host key (to PCR 7) instead of shipping it plaintext on
+            the ESP. On first boot the key is generated and sealed to this box's TPM; every
+            boot the initrd unseals it before sshd — a tampered boot chain (PCR mismatch)
+            can't recover it, so a stolen stick can't impersonate the box's unlock prompt.
+            PCR 7 (Secure Boot state) is update-stable (no reseal on kernel updates). Requires
+            `crypto.tpm2.enable`. Set false to fall back to the plaintext `hostKeyPath`.
+          '';
+        };
         hostKeyPath = mkOption {
           type = types.nullOr types.path;
           default = null;
           description = ''
-            Persistent initrd-SSH host key — the box's stable unlock identity across
-            re-images. A Nix path to a BUILD-MACHINE key file (NOT /run/secrets: it is
-            embedded in the initrd, which is assembled before any disk is unlocked). The TUI
-            writes the operator's key and points this at it. Required when
-            `boot.remoteUnlock.enable` is true. The key lands on the plaintext ESP (inside
-            the signed UKI) — hence LAN/tailnet-only.
+            Plaintext initrd-SSH host key (a BUILD-MACHINE Nix path), used only when
+            `sealHostKey = false` (no TPM, or IPMI-SOL boxes). It is embedded in the initrd
+            and lands on the plaintext ESP — hence LAN/tailnet-only. With `sealHostKey = true`
+            (the default) this is ignored; the key is generated + TPM-sealed on first boot.
           '';
         };
       };
@@ -174,7 +184,24 @@ in
           '';
         };
       };
-      # (recovery-key escrow to Vaultwarden is a roadmap item — no option until it is wired.)
+      recovery = {
+        vaultwardenUrl = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "https://vault.example.com";
+          description = ''
+            Vaultwarden/Bitwarden base URL to escrow a SEPARATE high-entropy recovery key to
+            at provision time. This key is a distinct LUKS keyslot (break-glass) — independent
+            of the daily TPM2 PIN and of any specific box's TPM (an AMD fTPM is wiped by a
+            BIOS/NVRAM clear). Null = no escrow (the passphrase keyslot is then the only recovery).
+          '';
+        };
+        credsSops = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          description = "Build-machine sops path to the Vaultwarden API client id/secret used for the escrow upload.";
+        };
+      };
     };
 
     ## ── ZFS: which OpenZFS to use for the operator's data pools ───────────
@@ -235,6 +262,17 @@ in
           runtime reads come from RAM and the slow stick is untouched — "copytoram done
           right" (compressed in RAM, self-update intact). Default on; turn off on very
           RAM-constrained boxes. See docs/OPTIMIZATIONS.md §5.
+        '';
+      };
+      persistLogs = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Persist the journal to the USB stick instead of RAM. DEFAULT OFF — normally logs
+          are volatile (RAM) so the stick takes ~no writes. Turn this on only TEMPORARILY, to
+          debug a problem whose evidence must survive a reboot/crash (e.g. an unlock or boot
+          failure, where the data pools aren't up yet). It writes the stick, so turn it back
+          off when done.
         '';
       };
     };
