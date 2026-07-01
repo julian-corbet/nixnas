@@ -137,17 +137,22 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   console, so the in-initrd PIN prompt must be reachable over the network. nixnas ships this:
   - **Primary: initrd-SSH** (`boot.initrd.network.ssh` + `boot.initrd.systemd.enable`) — bring
     up the NIC in the initrd, SSH in, hand the PIN to the password agent. Works for the general
-    distro (no special hardware). **Host key is TPM-sealed by default (DECIDED + built):** the
-    initrd-SSH host key never touches the plaintext ESP — on first boot it is generated and sealed
-    to the box's TPM2 (PCR 7 = Secure Boot state) via `systemd-creds`; every subsequent boot the
-    initrd unseals it *before* sshd starts. A tampered chain (PCR mismatch) can't recover the key,
-    so a stolen stick can't impersonate the box's unlock prompt — this closes the one evil-maid
-    wart of generic initrd-SSH. *Bootstrap:* the very first boot has no sealed blob yet, so that
-    one unlock uses serial/IPMI-SOL; from boot #2 onward initrd-SSH is available. Fallback for
-    no-TPM boxes: `boot.remoteUnlock.sealHostKey = false` + a plaintext `hostKeyPath` (embedded in
-    the initrd, lands on the ESP → LAN/tailnet-only). `modules/boot/remote-unlock.nix`;
-    verified by `test/verify-sealed-hostkey.nix` (seal blob present, no plaintext leak, TPM2
-    decrypt round-trip).
+    distro (no special hardware). **Host key is TPM-sealed by default (DECIDED + built), via a
+    systemd credential — no bespoke unseal code:** on first boot the key is generated and sealed
+    with `systemd-creds encrypt --with-key=auto-initrd --tpm2-pcrs=7` (PCR 7 = Secure Boot state)
+    straight into the ESP's `loader/credentials/` drop-in. From boot #2 on, **lanzaboote's stub**
+    packs that `.cred` into the initrd (`.extra/global_credentials`) and **systemd auto-decrypts
+    it** when the initrd sshd loads it (`LoadCredentialEncrypted=`), landing the plaintext only in
+    the unit's `$CREDENTIALS_DIRECTORY` — never on the plaintext ESP. A tampered chain (PCR
+    mismatch) makes the TPM refuse the key, so a stolen stick can't impersonate the unlock prompt —
+    closing the one evil-maid wart of generic initrd-SSH, and reusing systemd's own credential
+    plumbing rather than a hand-rolled mount/decrypt service. *Bootstrap:* the very first boot has
+    no credential yet, so sshd doesn't start and that one unlock uses serial/IPMI-SOL; from boot #2
+    onward initrd-SSH is available. Fallback for no-TPM boxes: `boot.remoteUnlock.sealHostKey =
+    false` + a plaintext `hostKeyPath` (embedded in the initrd, lands on the ESP → LAN/tailnet-only).
+    `modules/boot/remote-unlock.nix`; verified by `test/verify-sealed-hostkey.nix` (stage-2 seal +
+    decrypt round-trip) **and `test/seal-2boot-test.sh`** (a real power-cycle: boot #1 seals, boot #2
+    the initrd unseals → initrd-SSH comes up → network unlock → login).
   - **Where present: IPMI Serial-over-LAN** (example-host) — separate trust domain, no SSH key
     on the ESP; the cleaner channel.
   - **Tailscale-in-initrd** (unlock from anywhere) is **exotic** (tailscaled + state + tun in the
@@ -242,10 +247,12 @@ workflow.
    IPMI-SOL is an optional cleaner channel where a BMC exists, not the default).
 4. **The anti-rollback counter** — TPM2-NV implementation + the version policy.
 5. **Generation count vs ESP size** on 8 GB (one ~80 MiB UKI per generation).
-6. **TPM-sealed initrd-SSH host key** — ✅ **RESOLVED + built** (default `sealHostKey = true`).
-   Seal to PCR 7 on first boot; initrd unseals before sshd (unit ordering done). VM-verified
-   (`test/verify-sealed-hostkey.nix`). Remaining hardware spike: the true 2-boot unseal on real
-   TPM (the snapshot demo VM can't persist the sealed blob + swtpm state across separate boots).
+6. **TPM-sealed initrd-SSH host key** — ✅ **RESOLVED + built** (default `sealHostKey = true`),
+   using the systemd **credential** mechanism (seal → ESP `loader/credentials/` → lanzaboote stub
+   → `LoadCredentialEncrypted=` auto-decrypt), so there is no bespoke unseal service. Proven by a
+   real power-cycle in the VM (`test/seal-2boot-test.sh`: persistent disk + per-boot swtpm so PCR 7
+   matches; boot #1 seals, boot #2 the initrd unseals → initrd-SSH → network unlock → login).
+   Remaining hardware spike: the same flow on a physical TPM (real PCR 7).
 
 *(Resolved by the steelman: "copytoram a tmpfs /nix/store" does NOT compose with
 autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*

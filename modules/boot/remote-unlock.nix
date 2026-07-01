@@ -9,19 +9,22 @@
 # HOST KEY — two paths, controlled by `sealHostKey`:
 #
 # PATH A: sealHostKey = true (default, requires crypto.tpm2.enable)
-#   The initrd-SSH host key never touches the plaintext ESP. On FIRST BOOT:
-#     1. stage-2 `nixnas-seal-hostkey` generates an ed25519 key, seals it to the
-#        box's TPM2 (PCR 7, Secure Boot state) via `systemd-creds encrypt`, writes
-#        the ciphertext blob to /boot/nixnas/initrd-hostkey.cred, shreds the plaintext.
-#   From the SECOND BOOT onwards:
-#     2. initrd `nixnas-unseal-hostkey` mounts the ESP read-only, decrypts the blob
-#        via `systemd-creds decrypt --tpm2-device=auto`, writes the private key to
-#        /run/nixnas/initrd_host_ed25519_key, then sshd picks it up from there.
-#   BOOTSTRAP CAVEAT: first boot has no sealed blob → the unseal service exits 1 →
-#   sshd does NOT start → operator uses serial console or IPMI-SOL for the first
-#   unlock. After stage-2 completes and the seal service runs, every subsequent boot
-#   has initrd-SSH available. A tampered boot chain (PCR 7 mismatch) cannot recover
-#   the key, so a stolen stick cannot impersonate the box's unlock prompt.
+#   The host key never touches the plaintext ESP; it rides as a TPM2-sealed systemd
+#   CREDENTIAL, so systemd — not a hand-rolled service — does all the unseal plumbing.
+#     1. FIRST BOOT (stage-2) `nixnas-seal-hostkey` generates an ed25519 key and seals it
+#        with `systemd-creds encrypt --with-key=auto-initrd --tpm2-pcrs=7` straight to the
+#        ESP's `\loader\credentials\nixnas-initrd-hostkey.cred` (a plain file write — /boot
+#        is the mounted ESP). `auto-initrd` = TPM2-only key derivation, so the initrd (which
+#        has no /var credential secret) can decrypt it.
+#     2. EVERY SUBSEQUENT BOOT the lanzaboote stub scans `\loader\credentials\*.cred` and packs
+#        them into the initrd (`.extra/global_credentials`). The initrd sshd unit carries
+#        `LoadCredentialEncrypted=nixnas-initrd-hostkey`, so systemd inherits + TPM2-decrypts
+#        the credential during sshd activation and drops the plaintext key in the unit's
+#        $CREDENTIALS_DIRECTORY; sshd_config `HostKey` points there.
+#   BOOTSTRAP CAVEAT: first boot has no credential yet → LoadCredentialEncrypted fails → sshd
+#   does NOT start → operator uses serial console or IPMI-SOL for that one unlock. From the
+#   second boot on, initrd-SSH is available. A tampered boot chain (PCR 7 mismatch) makes the
+#   TPM refuse to release the key, so a stolen stick cannot impersonate the box's unlock prompt.
 #   PCR 7 (Secure Boot state) is update-stable; kernel/UKI updates need no reseal.
 #
 # PATH B: sealHostKey = false (or crypto.tpm2.enable = false)
@@ -46,11 +49,15 @@ let
   # ── Path A (sealed): whether TPM-sealed initrd host key path is active.
   sealActive = cfg.boot.remoteUnlock.sealHostKey && cfg.crypto.tpm2.enable;
 
-  # Runtime path where the unsealed key lands in the initrd (in RAM; never on the ESP).
-  unsealedKeyPath = "/run/nixnas/initrd_host_ed25519_key";
-  # systemd-creds must be explicitly present in the initrd (the stripped systemd there does
-  # not bundle it by default); reference it by full path so the unseal unit always finds it.
-  systemdCreds = "${pkgs.systemd}/bin/systemd-creds";
+  # The host key travels as a TPM2-sealed *systemd credential*. Name is shared across the three
+  # touch-points: the sealed file `<credName>.cred`, the `--name=` baked into the ciphertext, and
+  # the sshd `LoadCredentialEncrypted=<credName>` that inherits + decrypts it.
+  credName = "nixnas-initrd-hostkey";
+  # The ESP's global credential drop-in dir (mounted at /boot in stage-2). lanzaboote's stub packs
+  # \loader\credentials\*.cred into the initrd (.extra/global_credentials) on every subsequent boot.
+  credEspPath = "/boot/loader/credentials/${credName}.cred";
+  # Where systemd hands the DECRYPTED credential to the sshd unit ($CREDENTIALS_DIRECTORY).
+  hostKeyCredPath = "/run/credentials/sshd.service/${credName}";
 in
 {
   config = lib.mkIf (cfg.enable && cfg.boot.remoteUnlock.enable) (lib.mkMerge [
@@ -107,80 +114,34 @@ in
       boot.initrd.secrets.${hostKeyDest} = lib.mkForce hostKeySource;
     })
 
-    # ── Path A: sealHostKey = true + crypto.tpm2.enable — TPM2-sealed key. ──────────────
-    # See module header for the two-boot bootstrap sequence and PCR-mismatch guarantee.
+    # ── Path A: sealHostKey = true + crypto.tpm2.enable — TPM2-sealed key, delivered as a
+    # systemd CREDENTIAL (no bespoke unseal service). See module header for the bootstrap.
     (lib.mkIf sealActive {
 
-      # No static key embedded in the initrd — the key is decrypted from the TPM at runtime.
-      # ignoreEmptyHostKeys suppresses the NixOS assertion that fires on empty hostKeys.
-      # extraConfig injects the runtime key path into the initrd sshd_config.
+      # No static key in the initrd. sshd itself loads the TPM2-sealed credential the stub
+      # delivered and systemd decrypts it during activation — the plaintext lands in the unit's
+      # $CREDENTIALS_DIRECTORY, which we point HostKey at. ignoreEmptyHostKeys silences the
+      # NixOS empty-hostKeys assertion. No ESP mount, no vfat/codepage modules, no unseal unit.
       boot.initrd.network.ssh.ignoreEmptyHostKeys = true;
-      boot.initrd.network.ssh.extraConfig = "HostKey ${unsealedKeyPath}\n";
+      boot.initrd.network.ssh.extraConfig = "HostKey ${hostKeyCredPath}\n";
 
-      # FAT driver to mount the ESP read-only inside the initrd (for the sealed blob).
-      boot.initrd.kernelModules = [ "vfat" ];
-      # Ensure systemd-creds (+ closure) is inside the initrd for the unseal.
-      boot.initrd.systemd.storePaths = [ systemdCreds ];
+      # sshd inherits the stub-provided credential by name and TPM2-decrypts it (auto-initrd key).
+      # On FIRST boot the credential does not exist yet ⇒ LoadCredentialEncrypted fails ⇒ sshd
+      # does not start ⇒ the operator uses serial/IPMI-SOL for that one bootstrap unlock. From the
+      # second boot the sealed .cred is on the ESP, the stub packs it in, and sshd comes up.
+      boot.initrd.systemd.services.sshd.serviceConfig.LoadCredentialEncrypted = [ credName ];
 
-      # ── Initrd unseal service ─────────────────────────────────────────────────────────
-      # Mounts the ESP, decrypts the TPM2-sealed credential blob, writes the private key to
-      # /run (RAM) for sshd. Fails cleanly on first boot (no blob yet) so sshd doesn't start
-      # and the operator falls through to serial/IPMI-SOL for the first unlock.
-      boot.initrd.systemd.services.nixnas-unseal-hostkey = {
-        description = "Unseal initrd SSH host key from TPM2 credential (PCR 7)";
-        wantedBy = [ "initrd-network.target" ];
-        after = [ "systemd-udev-settle.service" ];
-        before = [ "sshd.service" ];
-        unitConfig.DefaultDependencies = false;
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          StandardOutput = "journal+console";
-          StandardError = "journal+console";
-        };
-        # util-linux for mount/umount; coreutils for mkdir/chmod/echo.
-        # systemd-creds is available in PATH from the initrd's systemd installation.
-        path = [ pkgs.util-linux pkgs.coreutils ];
-        script = ''
-          ESP_DEV="/dev/disk/by-partlabel/disk-main-ESP"
-          CRED_PATH="/mnt/nixnas-esp/nixnas/initrd-hostkey.cred"
-          mkdir -p /run/nixnas /mnt/nixnas-esp
-          if ! mount -t vfat -o ro "$ESP_DEV" /mnt/nixnas-esp 2>&1; then
-            echo "nixnas-unseal: cannot mount ESP ($ESP_DEV) — initrd-SSH unavailable"
-            exit 1
-          fi
-          if [ ! -f "$CRED_PATH" ]; then
-            umount /mnt/nixnas-esp
-            echo "nixnas-unseal: no sealed blob (first boot) — initrd-SSH skipped; use serial/IPMI-SOL"
-            exit 1
-          fi
-          ${systemdCreds} decrypt \
-            --tpm2-device=auto \
-            --name=nixnas-initrd-hostkey \
-            "$CRED_PATH" \
-            "${unsealedKeyPath}"
-          umount /mnt/nixnas-esp
-          chmod 600 "${unsealedKeyPath}"
-          echo "nixnas-unseal: host key unsealed OK"
-        '';
-      };
-
-      # Hard dependency: sshd requires the unseal service to have succeeded.
-      # On first boot (unseal fails → no blob yet), sshd does not start — correct.
-      # From the second boot, unseal succeeds → key is at ${unsealedKeyPath} → sshd starts.
-      boot.initrd.systemd.services.sshd = {
-        requires = [ "nixnas-unseal-hostkey.service" ];
-        after = [ "nixnas-unseal-hostkey.service" ];
-      };
-
-      # ── Stage-2 seal service ──────────────────────────────────────────────────────────
-      # Runs once, on first boot, after the store is mounted and the TPM2 is accessible.
-      # ConditionPathExists uses the credential file as its own idempotency lock.
+      # ── Stage-2 seal service (first boot only) ────────────────────────────────────────
+      # Generates the ed25519 key and TPM2-seals it into the ESP's loader/credentials/ dir with
+      # `--with-key=auto-initrd` (TPM2-only key derivation — the /var credential secret is not
+      # available in the initrd) bound to PCR 7 (Secure Boot state, update-stable). /boot is the
+      # ESP, already mounted in stage-2, so this is a plain file write. The .cred file is its own
+      # idempotency lock. From here on lanzaboote's stub auto-delivers it to every initrd.
       systemd.services.nixnas-seal-hostkey = {
-        description = "Generate + TPM2-seal the initrd SSH host key (first boot only)";
+        description = "Generate + TPM2-seal the initrd SSH host key credential (first boot only)";
         wantedBy = [ "multi-user.target" ];
         after = [ "local-fs.target" "sysinit.target" ];
-        unitConfig.ConditionPathExists = "!/boot/nixnas/initrd-hostkey.cred";
+        unitConfig.ConditionPathExists = "!${credEspPath}";
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
@@ -190,26 +151,24 @@ in
         path = [ pkgs.systemd pkgs.openssh pkgs.coreutils ];
         script = ''
           echo "=== NIXNAS-SEAL-START ==="
-          # Use a temp DIRECTORY so the key file does not exist yet when ssh-keygen
-          # is called (mktemp creates the placeholder file, which triggers an
-          # "Overwrite?" prompt if we passed it directly to ssh-keygen -f).
+          # Temp DIRECTORY so the key file does not pre-exist (ssh-keygen -f would prompt).
           tmpdir="$(mktemp -d -t nixnas-initrd-hostkey-XXXXXX)"
           tmpkey="$tmpdir/key"
-          cleanup() {
-            find "$tmpdir" -type f -exec shred -u {} \; 2>/dev/null || true
-            rm -rf "$tmpdir"
-          }
+          cleanup() { find "$tmpdir" -type f -exec shred -u {} \; 2>/dev/null || true; rm -rf "$tmpdir"; }
           trap cleanup EXIT
-          ssh-keygen -t ed25519 -N "" -C "nixnas-initrd-hostkey" -f "$tmpkey" -q
-          mkdir -p /boot/nixnas
+          ssh-keygen -t ed25519 -N "" -C "${credName}" -f "$tmpkey" -q
+          mkdir -p "$(dirname "${credEspPath}")"
+          # --with-key=auto-initrd: seal to the TPM2 only (no /var secret), so the initrd can
+          # decrypt it; --name must match the sshd LoadCredentialEncrypted= name; PCR 7 anchor.
           systemd-creds encrypt \
+            --with-key=auto-initrd \
             --tpm2-device=auto \
             --tpm2-pcrs=7 \
-            --name=nixnas-initrd-hostkey \
+            --name=${credName} \
             "$tmpkey" \
-            /boot/nixnas/initrd-hostkey.cred
-          chmod 600 /boot/nixnas/initrd-hostkey.cred
-          echo "nixnas: initrd SSH host key sealed to /boot/nixnas/initrd-hostkey.cred"
+            "${credEspPath}"
+          chmod 600 "${credEspPath}"
+          echo "nixnas: initrd SSH host key sealed to ${credEspPath}"
           echo "=== NIXNAS-SEAL-END ==="
         '';
       };

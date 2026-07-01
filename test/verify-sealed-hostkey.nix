@@ -28,9 +28,9 @@
     script = ''
       echo "=== NIXNAS-SEALTEST-START ==="
 
-      cred="/boot/nixnas/initrd-hostkey.cred"
+      cred="/boot/loader/credentials/nixnas-initrd-hostkey.cred"
 
-      # ── 1. Sealed blob ───────────────────────────────────────────────────────────────
+      # ── 1. Sealed credential on the ESP's loader/credentials dir (the stub drop-in) ──
       if [ -f "$cred" ]; then
         echo "[sealed-blob] EXISTS: $cred ($(wc -c < "$cred") bytes)"
       else
@@ -39,13 +39,13 @@
         exit 1
       fi
 
-      # ── 2. No plaintext key on the ESP ───────────────────────────────────────────────
-      leaked=$(find /boot/nixnas -maxdepth 1 -type f ! -name '*.cred' 2>/dev/null | head -5)
+      # ── 2. No plaintext key alongside the sealed credential ──────────────────────────
+      leaked=$(find /boot/loader/credentials -maxdepth 1 -type f ! -name '*.cred' 2>/dev/null | head -5)
       if [ -n "$leaked" ]; then
-        echo "[plaintext] WARNING: non-credential files found on ESP:"
+        echo "[plaintext] WARNING: non-credential files found alongside the sealed cred:"
         echo "$leaked" | sed 's/^/  /'
       else
-        echo "[plaintext] OK: no plaintext key files under /boot/nixnas/"
+        echo "[plaintext] OK: no plaintext key files under /boot/loader/credentials/"
       fi
 
       # ── 3. Decrypt the credential (proves TPM2 round-trip against swtpm) ─────────────
