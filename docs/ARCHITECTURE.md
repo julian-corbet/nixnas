@@ -233,18 +233,30 @@ autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
   The nix store holds *programs*, never *container images* — containerd keeps those in its own
   store (the ZFS snapshotter dataset on HOT). So the stick stays ~3–4 GiB no matter how many
   apps run.
-- **HOT / COLD are nixnas concepts.** `storage.pools.hot` / `.cold` already name the imported
-  pools; a **persistence-routing layer** (`storage.persist.{hot,cold}`, *planned*) bind-mounts
-  the chosen state paths (`/var/lib/rancher`, containerd, …) from the tmpfs root onto datasets
-  on the respective pool. This is also where the k3s-state binds live (impermanence needs them).
-- **Where /nix lives.** DEFAULT = on the stick → self-contained, **boots even if a pool is
-  missing**. OPT-IN `storage.storeOnHot` (*planned*) relocates the store to HOT for speed,
-  redefining HOT as the boot-required system pool and COLD as boot-optional bulk.
-- **Wear isolation (measured).** Cheap USB sticks have no SSD-grade flash management and die /
-  go slow under a steady write stream. So logs (journald `volatile`), `/tmp`, coredumps and
-  swap (zram) all live in RAM; the stick takes ~no writes except updates. `test/verify-writes.nix`
-  proves it: generating ~100 MiB of logs+files moved **60 KiB** to the stick. Persistent
-  "emergency" logs are opt-in (`store.persistLogs`, *planned*) and route to **HOT**, not the stick.
+- **Mounting is native; nixnas doesn't reinvent it.** You mount your storage with plain
+  `fileSystems` / `boot.zfs.extraPools` at `/hot`, `/cold`, or any nested path (an XFS drive
+  *under* a ZFS tree, …). nixnas adds only `storage.unlock` (open your LUKS members with the one
+  shared secret, non-fatally, at a stable `/dev/mapper/<name>`) and `storage.zfsPools` (a
+  non-fatal ZFS import convenience). Persisting state off the tmpfs root is the **impermanence
+  module** (`environment.persistence."/hot/…"`), not a bespoke nixnas layer. See `examples/host.nix`.
+- **/nix lives on the stick, period.** Self-contained (boots even if a pool is missing), and — a
+  hard rule — the stick's OS content **never** relocates onto a data pool: HOT/COLD are for *your
+  workload*, not for the boot/manage essentials. (An earlier "store-on-HOT" idea is dropped.)
+- **Wear isolation (measured) — and why that's enough.** Cheap USB sticks have no SSD-grade flash
+  management and die / go slow under a steady write *stream*. Impermanence removes that stream:
+  logs (journald `volatile`), `/tmp`, coredumps and swap (zram) all live in RAM; stray writes hit
+  the tmpfs root, never the stick. `test/verify-writes.nix` proves it — ~100 MiB of logs+files
+  moved **60 KiB** to the stick. What's left is deliberate + rare: the **updates** (a new
+  generation, a few hundred MB, ~a dozen a year — dominant, and irreducibly rw) plus a few hundred
+  KB of per-boot metadata (the `booted-system` gcroot, boot-counting, the systemd-boot random seed).
+  A few GB/year total → decades of headroom on any stick.
+  - *Considered and rejected: mounting the store read-only + a deliberate `remount,rw` update
+    window (with a `/nix/var/nix` split — gcroots/socket to tmpfs, db/profiles ro-except-update).*
+    Impermanence already kills the write *stream*; the ro-mount would only shave the
+    already-negligible per-boot/background bits — NOT the updates, which need rw — for a marginal
+    accidental-write guardrail, at the cost of a fragile load-bearing update path. Not worth it.
+  - Persistent "emergency" logs to the stick stay a **conscious opt-in** (`store.persistLogs`,
+    *planned*, default off) — the one deliberate exception.
 - **The rescue model (data pools are portable).** Only the **stick store** binds to the TPM
   (TPM2+PIN). The data pools (HOT/COLD + the SMR drives) carry a **plain LUKS2 passphrase
   keyslot** — the same secret as the PIN, reused via the kernel keyring — and are **never

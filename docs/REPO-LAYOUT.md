@@ -28,7 +28,7 @@ nixnas/
 │   ├── crypto/
 │   │   └── tpm2.nix           # TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`
 │   ├── storage/
-│   │   └── zfs-pools.nix      # IMPORT-ONLY data pools (never create/format), non-fatal, stage-2 unlock
+│   │   └── connect.nix       # stage-2 LUKS unlock + optional ZFS import (thin; mounting is native)
 │   └── appliance/
 │       ├── base.nix           # stable hostName + Tailscale
 │       ├── ssh.nix            # headless admin sshd (key-only root)
@@ -74,7 +74,7 @@ nixnas-config/
     admin.authorizedKeys = [ "ssh-ed25519 …" ];          # your keys
     boot.remoteUnlock.hostKeyPath = ./initrd_host_ed25519_key;
     boot.usb.device = "/dev/disk/by-id/usb-…";           # the ONLY device nixnas partitions
-    storage.pools.hot.luksDevices = [ "/dev/disk/by-id/ata-…" ];  # serials, private
+    storage.unlock.hot0           = "/dev/disk/by-id/ata-…";      # serials, private
     boot.secureBoot.enable = true;
     crypto.tpm2.enable     = true;
     autoUpgrade.flake      = "github:you/nas-config#nas";

@@ -20,7 +20,8 @@ nixnas = {
   hostName = "nas";
   boot.secureBoot.enable = true;
   crypto.tpm2.enable = true;
-  storage.pools.hot = { name = "hot"; luksDevices = [ "/dev/disk/by-id/…" ]; };
+  storage.unlock = { hot0 = "/dev/disk/by-id/…"; };   # LUKS members; mount natively (fileSystems)
+  storage.zfsPools = [ "hot" ];                        # optional: import this ZFS pool
 };
 ```
 
@@ -56,7 +57,7 @@ Under `modules/` (all built + VM-validated unless noted):
 | `appliance/auto-upgrade.nix` | Self-update: stage-only, never self-reboot. |
 | `appliance/optimizations.nix` | Appliance defaults: zram, journald→RAM, no swap, store.preload. |
 
-**Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.{tpm2,recovery}`, `zfs.source`, `store.preload`, `storage.{pools,smrDisks}`, `tailscale`, `autoUpgrade`.
+**Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.tpm2`, `zfs.source`, `store.preload`, `storage.{unlock,zfsPools}`, `tailscale`, `autoUpgrade`. Mounting itself is native NixOS (`fileSystems`, `boot.zfs`), not a nixnas option.
 
 **Thin by construction.** The option surface carries NO `compute.*` (k3s/GPU/VMs) — those were deliberately kept out. nixnas owns boot / crypto / the USB store / kernel packaging only; everything else is the operator's plain NixOS alongside the import (see "What nixnas is NOT").
 
@@ -78,11 +79,11 @@ nixnas = {
   hostName = "nas";
   boot.secureBoot = { enable = true; keysSops = ./secrets/sb-db.key; };
   crypto.tpm2.enable = true;
-  crypto.recovery.vaultwardenUrl = "https://vault.example";
-  storage.pools.hot  = { name = "hot";  luksDevices = [ "/dev/disk/by-id/…" ]; };
-  storage.pools.cold = { name = "cold"; luksDevices = [ "/dev/disk/by-id/…" ]; };
+  storage.unlock   = { hot0 = "/dev/disk/by-id/…"; cold0 = "/dev/disk/by-id/…"; };
+  storage.zfsPools = [ "hot" "cold" ];
   tailscale.enable = true;
 };
+# … plus native fileSystems for the mounts, and your workloads as plain NixOS.
 ```
 
 The whole `toplevel` closure — nixnas mechanism **plus** the operator's k3s/samba/GPU — is what nixnas bakes into the LUKS f2fs `/nix` store as generation 1. nixnas's job begins and ends at: *build + sign + flash that closure, and bring it up encrypted, RAM-resident (impermanence), and rollback-safe.*
