@@ -51,7 +51,7 @@ Under `modules/` (all built + VM-validated unless noted):
 | `boot/remote-unlock.nix` | headless store unlock — initrd-SSH (NIC up in the initrd). |
 | `boot/rollback.nix` | kept generations (`configurationLimit`) + lanzaboote boot-counting. |
 | `crypto/tpm2.nix` | TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`. |
-| `storage/zfs-pools.nix` | **Import-only** pool unlock + non-fatal import. |
+| `storage/connect.nix` | Stage-2 LUKS unlock (`storage.unlock`) + optional non-fatal ZFS import. Mounting is native. |
 | `appliance/base.nix` | Stable host identity + Tailscale. |
 | `appliance/ssh.nix` | Headless admin sshd (key-only root). |
 | `appliance/auto-upgrade.nix` | Self-update: stage-only, never self-reboot. |
