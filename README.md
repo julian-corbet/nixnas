@@ -40,8 +40,7 @@ nixnas is the **appliance mechanism**: it turns any `nixosConfiguration` into a
 bootable, RAM-resident, encrypted, rollback-safe USB stick. The **workloads** a
 particular box runs — k3s, containers, VMs, Samba/NFS, GPU — are **plain NixOS that
 *you* declare**, in the same host, alongside `imports = [ nixnas.nixosModules.nixnas ]`.
-nixnas builds + signs + flashes whatever closure you hand it; it does not own or know
-about your k3s. See [`docs/SCOPE.md`](docs/SCOPE.md).
+nixnas builds + signs + flashes whatever closure you hand it. See [`docs/SCOPE.md`](docs/SCOPE.md).
 
 ## Design
 
