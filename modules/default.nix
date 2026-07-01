@@ -16,11 +16,11 @@
     ./boot/remote-unlock.nix # headless store unlock: initrd-SSH (NIC up in initrd)
     ./boot/rollback.nix      # structural failsafe: kept generations + boot-counting
 
-    ./crypto/tpm2.nix        # TPM2 device access (stage-2 unlock); enrollment is first-boot
-    # ./crypto/{luks,recovery-escrow}.nix   # next: LUKS store + data-pool unlock, recovery escrow
+    ./crypto/tpm2.nix        # TPM2+PIN store unlock (only the stick); first-boot enrollment
+    # ./crypto/recovery-escrow.nix   # roadmap: recovery-key escrow to Vaultwarden
 
-    ./storage/zfs-pools.nix    # IMPORT-ONLY pools (never create/format); non-fatal import; stage-2 unlock
-    # ./storage/{smr-disks,shares}.nix   # next: SMR unlock+mount
+    ./storage/connect.nix    # connect your storage: stage-2 LUKS unlock + optional ZFS import
+                             # (thin — mounting itself is native NixOS: fileSystems / boot.zfs)
 
     ./appliance/base.nix          # stable identity (hostName) + Tailscale
     ./appliance/ssh.nix           # headless admin sshd (key-only root)

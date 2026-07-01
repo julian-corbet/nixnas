@@ -21,21 +21,17 @@
 
     boot.secureBoot.enable = true;
     crypto.tpm2.enable = true;
-    crypto.recovery.vaultwardenUrl = "https://vault.demo.invalid";
 
-    storage.pools.hot = {
-      name = "demohot";
-      luksDevices = [ "/dev/disk/by-id/DEMO-ssd-0" "/dev/disk/by-id/DEMO-ssd-1" ];
+    # Your LUKS members as name → device; each opens at /dev/mapper/<name> (non-fatal, so
+    # these non-existent DEMO devices don't block the test boot). An SMR/XFS archive drive
+    # is just another entry — no special handling. You mount the results with native
+    # `fileSystems` and persist state with `environment.persistence` (see examples/host.nix).
+    storage.unlock = {
+      demossd0 = "/dev/disk/by-id/DEMO-ssd-0";
+      demohdd0 = "/dev/disk/by-id/DEMO-hdd-0";
+      demoarchv = "/dev/disk/by-id/DEMO-smr-0";
     };
-    storage.pools.cold = {
-      name = "democold";
-      luksDevices = [
-        "/dev/disk/by-id/DEMO-hdd-0"
-        "/dev/disk/by-id/DEMO-hdd-1"
-        "/dev/disk/by-id/DEMO-hdd-2"
-      ];
-    };
-    storage.smrDisks.archive0 = "/dev/disk/by-id/DEMO-smr-0";
+    storage.zfsPools = [ "demohot" "democold" ];
 
     tailscale.enable = true;
 

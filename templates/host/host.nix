@@ -26,17 +26,15 @@
 
     boot.secureBoot.enable = true;
     crypto.tpm2.enable = true;
-    # crypto.recovery.vaultwardenUrl = "https://vault.example.invalid";
-    # crypto.recovery.credsSops      = config.sops.secrets."vaultwarden-escrow".path;
 
-    storage.pools.hot = {
-      name = "hot";     # your HOT (SSD) pool — you create it by hand; nixnas only imports it
-      luksDevices = [ "/dev/disk/by-id/ata-…" ];
+    # Your LUKS members as name → device (any FS on top — ZFS/btrfs/xfs). Each opens at
+    # /dev/mapper/<name>. nixnas UNLOCKS these once with the shared passphrase; never formats.
+    # You MOUNT them natively below. (A fully worked example is in examples/host.nix.)
+    storage.unlock = {
+      poolmember0 = "/dev/disk/by-id/ata-…-part1";  # a member of your HOT/COLD pool
+      archive0    = "/dev/disk/by-id/ata-…";        # a whole-disk-LUKS archive drive, etc.
     };
-    storage.pools.cold = {
-      name = "cold"; # your COLD (HDD) pool — operator-created; nixnas imports only
-      luksDevices = [ "/dev/disk/by-id/ata-…" ];
-    };
+    storage.zfsPools = [ "fast" "bulk" ];  # optional: import these ZFS pools (skip for non-ZFS)
 
     # Set to your box's CPU micro-architecture for a tuned build; default x86_64-v1 boots anywhere.
     kernel.march = "x86_64-v3";
@@ -52,6 +50,23 @@
     # The flake this box self-updates from. Private flakes need pull auth (deploy key / netrc).
     autoUpgrade.flake = "github:you/nas-config#nas";
   };
+
+  # ── Everything below is PLAIN NixOS — nixnas does not reinvent it ──────────────
+  # Mounting is native. Mount your unlocked/imported storage wherever you like:
+  #   fileSystems."/hot"  = { device = "hot/data";          fsType = "zfs"; };
+  #   fileSystems."/cold" = { device = "/dev/disk/by-id/…";   fsType = "xfs";
+  #                           options = [ "nofail" "noatime" ]; };   # e.g. an SMR archive drive
+  #
+  # Persist state off the tmpfs root onto your pools (the impermanence module):
+  #   environment.persistence."/hot/state" = {
+  #     directories = [ "/var/lib/rancher" "/var/lib/containerd" ];
+  #   };
+  #
+  # And your actual workloads are just NixOS too — you bring them:
+  #   services.k3s.enable = true;
+  #   services.samba.enable = true;
+  #   virtualisation.libvirtd.enable = true;
+  #   ...
 
   system.stateVersion = "25.05";
 }

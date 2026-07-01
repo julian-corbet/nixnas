@@ -12,27 +12,6 @@ let
   inherit (lib) mkOption mkEnableOption types literalExpression;
 
   diskById = types.strMatching "/dev/disk/by-id/.+";
-
-  # A pool nixnas IMPORTS. nixnas NEVER creates, formats, or destroys data pools —
-  # the operator builds them by hand. nixnas only LUKS-unlocks the members and
-  # `zpool import`s by name (topology is discovered on import, never specified here).
-  poolImport = types.submodule {
-    options = {
-      name = mkOption {
-        type = types.str;
-        description = "ZFS pool name to import (e.g. `hot`, `cold`). You create the pool manually; nixnas only imports it — it never creates or formats it.";
-      };
-      luksDevices = mkOption {
-        type = types.listOf diskById;
-        default = [ ];
-        description = ''
-          The LUKS member devices to unlock (by stable `/dev/disk/by-id` path) before
-          importing the pool. nixnas OPENS these with the single passphrase; it never
-          `luksFormat`s or wipes them.
-        '';
-      };
-    };
-  };
 in
 {
   options.nixnas = {
@@ -169,7 +148,7 @@ in
       };
     };
 
-    ## ── Crypto: single passphrase = TPM2 PIN, recovery escrow ─────────────
+    ## ── Crypto: single passphrase = TPM2 PIN (only the stick binds to the TPM) ──
     crypto = {
       tpm2 = {
         enable = mkEnableOption "bind LUKS unlock to TPM2 + PIN (the single passphrase IS the PIN, required every boot)";
@@ -195,18 +174,7 @@ in
           '';
         };
       };
-      recovery = {
-        vaultwardenUrl = mkOption {
-          type = types.nullOr types.str;
-          default = null;
-          description = "Vaultwarden base URL the build machine escrows the LUKS recovery key to. Private literal — set in the overlay.";
-        };
-        credsSops = mkOption {
-          type = types.nullOr types.path;
-          default = null;
-          description = "Path (sops, build-machine) to the Vaultwarden API client id/secret used for escrow.";
-        };
-      };
+      # (recovery-key escrow to Vaultwarden is a roadmap item — no option until it is wired.)
     };
 
     ## ── ZFS: which OpenZFS to use for the operator's data pools ───────────
@@ -223,28 +191,36 @@ in
       };
     };
 
-    ## ── Storage: IMPORT-ONLY. nixnas never creates/formats/destroys data pools ──
-    ## You build the pools by hand; nixnas only imports + unlocks them. The only
-    ## device nixnas ever partitions/formats is the USB boot stick.
+    ## ── Storage: connect your existing storage. THIN by design ──────────────
+    ## nixnas does NOT reinvent mounting — that is native NixOS (`fileSystems`,
+    ## `boot.zfs`, `boot.initrd.luks.devices`). It adds only the one fiddly bit:
+    ## unlocking your LUKS members with the SINGLE shared secret, non-fatally. It
+    ## NEVER creates, formats, or destroys your storage; the only device it ever
+    ## partitions is the USB boot stick.
     storage = {
-      pools = {
-        hot = mkOption {
-          type = poolImport;
-          description = "The HOT pool (SSD) to import. Operator-created; nixnas imports + LUKS-unlocks it, never creates or formats it.";
-        };
-        cold = mkOption {
-          type = poolImport;
-          description = "The COLD pool (HDD) to import. Operator-created; nixnas imports + LUKS-unlocks it, never creates or formats it.";
-        };
-      };
-      smrDisks = mkOption {
+      unlock = mkOption {
         type = types.attrsOf diskById;
         default = { };
-        example = literalExpression ''{ archive0 = "/dev/disk/by-id/ata-…"; }'';
+        example = literalExpression ''{ tubearchv = "/dev/disk/by-id/ata-ST5000…"; }'';
         description = ''
-          Standalone whole-disk-LUKS SMR archive disks to unlock + mount, keyed by
-          label → `/dev/disk/by-id` path. nixnas unlocks and mounts the EXISTING
-          filesystem; it never formats them.
+          LUKS members to unlock in stage-2, as `name → /dev/disk/by-id/…`. Each opens as
+          `/dev/mapper/<name>` (a STABLE mapper name you then reference in `fileSystems`),
+          with the SINGLE shared passphrase — the store's TPM2 PIN, reused across devices via
+          the kernel keyring — NON-fatally (a missing one never blocks boot). Storage-agnostic:
+          LUKS-under-ZFS / btrfs / xfs are all the same here. nixnas only OPENS these; you
+          MOUNT the result with native NixOS (`fileSystems`, `boot.zfs.extraPools`) at any
+          mount point, and route persistent state onto them with `environment.persistence`
+          (the impermanence module). No `luksFormat`, ever.
+        '';
+      };
+      zfsPools = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = literalExpression ''[ "hot" "cold" ]'';
+        description = ''
+          Optional convenience: ZFS pool names to import NON-fatally (`boot.zfs.extraPools`,
+          with `devNodes=/dev/mapper` for ZFS-on-LUKS). Non-ZFS storage needs nothing here —
+          mount it with plain `fileSystems`.
         '';
       };
     };

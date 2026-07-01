@@ -17,6 +17,7 @@
       url = "github:nix-community/lanzaboote";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    impermanence.url = "github:nix-community/impermanence";
     nixnas = {
       url = "github:OWNER/nixnas"; # ← point at upstream or your own fork
       inputs.nixpkgs.follows = "nixpkgs";
@@ -27,7 +28,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, nixnas, sops-nix, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, nixnas, sops-nix, ... }:
     let
       cfg = self.nixosConfigurations.nas;
     in
@@ -37,6 +38,7 @@
         modules = [
           disko.nixosModules.disko
           lanzaboote.nixosModules.lanzaboote
+          impermanence.nixosModules.impermanence
           nixnas.nixosModules.nixnas
           sops-nix.nixosModules.sops
           ./host.nix

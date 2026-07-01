@@ -22,9 +22,13 @@
       url = "github:nix-community/lanzaboote";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Declarative persistence onto your pools (the impermanence module) — nixnas provides
+    # the tmpfs root; you route state with `environment.persistence."/hot" = {...}`. We use
+    # the community module rather than reinvent bind-mount routing.
+    impermanence.url = "github:nix-community/impermanence";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, ... }:
     let
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
@@ -46,6 +50,7 @@
         modules = [
           disko.nixosModules.disko
           lanzaboote.nixosModules.lanzaboote
+          impermanence.nixosModules.impermanence
           self.nixosModules.nixnas
           ./hosts/demo
           ./test/verify-image.nix   # DEV self-check (f2fs compression report on the console)
