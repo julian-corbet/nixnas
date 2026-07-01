@@ -80,7 +80,6 @@ password, and the TPM2-NV anti-rollback counter. See
 
 ## License
 
-[Apache-2.0](LICENSE). Copyright 2026 Julian Corbet.
+[Apache-2.0](LICENSE)
 
-The explicit patent grant matters here: the core touches TPM2, Secure Boot and
-measured boot. Contributions are accepted under the same license.
+Contributions are accepted under the same license.
