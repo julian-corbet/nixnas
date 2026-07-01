@@ -23,10 +23,11 @@ nixnas/
 │   │   ├── impermanence.nix   # tmpfs root — only /nix + the ESP persist (RAM-resident, not copytoram)
 │   │   ├── kernel.nix         # the CachyOS kernel (pkgs.cachyosKernels) + zfs_cachyos + lantian cache
 │   │   ├── secureboot.nix     # lanzaboote Secure Boot: operator-owned PK/KEK/db, signed UKIs
-│   │   ├── remote-unlock.nix  # headless store unlock — initrd-SSH (NIC up in the initrd)
+│   │   ├── remote-unlock.nix  # headless store unlock — initrd-SSH; host key TPM-sealed by default
 │   │   └── rollback.nix       # kept generations (configurationLimit) + lanzaboote boot-counting
 │   ├── crypto/
-│   │   └── tpm2.nix           # TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`
+│   │   ├── tpm2.nix           # TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`
+│   │   └── recovery-escrow.nix # break-glass recovery keyslot → Vaultwarden (hub tool + box status)
 │   ├── storage/
 │   │   └── connect.nix       # stage-2 LUKS unlock + optional ZFS import (thin; mounting is native)
 │   └── appliance/
@@ -42,8 +43,9 @@ nixnas/
 │
 ├── templates/host/{flake,host}.nix   # scaffold a private overlay (the operator copies + fills in)
 │
-├── test/                     # boot-vm.sh (QEMU+OVMF+swtpm), remote-unlock-test.sh,
-│   │                         #   verify-image.nix / verify-tpm2.nix (DEV self-checks), ssh/ (demo keys)
+├── test/                     # boot-vm.sh (QEMU+OVMF+swtpm), remote-unlock-test.sh, and DEV
+│   │                         #   self-checks baked into the demo: verify-image / verify-tpm2 /
+│   │                         #   verify-sealed-hostkey / verify-recovery / verify-writes; ssh/ (demo keys)
 │   └── …
 └── tui/                      # the Rust TUI: build the image locally + flash (caligula)
 

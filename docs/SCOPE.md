@@ -48,16 +48,17 @@ Under `modules/` (all built + VM-validated unless noted):
 | `boot/impermanence.nix` | tmpfs root — only `/nix` + the ESP persist. |
 | `boot/kernel.nix` | the CachyOS kernel (`pkgs.cachyosKernels`) + `zfs_cachyos` + lantian cache. |
 | `boot/secureboot.nix` | **lanzaboote** Secure Boot: operator-owned PK/KEK/db, signed UKIs. |
-| `boot/remote-unlock.nix` | headless store unlock — initrd-SSH (NIC up in the initrd). |
+| `boot/remote-unlock.nix` | headless store unlock — initrd-SSH; host key TPM-sealed by default. |
 | `boot/rollback.nix` | kept generations (`configurationLimit`) + lanzaboote boot-counting. |
 | `crypto/tpm2.nix` | TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`. |
+| `crypto/recovery-escrow.nix` | break-glass recovery keyslot escrowed to Vaultwarden (hub tool + box status). |
 | `storage/connect.nix` | Stage-2 LUKS unlock (`storage.unlock`) + optional non-fatal ZFS import. Mounting is native. |
 | `appliance/base.nix` | Stable host identity + Tailscale. |
 | `appliance/ssh.nix` | Headless admin sshd (key-only root). |
 | `appliance/auto-upgrade.nix` | Self-update: stage-only, never self-reboot. |
 | `appliance/optimizations.nix` | Appliance defaults: zram, journald→RAM, no swap, store.preload. |
 
-**Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.tpm2`, `zfs.source`, `store.preload`, `storage.{unlock,zfsPools}`, `tailscale`, `autoUpgrade`. Mounting itself is native NixOS (`fileSystems`, `boot.zfs`), not a nixnas option.
+**Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.{tpm2,recovery}`, `zfs.source`, `store.{preload,persistLogs}`, `storage.{unlock,zfsPools}`, `tailscale`, `autoUpgrade`. Mounting itself is native NixOS (`fileSystems`, `boot.zfs`), not a nixnas option.
 
 **Thin by construction.** The option surface carries NO `compute.*` (k3s/GPU/VMs) — those were deliberately kept out. nixnas owns boot / crypto / the USB store / kernel packaging only; everything else is the operator's plain NixOS alongside the import (see "What nixnas is NOT").
 

@@ -89,9 +89,15 @@ appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on
 ## 4. Updates — autonomous, native
 
 - **`system.autoUpgrade`** periodically pulls the operator's flake (their private repo,
-  deploy key via sops-nix) and `nixos-rebuild boot`s a new generation — built on the
-  box, **into the real persistent LUKS store** (this is exactly why the store must not be
+  deploy key via sops-nix) and `nixos-rebuild boot`s a new generation — built **on the box**
+  (DECIDED), **into the real persistent LUKS store** (this is exactly why the store must not be
   a tmpfs copy). Cap `nix.settings.max-jobs/cores`; `TMPDIR` on the persistent store.
+  - **Why build on the box (not receive a closure):** nixnas targets machines *strong enough to
+    build themselves* — and more than that, a nixnas box is **the nexus**: the capable hub that
+    may in turn build + push closures to weaker *dependent* systems (an e2-micro, an alwaysdata
+    box) that must never do real work. So the model is inverted from the fleet's tiny nodes:
+    nixnas is the builder, not the built-for. (Contrast the [build on hub, never on node] rule for
+    the brittle fleet — nixnas *is* a hub.) No receive-closure / image-swap path for nixnas itself.
 - **`lanzaboote`** signs the new generation's UKI on the box; the SB `db` key lives in
   the LUKS store. (Price: a runtime root compromise could self-sign — see §6.)
 - **Rollback:** the **generation menu is the guaranteed path** (manual rollback to any
@@ -131,8 +137,17 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   console, so the in-initrd PIN prompt must be reachable over the network. nixnas ships this:
   - **Primary: initrd-SSH** (`boot.initrd.network.ssh` + `boot.initrd.systemd.enable`) — bring
     up the NIC in the initrd, SSH in, hand the PIN to the password agent. Works for the general
-    distro (no special hardware). *Caveat:* the initrd-SSH host key sits in the *signed* UKI but
-    on the *plaintext* ESP → keep it LAN/tailnet-reachable, never internet-exposed.
+    distro (no special hardware). **Host key is TPM-sealed by default (DECIDED + built):** the
+    initrd-SSH host key never touches the plaintext ESP — on first boot it is generated and sealed
+    to the box's TPM2 (PCR 7 = Secure Boot state) via `systemd-creds`; every subsequent boot the
+    initrd unseals it *before* sshd starts. A tampered chain (PCR mismatch) can't recover the key,
+    so a stolen stick can't impersonate the box's unlock prompt — this closes the one evil-maid
+    wart of generic initrd-SSH. *Bootstrap:* the very first boot has no sealed blob yet, so that
+    one unlock uses serial/IPMI-SOL; from boot #2 onward initrd-SSH is available. Fallback for
+    no-TPM boxes: `boot.remoteUnlock.sealHostKey = false` + a plaintext `hostKeyPath` (embedded in
+    the initrd, lands on the ESP → LAN/tailnet-only). `modules/boot/remote-unlock.nix`;
+    verified by `test/verify-sealed-hostkey.nix` (seal blob present, no plaintext leak, TPM2
+    decrypt round-trip).
   - **Where present: IPMI Serial-over-LAN** (example-host) — separate trust domain, no SSH key
     on the ESP; the cleaner channel.
   - **Tailscale-in-initrd** (unlock from anywhere) is **exotic** (tailscaled + state + tun in the
@@ -158,7 +173,11 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   price of the no-provisioning-machine constraint.
 - **MANDATORY preconditions** (the posture collapses without them):
   1. **Operator-only SB keys; the Microsoft 3rd-party UEFI CA REMOVED** (else a MS-signed
-     shim/bootkit bypasses operator keys).
+     shim/bootkit bypasses operator keys). **DECIDED: the keyset is a STABLE IDENTITY, part of
+     the config** — real hosts supply their own PK/KEK/db via sops (`boot.secureBoot.keysSops`),
+     which the TUI materialises into the PKI bundle on the *build machine* before disko, so lzbt
+     signs from day one and the SB identity does not change per box or per reflash. First-boot
+     autogeneration is only the keyless *demo* fallback (`keysSops == null`), never a real host.
   2. **Firmware admin password** that blocks disabling SB / re-enrolling keys (else SB is
      toggled off and a fake unlock screen phishes the passphrase).
   3. **TPM2-NV monotonic anti-rollback counter** (or PCR-sealed version policy) — *this*,
@@ -169,6 +188,17 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   fTPM is wiped by a BIOS/NVRAM clear), SHA-256 bank. Non-fatal pool import (`Wants`-only,
   off `local-fs.target`, `boot.zfs.devNodes=/dev/disk/by-id`). nixnas **imports +
   unlocks** operator-built pools; it never creates/formats/destroys.
+- **Break-glass recovery — escrowed to Vaultwarden (DECIDED + built).** The recovery keyslot is
+  a **SEPARATE high-entropy key** (256-bit, `/dev/urandom`), distinct from the daily TPM2 PIN and
+  independent of any one box's TPM — the last-resort key when the PIN is forgotten and the fTPM is
+  cleared. It is generated, enrolled (`cryptsetup luksAddKey`, a new slot that never wipes the
+  daily/TPM2 slots) and uploaded to Vaultwarden **on the HUB, never the node** ([build on hub]):
+  the Vaultwarden API creds (`crypto.recovery.credsSops`) live only on the build machine; the box
+  only ever *receives* a LUKS header that already carries the recovery slot. `modules/crypto/
+  recovery-escrow.nix` ships the hub tool (`nixnas-escrow-recovery enroll`) + a box-side read-only
+  `nixnas-recovery-status` (keyslot count). The keyslot mechanism is VM-verified on a loopback LUKS
+  (`test/verify-recovery.nix`: 1→2 slots, opens with the recovery key AND the daily passphrase);
+  the Vaultwarden upload is a hub-network path, validated on the hub, not in the sealed demo VM.
 - **Future hardening (verity parity, no verity costs):** layer **dm-verity or
   dm-integrity/AEAD** on the persistent store, with the root hash **sealed into the
   already-signed UKI**. Captures verity's one genuine integrity edge without its
@@ -212,9 +242,10 @@ workflow.
    IPMI-SOL is an optional cleaner channel where a BMC exists, not the default).
 4. **The anti-rollback counter** — TPM2-NV implementation + the version policy.
 5. **Generation count vs ESP size** on 8 GB (one ~80 MiB UKI per generation).
-6. **TPM-sealed initrd-SSH host key** (§10) — seal the host key to PCR 7 so it is never on
-   the plaintext ESP; unseal in the initrd before sshd. Removes the one evil-maid wart of
-   initrd-SSH generically (no IPMI needed). Needs the unseal-before-sshd unit ordering.
+6. **TPM-sealed initrd-SSH host key** — ✅ **RESOLVED + built** (default `sealHostKey = true`).
+   Seal to PCR 7 on first boot; initrd unseals before sshd (unit ordering done). VM-verified
+   (`test/verify-sealed-hostkey.nix`). Remaining hardware spike: the true 2-boot unseal on real
+   TPM (the snapshot demo VM can't persist the sealed blob + swtpm state across separate boots).
 
 *(Resolved by the steelman: "copytoram a tmpfs /nix/store" does NOT compose with
 autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
@@ -255,8 +286,11 @@ autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
     Impermanence already kills the write *stream*; the ro-mount would only shave the
     already-negligible per-boot/background bits — NOT the updates, which need rw — for a marginal
     accidental-write guardrail, at the cost of a fragile load-bearing update path. Not worth it.
-  - Persistent "emergency" logs to the stick stay a **conscious opt-in** (`store.persistLogs`,
-    *planned*, default off) — the one deliberate exception.
+  - Persistent "emergency" logs stay a **conscious opt-in** (`store.persistLogs`, built, default
+    off): journald flips from `volatile` (RAM) to `persistent`, bind-mounted onto the **USB stick**
+    store (`/nix/nixnas/journal`) — *the stick, not a pool* (logs are a boot/OS concern, and a pool
+    may not be mounted when you need them). A temporary setting you'd only flip while chasing a
+    problem, then flip back — the one deliberate write exception.
 - **The rescue model (data pools are portable).** Only the **stick store** binds to the TPM
   (TPM2+PIN). The data pools (HOT/COLD + the SMR drives) carry a **plain LUKS2 passphrase
   keyslot** — the same secret as the PIN, reused via the kernel keyring — and are **never
