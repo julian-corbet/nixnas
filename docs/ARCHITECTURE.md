@@ -50,7 +50,9 @@ USB they have and nixnas lays it out:
                                           generation + loader/ entries
 #2  nixos  f2fs-in-LUKS2  REST of stick  the NixOS system: persistent /nix (store = all kept
                                           generations; /nix/var = db/profiles/gcroots) +
-                                          machine-id + the persisted SSH host key (sops age id)
+                                          /nix/persist — the box's identity: machine-id, the
+                                          running system's SSH host key, tailscale state
+                                          (modules/appliance/identity.nix)
 ```
 
 Sizing rule: **ESP = 1 GiB default (2 GiB on a larger stick), f2fs = everything else.**
@@ -69,19 +71,23 @@ appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on
 
 1. UEFI — **Secure Boot, operator-only keys, MS 3rd-party CA removed, firmware password**.
 2. **lanzaboote-signed `systemd-boot`** shows the generation menu.
-3. The selected generation's **signed UKI** runs; its **signed initrd** brings up the network and
-   **prompts for the single passphrase REMOTELY** — the box is **headless**, nobody is at the
-   console (§6). Secure Boot guarantees the prompt is trusted: a maid cannot phish it with a
-   tampered initrd.
+3. The selected generation's **signed UKI** runs; its **signed initrd** unlocks the STORE via
+   **TPM2** — with `crypto.tpm2.requirePin = true` (the strict default) the PIN is entered
+   remotely over initrd-SSH; with `requirePin = false` the store auto-unlocks (PCR-bound) and the
+   box comes up unattended. Either way Secure Boot + the TPM-sealed host key guarantee any prompt
+   channel is trusted: a maid cannot phish it with a tampered initrd or a swapped stick (§6).
 4. **Root `/` is tmpfs** (impermanence); the real persistent **`/nix`** is mounted read-write from
-   the unlocked LUKS partition; only `/nix`, the ESP, and the host key persist. The stick is **not
-   loaded wholesale into RAM** — hot store paths are **page-cached on demand** and self-limiting
-   (cold pages drop and re-read from the compressed f2fs). Working memory is kept small by **zram**
-   (compressed swap, 20 % of RAM, no disk swap) + f2fs **`compress_cache`** (compressed store
-   blocks cached in RAM) — so the appliance fits boxes with far less than 128 GB.
-5. The stateless OS comes up; **sshd + Tailscale** start for headless admin; the operator's **data
-   pools** import **non-fatally** — the **same one passphrase** opens the store (initrd) *and* every
-   pool (stage-2) via kernel-keyring reuse. **One authentication, everything unlocks.**
+   the unlocked LUKS partition; only `/nix` and the ESP persist (identity — machine-id, SSH host
+   keys, tailscale state — lives at `/nix/persist`). The stick is **not loaded wholesale into
+   RAM** — hot store paths are **page-cached on demand** and self-limiting (cold pages drop and
+   re-read from the compressed f2fs). Working memory is kept small by **zram** (compressed swap,
+   20 % of RAM, no disk swap) + f2fs **`compress_cache`** (compressed store blocks cached in
+   RAM) — so the appliance fits boxes with far less than 128 GB.
+5. The stateless OS comes up **reachable, with the data still locked**: sshd + Tailscale start
+   with their stick-persisted identity, while every `storage.unlock` member stays `noauto`. The
+   operator SSHes in and runs **`nixnas-unlock`**: ONE passphrase opens the members serially
+   (systemd's kernel-keyring cache covers the rest), the ZFS pools import, and
+   `nixnas-storage.target` raises the gated mounts + services. **One entry, everything data.**
 6. **`system.autoUpgrade` pulls the operator's config flake from their private Git** (deploy key via
    sops-nix) and builds the next generation. The flake is *not* part of nixnas — it is how the
    declarative system config is loaded; nixnas only provides the mechanism.
@@ -118,21 +124,27 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
 
 ## 6. Crypto / Evil-Maid — honest
 
-- **Unlock model (DECIDED): TPM2-with-PIN, the PIN is required on EVERY boot — no
-  unattended reboot, by design ("kein unbefugter Zugriff").** A single passphrase *is* the
-  TPM2 PIN *and* is the same secret enrolled on the operator's data pools. The TPM releases
-  the store key only if PCRs match (untampered boot chain) **and** the PIN is entered; a
-  changed/tampered state makes the TPM refuse → the off-box **recovery keyslot** (mandatory)
-  is the fallback. A stolen, powered-off box therefore **never auto-decrypts**.
-- **Entered once.** The store is unlocked in the **initrd**; the data pools in **stage-2**
-  (non-fatal). `systemd-cryptsetup` caches the entered secret in the kernel keyring and
-  reuses it across devices → one prompt unlocks the store + all pools. *(Spike: confirm the
-  keyring survives the initrd→stage-2 switch-root.)*
-- **Build-time vs first-boot.** `lib.mkImage` enrolls only the **passphrase keyslot** on the
-  store (hardware-independent). The **TPM2 keyslot is enrolled on first boot on the real
-  hardware** (`systemd-cryptenroll --tpm2-device=auto --tpm2-with-pin`) — PCRs are
-  hardware-specific, so a build machine cannot seal to the target TPM. The operator enrolls
-  the **same passphrase** on their self-built pools (nixnas never formats them).
+- **Unlock model — two independent layers, by design.**
+  - **The OS stick binds to the TPM** (`crypto.tpm2`): the TPM releases the store key only if
+    PCRs match (untampered boot chain). `requirePin = true` (the strict default) additionally
+    demands the PIN on EVERY boot — a stolen, powered-off box never auto-decrypts, but every
+    boot needs an operator. `requirePin = false` trades that for unattended resilience: the box
+    self-recovers from a power cut to "reachable, data locked", and only a TAMPERED chain (PCR
+    mismatch) falls back to the recovery keyslot. Pick per threat model (see "Operational
+    tension" below).
+  - **The data members are passphrase-ONLY** — never TPM-bound, never keyfile-persisted. They
+    stay locked (`noauto`) until the operator runs **`nixnas-unlock`** over SSH: the members
+    open SERIALLY and systemd's own password cache (kernel keyring, the `cryptsetup` key) reuses
+    the first entry for the rest — **one passphrase per boot for the whole data set**, entered
+    into a channel authenticated by the stick's sealed/persisted host keys. A seized disk (or
+    the whole box) yields nothing without the passphrase.
+- **Build-time vs first-boot.** The image build enrolls only the **passphrase keyslot** on the
+  store (hardware-independent; the TUI injects the passphrase file into the builder VM with
+  `imageScript --pre-format-files` — it never touches the Nix store, and a build without it
+  fails closed). The **TPM2 keyslot is enrolled on first boot on the real hardware**
+  (`systemd-cryptenroll --tpm2-device=auto`) — PCRs are hardware-specific, so a build machine
+  cannot seal to the target TPM. The operator enrolls their data-set passphrase on their
+  self-built pools (nixnas never formats them).
 - **Headless remote unlock (mandatory).** The box is **headless** — nobody can type at the
   console, so the in-initrd PIN prompt must be reachable over the network. nixnas ships this:
   - **Primary: initrd-SSH** (`boot.initrd.network.ssh` + `boot.initrd.systemd.enable`) — bring
@@ -153,8 +165,8 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
     `modules/boot/remote-unlock.nix`; verified by `test/verify-sealed-hostkey.nix` (stage-2 seal +
     decrypt round-trip) **and `test/seal-2boot-test.sh`** (a real power-cycle: boot #1 seals, boot #2
     the initrd unseals → initrd-SSH comes up → network unlock → login).
-  - **Where present: IPMI Serial-over-LAN** (example-host) — separate trust domain, no SSH key
-    on the ESP; the cleaner channel.
+  - **Where present: IPMI Serial-over-LAN** (boxes with a BMC) — separate trust domain, no SSH
+    key on the ESP; the cleaner channel.
   - **Tailscale-in-initrd** (unlock from anywhere) is **exotic** (tailscaled + state + tun in the
     initrd) — a spike, not the baseline. Pragmatic "from anywhere" = initrd-SSH on the LAN reached
     *through* a Tailscale node elsewhere.
@@ -162,9 +174,12 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   the tailnet auth key) — headless admin once booted.
 - **Operational tension (security-concept option).** Headless + PIN-every-boot means **every** boot
   needs a working remote path; if the network is down at boot, the NAS stays locked until reachable.
-  The strict choice (current default) maximises evil-maid resistance. The alternative —
-  **TPM2 PCR-only auto-unlock** (no PIN; box self-recovers after a power cut; PIN only on tamper) —
-  trades some resistance for unattended resilience. Exposed as an option; default = strict.
+  The strict choice (the default) maximises evil-maid resistance. The alternative —
+  **TPM2 PCR-only auto-unlock** (`requirePin = false`; the box self-recovers after a power cut and
+  demands the recovery key only on tamper) — trades some OS-layer resistance for unattended
+  resilience, and costs the DATA nothing: the data set is passphrase-gated either way, so the
+  worst a thief gets from an auto-unlocking stick is the OS config. With data behind its own
+  post-boot passphrase, auto-unlock is the natural NAS posture; strict remains the default.
 - **The evil-maid defense is signed boot, not encryption.** Honest framing:
   **confidentiality-by-encryption + integrity-by-signed-boot.** Default LUKS2 aes-xts is
   *unauthenticated and malleable* — it gives confidentiality, **not** integrity; and the
@@ -180,9 +195,10 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   1. **Operator-only SB keys; the Microsoft 3rd-party UEFI CA REMOVED** (else a MS-signed
      shim/bootkit bypasses operator keys). **DECIDED: the keyset is a STABLE IDENTITY, part of
      the config** — real hosts supply their own PK/KEK/db via sops (`boot.secureBoot.keysSops`),
-     which the TUI materialises into the PKI bundle on the *build machine* before disko, so lzbt
-     signs from day one and the SB identity does not change per box or per reflash. First-boot
-     autogeneration is only the keyless *demo* fallback (`keysSops == null`), never a real host.
+     which the TUI decrypts (sops tar) and injects into the image at `/nix/lanzaboote/pki`
+     (`imageScript --post-format-files`), so lzbt signs from day one and the SB identity does not
+     change per box or per reflash. First-boot autogeneration is only the keyless *demo* fallback
+     (`keysSops == null`), never a real host.
   2. **Firmware admin password** that blocks disabling SB / re-enrolling keys (else SB is
      toggled off and a fake unlock screen phishes the passphrase).
   3. **TPM2-NV monotonic anti-rollback counter** (or PCR-sealed version policy) — *this*,
@@ -215,19 +231,24 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
 
 ## 7. The flake / TUI workflow
 
-- **Build once, here.** A capable machine (the cluster) evaluates the operator's
-  `nixosConfiguration`; `lib.mkImage` produces the initial USB image (LUKS store seeded
-  with generation 1 + the lanzaboote keys + the signed UKI); the **Rust TUI** flashes it.
-  The TUI is **install-only** — *not* in the update path.
+- **Build once, here.** The **Rust TUI** runs `nix build .#imageScript` against the operator's
+  flake (a PURE eval — no secrets in the Nix store), then executes the disko image script with
+  the LUKS passphrase injected into the builder VM (`--pre-format-files`) and, when configured,
+  the Secure Boot PKI injected onto the finished image (`--post-format-files` →
+  `/nix/lanzaboote/pki`). The result is the personalised `.raw` (LUKS store seeded with
+  generation 1 + the SB keys); the TUI then flashes it (caligula + an independent post-write
+  verification). The TUI is **install-only** — *not* in the update path.
 - **After flashing, the box is autonomous** (`autoUpgrade`). Updating nixnas = committing
   to the operator's flake; the box pulls + rebuilds itself.
-- **`nixnas.config`** = the operator's `nixnas.*` parameters + their own
+- **`nixnas.config`** (the TOML next to the operator's flake) holds only what the TUI itself
+  consumes — where the flake is, the SB-PKI sops file, build-VM memory. The MACHINE's
+  configuration is Nix: the operator's `nixnas.*` parameters + their own
   `services.k3s`/`hardware.amdgpu`/… — the whole closure is what gets installed.
 
 ## 8. What is nixnas-specific (everything else is stock NixOS)
 
-1. The USB **GPT/disko layout** + `lib.mkImage` + the **impermanence (tmpfs-root)**
-   packaging.
+1. The USB **GPT/disko layout** + the **impermanence (tmpfs-root)** packaging + the
+   post-boot data-unlock plumbing (`nixnas-unlock` / `nixnas-storage.target`).
 2. The **Rust TUI** (build the initial stick + flash + edit `nixnas.config`).
 3. Packaging Secure Boot (lanzaboote keys) + the LUKS-store-on-USB into a flashable image.
 
@@ -242,9 +263,11 @@ workflow.
    it; manual generation-menu rollback is the guaranteed fallback.
 2. **autoUpgrade against a private flake** — pull auth (deploy key via sops-nix), root git
    `safe.directory`, end-to-end build-once-then-self-update on the 8 GB target.
-3. **Keyring reuse across switch-root** — confirm one PIN entry in the initrd unlocks the
-   stage-2 data pools (primary transport DECIDED: **initrd-SSH** — generic, every box;
-   IPMI-SOL is an optional cleaner channel where a BMC exists, not the default).
+3. **Keyring reuse across switch-root** — ✅ **RESOLVED BY REDESIGN**: the data unlock no
+   longer straddles the initrd→stage-2 boundary at all. Members are `noauto` and open
+   post-boot inside ONE `nixnas-unlock` invocation, where systemd's password cache
+   (serially chained members) makes one passphrase cover the set — no cross-switch-root
+   keyring assumption left. (The initrd unlocks only the stick store, via TPM2.)
 4. **The anti-rollback counter** — TPM2-NV implementation + the version policy.
 5. **Generation count vs ESP size** on 8 GB (one ~80 MiB UKI per generation).
 6. **TPM-sealed initrd-SSH host key** — ✅ **RESOLVED + built** (default `sealHostKey = true`),
@@ -272,11 +295,13 @@ autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
   store (the ZFS snapshotter dataset on HOT). So the stick stays ~3–4 GiB no matter how many
   apps run.
 - **Mounting is native; nixnas doesn't reinvent it.** You mount your storage with plain
-  `fileSystems` / `boot.zfs.extraPools` at `/hot`, `/cold`, or any nested path (an XFS drive
-  *under* a ZFS tree, …). nixnas adds only `storage.unlock` (open your LUKS members with the one
-  shared secret, non-fatally, at a stable `/dev/mapper/<name>`) and `storage.zfsPools` (a
-  non-fatal ZFS import convenience). Persisting state off the tmpfs root is the **impermanence
-  module** (`environment.persistence."/hot/…"`), not a bespoke nixnas layer. See `examples/host.nix`.
+  `fileSystems` at `/hot`, `/cold`, or any nested path (an XFS drive *under* a ZFS tree, …),
+  hooked to `nixnas-storage.target` (`"noauto" "x-systemd.wanted-by=nixnas-storage.target"` —
+  the mappers don't exist until `nixnas-unlock`). nixnas adds only `storage.unlock` (open your
+  LUKS members post-boot with one passphrase, non-fatally, at a stable `/dev/mapper/<name>`)
+  and `storage.zfsPools` (per-pool `nixnas-import-<pool>` services; datasets self-mount at
+  their `mountpoint` properties). Persisting heavy state off the tmpfs root = bind mounts from
+  the pools, gated on the same target (identity is already on the stick). See `examples/host.nix`.
 - **/nix lives on the stick, period.** Self-contained (boots even if a pool is missing), and — a
   hard rule — the stick's OS content **never** relocates onto a data pool: HOT/COLD are for *your
   workload*, not for the boot/manage essentials. (An earlier "store-on-HOT" idea is dropped.)
@@ -298,8 +323,10 @@ autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
     store (`/nix/nixnas/journal`) — *the stick, not a pool* (logs are a boot/OS concern, and a pool
     may not be mounted when you need them). A temporary setting you'd only flip while chasing a
     problem, then flip back — the one deliberate write exception.
-- **The rescue model (data pools are portable).** Only the **stick store** binds to the TPM
-  (TPM2+PIN). The data pools (HOT/COLD + the SMR drives) carry a **plain LUKS2 passphrase
-  keyslot** — the same secret as the PIN, reused via the kernel keyring — and are **never
-  TPM-bound**. So a pool member pulled into another machine unlocks with the passphrase alone;
-  no specific box's TPM is required. nixnas only imports + unlocks them, never reformats.
+- **The rescue model (data pools are portable).** Only the **stick store** binds to the TPM.
+  The data pools (HOT/COLD + any archive drives) carry a **plain LUKS2 passphrase keyslot** —
+  entered once per boot at `nixnas-unlock` — and are **never TPM-bound**. So a pool member
+  pulled into another machine unlocks with the passphrase alone; no specific box's TPM is
+  required. (Use ONE shared passphrase across the members for the one-prompt unlock; it is the
+  only thing protecting a seized disk, so give it real entropy.) nixnas only imports + unlocks
+  them, never reformats.

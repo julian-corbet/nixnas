@@ -13,8 +13,10 @@ Why this over a hand-rolled "vanilla newest-ZFS base + lifted CachyOS patches":
 - **It matches the Arch/CachyOS LXC** we run on top (the LXC shares the host kernel — one world,
   not two).
 - **Binary cache → no local kernel compile** (the maintainer publishes pre-built variants; see §3).
-- **Auto-syncs with nixpkgs** — when nixpkgs bumps the latest/LTS kernel, this flake catches up.
-  No pin, no manual chase (honouring the "track nixos, take the current kernel" policy).
+- **Tracks nixpkgs, pinned for cache hits** — the `release` branch publishes pre-built variants
+  and the `pinned` overlay keeps the exact rev the maintainer's cache was built for; catching up
+  with a kernel bump is a deliberate `nix flake update` (which lands the NEXT cached rev), not an
+  unpinned live-follow.
 
 > **The failsafe is structural, not the software choice.** Running `zfs_cachyos` (which forward-ports
 > ZFS onto a kernel newer than upstream OpenZFS's cap) is acceptable **because a bad update cannot
@@ -41,20 +43,21 @@ inputs.nix-cachyos-kernel.url = "github:xddxdd/nix-cachyos-kernel/release";  # r
 }
 ```
 
-*(Exact attribute names for a tuned combo — e.g. the `x86_64-v3` + `lto` variant — are verified at
-wire-up against the flake's `cachyosKernels` set; the flake exposes them as
-`linux(Packages)-cachyos-<variant>[-x86_64-v3][-lto]` plus function parameters
-`processorOpt` / `lto` / `cpusched`.)*
+*(The tuned-combo attribute scheme, as consumed by `modules/boot/kernel.nix`, is
+`linuxPackages-cachyos-<variant>[-lto][-<march>]` — the `lto` suffix comes BEFORE the march,
+e.g. `linuxPackages-cachyos-latest-lto-x86_64-v3`. kernel.nix fails with an actionable error
+when the requested combo is absent from the pinned set.)*
 
 ## 3. Binary cache vs local compile
 
 - **`release` branch + `overlays.pinned`** → the maintainer's pre-built variants are **pulled** from
   `attic.xuyh0120.win/lantian`. The `x86_64-v3` latest/LTS variants are published (only the `x86_64-v2`
   variants are flagged "no binary cache").
-- A combo the maintainer didn't pre-build (e.g. an unusual `lto`/`cpusched`/`march` mix) **compiles
-  locally** — which is fine: nixnas builds the whole image locally anyway (the one sanctioned exception
-  to build-on-hub). Build it **once**, then push to our own substituter (`boot.corbet.ch`) so a re-flash
-  isn't a fresh kernel compile: `nix copy --to 'https://boot.corbet.ch' <kernel-drv-out>`.
+- A combo the maintainer didn't pre-build (an unusual `lto`/`march` mix) would **compile locally** —
+  `modules/boot/kernel.nix` fails EARLY with an actionable error instead, because a from-source
+  kernel build on the target box defeats the pull-from-cache design. If you deliberately want an
+  uncached combo, build it **once** on a capable machine and push it to your own substituter so a
+  re-flash isn't a fresh kernel compile: `nix copy --to 'https://<your-cache>' <kernel-drv-out>`.
 - **Interaction with x86_64-v3 userland (flag):** if we later set `nixpkgs.hostPlatform.gcc.arch` globally
   (whole-userland v3, see the v3 discussion), that changes the stdenv and **busts the lantian cache hit
   for the kernel too** → the kernel then compiles locally. Either accept that (it's a small fraction of a
@@ -63,15 +66,16 @@ wire-up against the flake's `cachyosKernels` set; the flake exposes them as
 
 ## 4. Tuning — our choices + the options
 
-| Option (flake param) | nixnas reference-box value | General-distro default | Note |
+| Option (`nixnas.kernel.*`) | Tuned example | General-distro default | Note |
 |---|---|---|---|
-| variant | `latest` | `latest` (or `lts` for stability) | `server` = EEVDF + lazy-preempt; `hardened` = +linux-hardened |
-| `processorOpt` | **`x86_64-v3`** (Zen3 = 5950X) | `x86_64-v1` (boots anywhere) | v3 = AVX2/FMA/BMI2; helps ZFS fletcher4/zstd, AES-NI, memcpy. `native`/`znver3` only because we build locally |
+| `variant` | `latest` | `latest` (or `lts` for stability) | `server` = EEVDF + lazy-preempt; `hardened` = +linux-hardened |
+| `march` | **`x86_64-v3`** (any Zen 3+) | `x86_64-v1` (boots anywhere) | v3 = AVX2/FMA/BMI2; helps ZFS fletcher4/zstd, AES-NI, memcpy. `native`/`znver3` are rejected early (not pre-built — would compile on the box) |
 | `lto` | **`thin`** | `thin` | ThinLTO = cheap + measurable; `full` is RAM-heavy for little gain |
-| `cpusched` | `eevdf` (server-correct) | `eevdf` | `bore` is a legit pick given the interactive Cachy LXC desktop — a preference option, not a perf must |
 
-Exposed as `nixnas.kernel.{variant,march,lto,cpusched}` with these defaults. The reference box maxes
-speed (`latest` + `x86_64-v3` + `thin` LTO); a general adopter who doesn't build for a known CPU stays
+Exposed as `nixnas.kernel.{variant,march,lto}` with these defaults. There is deliberately NO
+`cpusched` option: the published pre-built variants bake `eevdf` in (the server-correct pick),
+and a knob that silently delivered eevdf regardless would lie. A known CPU maxes speed
+(`latest` + `x86_64-v3` + `thin` LTO); a general adopter who doesn't build for a known CPU stays
 on the portable `x86_64-v1`.
 
 **ZFS source** is an option too — `nixnas.zfs.source = cachyos | upstream`:
@@ -103,9 +107,11 @@ A failed kernel/ZFS update must never throw the box off the rails. Two independe
 ## 6. F2FS + the CachyOS kernel
 
 The store is f2fs-zstd:22 (STORAGE.md). The CachyOS kernel inherits nixpkgs' f2fs config plus the
-CachyOS patchset; `F2FS_FS_ZSTD` (`default y` under compression) holds. nixnas still **asserts** it at
-build time, and puts `f2fs` + `crc32` in the initrd (STORAGE.md §4). ZFS stays out of stage 1 (stage-2
-import); f2fs is the only stage-1 filesystem.
+CachyOS patchset; `F2FS_FS_ZSTD` (`default y` under compression) holds. It is proven at RUNTIME by
+the `verify-image` self-check in the built image (an eval-time kernel-config assertion is not
+reliable for externally-packaged kernels — STORAGE.md §5); `f2fs` + `crc32` ride in the initrd
+(STORAGE.md §4). ZFS stays out of stage 1 (post-boot import via nixnas-unlock); f2fs is the only
+stage-1 filesystem.
 
 ## Sources
 - [`xddxdd/nix-cachyos-kernel`](https://github.com/xddxdd/nix-cachyos-kernel) — packages, `processorOpt`/

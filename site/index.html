@@ -44,15 +44,15 @@
         <span class="terminal-title">nixnas — write your image, boot from RAM</span>
       </div>
       <pre class="terminal-body"><code><span class="prompt">$</span> nixnas                       <span class="output"># a local TUI over your own flake</span>
-<span class="output">[nixnas] LUKS passphrase: ********   (0600 temp file, shredded after the build)
-[nixnas] building .#image — CachyOS kernel · LUKS f2fs-zstd store · lanzaboote-signed UKI</span>
+<span class="output">[nixnas] LUKS passphrase: ********   (RAM-backed 0600 file, shredded after the build)
+[nixnas] building .#imageScript — CachyOS kernel · LUKS f2fs-zstd store · lanzaboote-signed UKI</span>
 <span class="ok">[nixnas] ✓ nixnas.raw</span><span class="output">  — your config, ~3.4 GiB, zstd-compressed on the stick
 [nixnas] flashing → /dev/disk/by-id/usb-…</span>
 
-<span class="prompt">$</span> <span class="output"># first boot, headless — unlock over SSH, in the initrd:</span>
-<span class="output">[initrd] 🔐 enter PIN (TPM2)   ·   ssh root@box</span>
-<span class="ok">[  OK  ]</span><span class="output"> store unlocked · /nix on f2fs zstd:22 · root = tmpfs (RAM)
-[  OK  ] your storage unlocked + mounted — never formatted</span>
+<span class="prompt">$</span> <span class="output"># boots reachable, data still locked — one passphrase over SSH:</span>
+<span class="output">$ ssh root@box nixnas-unlock   🔐 passphrase: ********</span>
+<span class="ok">[  OK  ]</span><span class="output"> store: TPM2 · /nix on f2fs zstd:22 · root = tmpfs (RAM)
+[  OK  ] your storage unlocked + imported + mounted — never formatted</span>
 box login: _</code></pre>
     </div>
   </div>
@@ -77,7 +77,7 @@ box login: _</code></pre>
       <div class="step">
         <div class="step-num">3</div>
         <h3>Boot from RAM</h3>
-        <p>Encrypted, headless, running entirely in RAM. One PIN unlocks the stick <em>and</em> your storage. A bad update? Boot the previous generation from the menu.</p>
+        <p>Encrypted, headless, running entirely in RAM. The stick unlocks via TPM2; your data waits for ONE passphrase over SSH (<code>nixnas-unlock</code>). A bad update? Boot the previous generation from the menu.</p>
       </div>
     </div>
   </div>
@@ -96,12 +96,12 @@ box login: _</code></pre>
         <p><strong>lanzaboote</strong> signs every Unified Kernel Image with your own PK/KEK/db. The Microsoft CA is not enrolled &mdash; no unsigned kernel runs. Paired with a firmware password and measured boot, it's evil-maid hardened.</p>
       </div>
       <div class="feature">
-        <h3>TPM2 + PIN unlock</h3>
-        <p>The store key is released only when the boot chain measures clean <em>and</em> the PIN is entered &mdash; every boot, by design. A mandatory recovery keyslot is the fallback.</p>
+        <h3>TPM2 store unlock</h3>
+        <p>The store key is released only when the boot chain measures clean &mdash; optionally <em>plus</em> a PIN on every boot (strict default; auto-unlock is the unattended-NAS choice). A mandatory recovery keyslot is the fallback.</p>
       </div>
       <div class="feature">
         <h3>Headless remote unlock</h3>
-        <p>No console? The NIC comes up <em>in the initrd</em> and you hand the PIN over SSH. Validated unlocking the box entirely over the network.</p>
+        <p>No console? The box boots reachable with the data locked; <code>nixnas-unlock</code> over SSH opens everything. With the strict PIN, the initrd itself runs sshd &mdash; validated unlocking the box entirely over the network.</p>
       </div>
       <div class="feature">
         <h3>Tuned for speed</h3>
@@ -128,8 +128,8 @@ box login: _</code></pre>
         <p>Only the stick binds to the TPM. Your data carries a plain passphrase keyslot, so a disk pulled into any machine still opens &mdash; no specific box's TPM required.</p>
       </div>
       <div class="feature">
-        <h3>One unlock, everything</h3>
-        <p>The PIN is the TPM2 PIN <em>and</em> your storage passphrase &mdash; entered once in the initrd, reused across the store and every volume via the kernel keyring.</p>
+        <h3>One passphrase, all your data</h3>
+        <p><code>nixnas-unlock</code> opens your LUKS members serially &mdash; the first entry is cached in the kernel keyring and opens the rest, imports the pools, and starts everything gated on them. One entry per boot, for the whole set.</p>
       </div>
       <div class="feature">
         <h3>Thin by design</h3>

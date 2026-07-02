@@ -5,8 +5,11 @@ Kernel/boot/software tuning for the thin nixnas appliance layer. Two priorities,
 filesystems — `/nix` f2fs-in-LUKS and the FAT ESP). Storage/compression specifics are in
 [`STORAGE.md`](STORAGE.md); the boot/crypto model is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-**Scope marker:** ⬢ = nixnas sets it as an appliance default; ◯ = operator policy nixnas merely
-enables/recommends (cache choice, GC retention). Out-of-scope items are listed at the end.
+**Scope marker:** ⬢ = nixnas SETS it as an appliance default (implemented in `modules/`);
+◇ = decided direction, NOT yet wired (deliberately deferred — reason given inline);
+◯ = operator policy nixnas merely enables/recommends (cache choice, GC retention).
+Out-of-scope items are listed at the end. The markers are kept honest against the code —
+a ⬢ you cannot grep in `modules/` is a doc bug.
 
 **Framing:** root is tmpfs, so `/var`, `/var/log`, `/tmp`, coredumps and machine state are
 *already in RAM*. "Longevity" therefore reduces to: minimise writes to `/nix` + the ESP, and
@@ -37,22 +40,26 @@ never let an impermanence misconfig silently start persisting onto them.
 ## 2. Faster boot
 
 - ⬢ `boot.initrd.systemd.enable = true;` — parallel, dependency-ordered initrd; also the
-  supported path for TPM2-LUKS unlock + lanzaboote.
-- ⬢ `boot.kernelParams = [ "quiet" "loglevel=3" "udev.log_level=3" "rd.udev.log_level=3" ];`
+  supported path for TPM2-LUKS unlock + lanzaboote. (`modules/boot/image.nix`)
+- ◇ `boot.kernelParams = [ "quiet" "loglevel=3" "udev.log_level=3" "rd.udev.log_level=3" ];`
   `boot.consoleLogLevel = 3;` — kill console/serial log I/O (slow on a VT, dominates on serial).
-- ⬢ Slim UKI: `boot.initrd.includeDefaultModules = false;` + an explicit
+  DEFERRED while the appliance is in its bring-up phase: serial output is the debugging channel
+  and stays observable until the hardware spikes are done.
+- ◇ Slim UKI: `boot.initrd.includeDefaultModules = false;` + an explicit
   `boot.initrd.availableKernelModules` (USB/crypto/f2fs only). On a **< 10 MB/s** stick a smaller
-  initrd is read faster — read time dominates, not CPU.
-- ⬢ `boot.initrd.compressor = "zstd"; boot.initrd.compressorArgs = [ "-19" ];` — on slow flash
-  the smaller read beats the (tiny) decompress cost.
-- ⬢ `boot.kernelParams += [ "fsck.mode=skip" ];` — skip routine fsck. f2fs does roll-forward
+  initrd is read faster — read time dominates, not CPU. DEFERRED: dropping the default module set
+  risks unbootable hardware surprises; gate on a real-hardware spike, not the VM.
+- ◇ `boot.initrd.compressor = "zstd"; boot.initrd.compressorArgs = [ "-19" ];` — on slow flash
+  the smaller read beats the (tiny) decompress cost. Not yet wired (NixOS already defaults the
+  systemd initrd to zstd; only the `-19` level is outstanding).
+- ◇ `boot.kernelParams += [ "fsck.mode=skip" ];` — skip routine fsck. f2fs does roll-forward
   recovery from its checkpoint and the Nix store is reproducible/re-fetchable, so a heavy
   `fsck.f2fs` over a large store is wasted boot time. (Trade-off: no auto-repair — acceptable
   because the store is disposable; pairs with the "rely on Nix signatures" integrity model.)
-- ⬢ `systemd.network.wait-online.enable = false;` — `wait-online` is a notorious multi-second
-  boot stall; a NAS must not block boot on link-up.
-- ⬢ `boot.loader.timeout` — `0`/`1`. Keep **`1`** so the lanzaboote generation menu is reachable
-  for manual rollback.
+- ⬢ `systemd-networkd-wait-online` disabled — `wait-online` is a notorious multi-second
+  boot stall; a NAS must not block boot on link-up. (`modules/appliance/optimizations.nix`)
+- ⬢ `boot.loader.timeout = 1` (mkDefault) — fast boot, and the generation menu (the guaranteed
+  manual rollback) stays reachable with a keypress. (`modules/boot/image.nix`)
 
 ## 3. f2fs mount tuning (the non-compression options)
 
@@ -80,24 +87,31 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
 
 - ⬢ `boot.lanzaboote.enable = true;` + `boot.loader.systemd-boot.enable = lib.mkForce false;` —
   signed UKIs for Secure Boot.
-- ⬢ **`boot.lanzaboote.pkiBundle` must live on persistent storage, not tmpfs root** — else the SB
-  signing keys vanish each boot. Bind from a `/nix`-persisted path (impermanence).
-- ⬢ **Persist boot identity** that tmpfs would wipe: `/etc/machine-id`, SSH host keys, the sbctl
-  PKI, TPM2 enrollment metadata. If these regenerate each boot, machine-id / measured-boot / TPM2
-  PCR sealing drift and unlock breaks. (The LUKS header is on-disk already.)
-- ⬢ `boot.lanzaboote.configurationLimit = 5;` (+ `nix.gc`) — each generation is a signed UKI on
-  the tiny FAT ESP; bounding the count caps ESP writes/space (the ESP is the tighter bound on
-  generation count — see ARCHITECTURE.md §2).
+- ⬢ **`boot.lanzaboote.pkiBundle` lives on persistent storage, not tmpfs root** — else the SB
+  signing keys vanish each boot. It is `/nix/lanzaboote/pki` directly (the encrypted store), no
+  bind needed. (`modules/boot/secureboot.nix`)
+- ⬢ **Persist boot identity** that tmpfs would wipe: `/etc/machine-id`, the running system's SSH
+  host key, tailscale state, `/var/lib/nixos` — all on the encrypted store at `/nix/persist`
+  (`modules/appliance/identity.nix`). If these regenerated each boot, machine-id / the pinned
+  SSH identity / the tailnet node would drift. (The LUKS header is on-disk already; the initrd
+  unlock host key is separately TPM-sealed by remote-unlock.)
+- ⬢ generation count = `nixnas.boot.keepGenerations` (default **8**, sized to the 1 GiB ESP —
+  one signed UKI each) via `boot.loader.systemd-boot.configurationLimit`, which lanzaboote
+  inherits; bounding the count caps ESP writes/space (the ESP is the tighter bound — see
+  ARCHITECTURE.md §2). (`modules/boot/rollback.nix`)
 - ◯ `nix.settings.require-sigs = true;` + trust only the hub's cache key → `nix store verify`
   covers store integrity. f2fs has no default data checksums; rely on Nix signatures +
   reproducibility rather than fs-level data checksums (this is also what justifies `fsck.mode=skip`).
 
 ## 5. RAM: compressed store-in-RAM, zram, build placement (the slow-stick answer)
 
-- ◯ **Biggest lever — never build on the box:** `nix.settings.substituters = [ "<hub cache>" ];`
-  so `system.autoUpgrade` *downloads* prebuilt, signed closures (the "build on hub, never on node"
-  doctrine). Then the only `/nix` writes are the new closure itself — no build intermediates
-  hammering the slow flash, and no transient-ENOSPC mid-build (STORAGE.md §6 footgun 5).
+- ◯ **Substitute what a cache already has:** `nix.settings.substituters = [ "<your cache>" ];`
+  so `system.autoUpgrade` *downloads* prebuilt, signed closures where they exist — then the only
+  `/nix` writes are the new closure itself, no build intermediates hammering the slow flash, and
+  no transient-ENOSPC mid-build (STORAGE.md §6 footgun 5). Note the frame from ARCHITECTURE §4:
+  nixnas targets boxes strong enough to build themselves (a nixnas box is typically the *hub*
+  that builds for weaker machines) — so on-box building is sanctioned; a cache is an
+  optimisation, not a doctrine, here.
 - ⬢ **`zramSwap.enable = true; zramSwap.algorithm = "zstd"; zramSwap.memoryPercent = 20;`** (default)
   + **no disk swap.** This is the **RAM-compression** lever: the appliance keeps its writable working
   set (tmpfs root + anon memory) small by compressing cold pages *in RAM* instead of writing them —

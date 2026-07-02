@@ -22,9 +22,10 @@ let
     The lantian binary cache pre-builds only certain (variant × lto × march) combinations; this one
     is not among them, so nixnas would have to COMPILE the kernel from source on the box — which
     defeats the "pull the kernel from the cache, never recompile" design (docs/KERNEL.md). Pick a
-    cache-available march for kernel.variant=${cfg.kernel.variant} (commonly x86_64-v2 / x86_64-v3 /
-    x86_64-v4 / zen4; the baseline default is x86_64-v1). NOTE: `znver3` and `native` are NOT
-    pre-built — a Zen 3 CPU (e.g. Ryzen 5000) is x86_64-v3, Zen 4 is zen4.
+    cache-available march for kernel.variant=${cfg.kernel.variant} (commonly x86_64-v3 / x86_64-v4 /
+    zen4; the baseline default is x86_64-v1). NOTE: `x86_64-v2` variants are flagged "no binary
+    cache" upstream, and `znver3`/`native` are NOT pre-built — a Zen 3 CPU (e.g. Ryzen 5000) is
+    x86_64-v3, Zen 4 is zen4.
   '');
 in
 {

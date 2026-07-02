@@ -49,7 +49,7 @@ in
                 type = "filesystem";
                 format = "vfat";
                 mountpoint = "/boot";
-                mountOptions = [ "umask=0077" ];
+                mountOptions = [ "umask=0077" "noatime" ];
               };
             };
             nixos = {
@@ -72,13 +72,28 @@ in
                 mountpoint = "/nix";
                 extraArgs = [ "-O" "extra_attr,inode_checksum,sb_checksum,compression" ];
                 # The STORAGE.md §4 recipe: zstd:22, 16 KiB cluster, compress everything,
-                # exclude the Nix sqlite DB, flash-friendly mount flags.
+                # exclude the Nix sqlite DB (f2fs extension match is EXACT, so the -wal
+                # and -shm sidecars need their own entries — they are mmap'd + rewritten
+                # in place, the worst case for compression and the release pass), plus
+                # the flash-friendly + RAM-cache flags (OPTIMIZATIONS.md §3):
+                #   flush_merge/checkpoint_merge — coalesce flushes/checkpoints on slow flash
+                #   compress_cache               — cache COMPRESSED blocks in RAM (the
+                #                                  "compressed page cache" the preload warms)
+                #   fsync_mode=nobarrier         — fewer barriers for non-atomic files; safe
+                #                                  here because store paths are re-fetchable
+                #                                  (NEVER the bare `nobarrier` mount option)
                 mountOptions = [
                   "compress_algorithm=zstd:22"
                   "compress_log_size=2"
                   "compress_extension=*"
                   "compress_chksum"
                   "nocompress_extension=sqlite"
+                  "nocompress_extension=sqlite-wal"
+                  "nocompress_extension=sqlite-shm"
+                  "flush_merge"
+                  "checkpoint_merge"
+                  "compress_cache"
+                  "fsync_mode=nobarrier"
                   "noatime"
                   "lazytime"
                   "nodiscard"

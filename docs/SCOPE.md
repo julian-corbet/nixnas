@@ -5,11 +5,11 @@ nixnas is plain NixOS plus **exactly two capabilities, and nothing else**. This 
 ## What nixnas IS
 
 1. **A USB-install mechanism.** It turns an evaluated `nixosConfiguration` into a bootable ~8 GB USB appliance: a RAM-resident OS via **impermanence** (tmpfs root; only `/nix` + the ESP persist — not `copytoram`), **multiple** signed generations with rollback, the LUKS2 f2fs-zstd on-stick store, and UEFI Secure Boot (lanzaboote) with the operator's *own* keys. *(dm-verity store integrity is roadmap.)*
-2. **A flake-native workflow.** `lib.mkImage`, the `nixnas.*` option surface, and a small Rust TUI (`tui/`) that builds + flashes the stick **locally** on the machine that holds the signing keys (it injects the LUKS passphrase at build time and shreds it).
+2. **A flake-native workflow.** The `nixnas.*` option surface plus a small Rust TUI (`tui/`) that builds + flashes the stick **locally** on the machine that holds the signing keys: it drives the flake's `imageScript`, injecting the LUKS passphrase into the builder VM and the operator's Secure Boot PKI onto the image (nothing secret ever enters the Nix store; both are shredded after the build).
 
 Plus the generic capability those two imply:
 
-3. **An encrypted, robust, RAM-booted appliance.** Single-passphrase LUKS unlock that *is* the TPM2 PIN, recovery-key escrow, and **non-fatal import** of the operator's already-built encrypted data pools.
+3. **An encrypted, robust, RAM-booted appliance.** A TPM2-bound OS store (PIN optional), passphrase-only data members unlocked POST-boot with one entry (`nixnas-unlock` → `nixnas-storage.target`), recovery-key escrow, and **non-fatal import** of the operator's already-built encrypted data pools.
 
 A host becomes a nixnas appliance by importing one module and supplying parameters:
 
@@ -34,7 +34,7 @@ Everything that makes a *particular* box useful is **plain NixOS the operator de
 - **Policy/observability** — the nftables firewall, Tailscale ACLs / app-mesh, monitoring (cockpit/netdata/prometheus), GitOps/Argo.
 - **The specific storage** — which disks, which datasets, pool *creation/formatting*, HOT/COLD tiering.
 
-nixnas **builds + flashes whatever declarative config the operator supplies**; it does not own, import, or know about k3s/GPU/shares/apps. It **never creates, formats, or destroys data pools** — it only LUKS-unlocks and imports pools the operator built by hand. The only device nixnas ever partitions is the USB stick. The operator's k3s/samba/etc. ride *inside* the verity image nixnas bakes (which is exactly why the image is multi-GB, not tiny) — but they are the operator's config, not nixnas's responsibility.
+nixnas **builds + flashes whatever declarative config the operator supplies**; it does not own, import, or know about k3s/GPU/shares/apps. It **never creates, formats, or destroys data pools** — it only LUKS-unlocks and imports pools the operator built by hand. The only device nixnas ever partitions is the USB stick. The operator's k3s/samba/etc. ride *inside* the image nixnas bakes (which is exactly why the image is multi-GB, not tiny) — but they are the operator's config, not nixnas's responsibility.
 
 ## The precise nixnas module list
 
@@ -52,8 +52,9 @@ Under `modules/` (all built + VM-validated unless noted):
 | `boot/rollback.nix` | kept generations (`configurationLimit`) + lanzaboote boot-counting. |
 | `crypto/tpm2.nix` | TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`. |
 | `crypto/recovery-escrow.nix` | break-glass recovery keyslot escrowed to Vaultwarden (hub tool + box status). |
-| `storage/connect.nix` | Stage-2 LUKS unlock (`storage.unlock`) + optional non-fatal ZFS import. Mounting is native. |
+| `storage/connect.nix` | POST-boot data unlock: `nixnas-unlock` + `nixnas-storage.target` (serial one-passphrase LUKS opens, per-pool ZFS import). Mounting is native. |
 | `appliance/base.nix` | Stable host identity + Tailscale. |
+| `appliance/identity.nix` | machine-id, the running SSH host key, tailscale state — persisted on the encrypted stick (`/nix/persist`). |
 | `appliance/ssh.nix` | Headless admin sshd (key-only root). |
 | `appliance/auto-upgrade.nix` | Self-update: stage-only, never self-reboot. |
 | `appliance/optimizations.nix` | Appliance defaults: zram, journald→RAM, no swap, store.preload. |

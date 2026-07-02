@@ -47,8 +47,11 @@ done
 [ -n "$FWDIR" ] || { echo "OVMF firmware not found (install edk2-ovmf)" >&2; exit 1; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-KEY="$HERE/ssh/demo_key"
 WORK="$(mktemp -d /tmp/nixnas-2boot.XXXXXX)"
+# A fresh clone checks the demo key out 0644 and OpenSSH refuses world-readable
+# private keys — use a 0600 copy, never the repo file directly.
+KEY="$WORK/demo_key"
+install -m600 "$HERE/ssh/demo_key" "$KEY"
 SCRATCH="$WORK/disk.raw"
 SWTPM_PID=""
 # cleanup also reaps any qemu still bound to THIS run's unique scratch path. $SCRATCH is an

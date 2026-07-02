@@ -146,10 +146,10 @@ in
           Microarchitecture build target. Default `x86_64-v1` boots anywhere (the safe
           general-distro default). For a known CPU pick the highest **cache-available** level so
           the box pulls a pre-built kernel instead of recompiling: the lantian cache carries
-          `x86_64-v2/-v3/-v4` and `zen4`. A Zen 3 CPU (Ryzen 5000, e.g. the 5950X) is `x86_64-v3`;
-          Zen 4 is `zen4`. `znver3`/`native` are NOT pre-built — selecting them forces a
-          from-source kernel build on the box (avoid; kernel.nix errors early if the combo is
-          absent from the cache).
+          `x86_64-v3/-v4` and `zen4` (`x86_64-v2` variants are flagged "no binary cache"
+          upstream). A Zen 3 CPU (Ryzen 5000) is `x86_64-v3`; Zen 4 is `zen4`. `znver3`/`native`
+          are NOT pre-built — selecting them forces a from-source kernel build on the box
+          (avoid; kernel.nix errors early if the combo is absent from the pinned set).
         '';
       };
       lto = mkOption {
@@ -232,7 +232,7 @@ in
       unlock = mkOption {
         type = types.attrsOf diskById;
         default = { };
-        example = literalExpression ''{ tubearchv = "/dev/disk/by-id/ata-ST5000…"; }'';
+        example = literalExpression ''{ archive0 = "/dev/disk/by-id/ata-…"; }'';
         description = ''
           LUKS data members to unlock POST-boot, as `name → /dev/disk/by-id/…`. Each opens
           as `/dev/mapper/<name>` (a STABLE mapper name you then reference in

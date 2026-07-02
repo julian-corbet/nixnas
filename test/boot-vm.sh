@@ -51,6 +51,13 @@ mkdir -p "$WORK/tpm"
 swtpm socket --tpm2 --tpmstate dir="$WORK/tpm" \
   --ctrl type=unixio,path="$WORK/tpm/sock" \
   --pid file="$WORK/tpm/pid" --daemon
+# --daemon returns before the pid file / control socket necessarily exist — wait for both
+# so QEMU never races a half-up swtpm.
+for _ in $(seq 1 50); do
+  [ -s "$WORK/tpm/pid" ] && [ -S "$WORK/tpm/sock" ] && break
+  sleep 0.1
+done
+[ -S "$WORK/tpm/sock" ] || { echo "swtpm did not come up (no control socket)" >&2; exit 1; }
 SWTPM_PID="$(cat "$WORK/tpm/pid")"
 
 NET="user,id=n0"; [ -n "$SSHFWD" ] && NET="$NET,hostfwd=tcp::${SSHFWD}-:22"
@@ -75,5 +82,7 @@ if [ -n "$PASS" ]; then
   echo ">> will type the passphrase on serial after ${PASS_DELAY}s"
   { sleep "$PASS_DELAY"; printf '%s\n' "$PASS"; sleep 100000; } | "${QEMU[@]}" -serial mon:stdio
 else
-  exec "${QEMU[@]}" -serial mon:stdio
+  # NOT `exec` — exec would replace the shell and defeat the EXIT trap, leaking the
+  # swtpm daemon + the temp dir on every plain run.
+  "${QEMU[@]}" -serial mon:stdio
 fi

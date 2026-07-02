@@ -29,14 +29,14 @@ nixnas/
 │   │   ├── tpm2.nix           # TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`
 │   │   └── recovery-escrow.nix # break-glass recovery keyslot → Vaultwarden (hub tool + box status)
 │   ├── storage/
-│   │   └── connect.nix       # stage-2 LUKS unlock + optional ZFS import (thin; mounting is native)
+│   │   └── connect.nix       # POST-boot data unlock: nixnas-unlock + nixnas-storage.target
+│   │                         #   (serial one-passphrase LUKS opens + per-pool ZFS import)
 │   └── appliance/
 │       ├── base.nix           # stable hostName + Tailscale
+│       ├── identity.nix       # machine-id + SSH host key + tailscale state on /nix/persist
 │       ├── ssh.nix            # headless admin sshd (key-only root)
 │       ├── auto-upgrade.nix   # self-update: stage-only, never self-reboot
 │       └── optimizations.nix  # appliance defaults: zram, journald→RAM, no swap, store.preload
-│
-├── lib/default.nix           # mkImage — the TUI's build entry (host → diskoImages); pure, hub-side
 │
 ├── hosts/demo/default.nix    # FAKE zero-secrets host so the public repo builds standalone
 │                             #   (DEMO-* / RFC-5737 / .invalid placeholders; demo LUKS pass `nixnas-demo`)
@@ -52,8 +52,8 @@ nixnas/
 
 # flake outputs (public core):
 #   nixosModules.nixnas
-#   lib.mkImage
-#   packages.x86_64-linux.{image, imageScript}   (the TUI builds `.#image`)
+#   packages.x86_64-linux.{image, imageScript}   (the TUI runs `.#imageScript`, injecting the
+#                                                 LUKS key + SB PKI; `.#image` = sandbox demo raw)
 #   nixosConfigurations.demo                      (proves the core stands alone)
 #   checks.<sys>.demo-toplevel
 
@@ -62,9 +62,12 @@ nixnas-config/
 ├── flake.nix                 # inputs.nixnas.url = "github:<you>/nixnas"; mirrors the demo's
 │                             #   image machinery (disko + lanzaboote + cachyos overlay + stable builder)
 ├── host.nix                  # imports nixnas.nixosModules.nixnas; sets EVERY option literal here
-├── initrd_host_ed25519_key   # the box's initrd-SSH host key (git-tracked; flakes only see tracked files)
-└── secrets/                  # sops+age: Tailscale authkey, Vaultwarden escrow creds, etc.
-                              # (the LUKS passphrase is NOT stored — the TUI prompts + shreds it)
+├── nixnas.config             # the TUI's own TOML: flake_dir + the SB-PKI sops file to inject
+└── secrets/                  # sops+age: Tailscale authkey, Vaultwarden escrow creds, the Secure
+                              #   Boot PKI tar. (The LUKS passphrase is NOT stored — the TUI
+                              #   prompts + shreds it. The initrd unlock host key is not stored
+                              #   either — it is generated + TPM-sealed on the box's first boot;
+                              #   only a no-TPM box git-tracks a plaintext hostKeyPath key.)
 ```
 
 ### The only file pairing the generic module with private literals
@@ -75,11 +78,10 @@ nixnas-config/
     enable   = true;
     hostName = "nas";                                    # private literal
     admin.authorizedKeys = [ "ssh-ed25519 …" ];          # your keys
-    boot.remoteUnlock.hostKeyPath = ./initrd_host_ed25519_key;
     boot.usb.device = "/dev/disk/by-id/usb-…";           # the ONLY device nixnas partitions
     storage.unlock.hot0           = "/dev/disk/by-id/ata-…";      # serials, private
-    boot.secureBoot.enable = true;
-    crypto.tpm2.enable     = true;
+    boot.secureBoot.enable = true;                       # + keysSops for a stable SB identity
+    crypto.tpm2.enable     = true;                       # sealed initrd host key rides on this
     autoUpgrade.flake      = "github:you/nas-config#nas";
     # all BEHAVIOUR comes from the public module; only DATA lives here.
     # k3s / GPU / Samba / VMs are plain NixOS you add ALONGSIDE — NOT nixnas.* (see SCOPE.md).

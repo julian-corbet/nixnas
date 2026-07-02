@@ -1,13 +1,9 @@
 # nixnas — boot chain glue (UEFI + initrd) on the disko-built image.
 #
 # The disk LAYOUT lives in ./disk.nix; this module is the boot-time wiring:
-# systemd-boot (lanzaboote wraps it once Secure Boot lands), the serial console,
-# and the early kernel modules the initrd needs to see the USB stick + f2fs store.
-#
-# INCREMENT 1: plain systemd-boot on a removable image, root on f2fs (no LUKS / no
-# lanzaboote / no TPM2 yet) — goal is simply to BOOT the disko-f2fs-zstd image in the
-# test VM. Secure Boot signing, the LUKS+TPM2 unlock, impermanence and the CachyOS
-# kernel are layered in next, each validated in the VM.
+# systemd-boot (lanzaboote wraps its installer when Secure Boot is on — see
+# ./secureboot.nix), the serial console, and the early kernel modules the initrd
+# needs to see the USB stick + the f2fs store.
 { config, lib, ... }:
 let
   cfg = config.nixnas;
@@ -19,11 +15,15 @@ in
     boot.loader.efi.canTouchEfiVariables = false;
     boot.loader.grub.enable = false;
 
-    # systemd in the initrd — the supported path for the coming TPM2-LUKS unlock + lanzaboote.
+    # Short menu timeout: fast boot, but the generation menu (the guaranteed manual
+    # rollback) stays reachable with a keypress.
+    boot.loader.timeout = lib.mkDefault 1;
+
+    # systemd in the initrd — the supported path for the TPM2-LUKS unlock + lanzaboote.
     boot.initrd.systemd.enable = true;
 
-    # Serial console: the MC12-LE0 exposes SOL on ttyS0; it also lets the test VM be
-    # observed headlessly. ttyS0 is LAST so it becomes /dev/console.
+    # Serial console: headless boxes expose SOL/BMC serial on ttyS0, and it lets the
+    # test VM be observed headlessly. ttyS0 is LAST so it becomes /dev/console.
     boot.kernelParams = [
       "console=tty0"
       "console=ttyS0,115200"

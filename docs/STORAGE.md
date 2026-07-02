@@ -17,7 +17,7 @@ FAT ESP persist.
 does not outweigh f2fs's flash fit + the boot-speed win below).
 
 **Why compression at all, on a slow stick:** the stick is **< 10 MB/s**. Reading *compressed*
-bytes and decompressing on the 16-core 5950X is **faster to boot** than reading uncompressed —
+bytes and decompressing on a modern many-core CPU is **faster to boot** than reading uncompressed —
 the stick I/O is the bottleneck, decompression is ~free. Compression also writes *fewer*
 physical blocks → less flash wear. Both wins are the point; density is a bonus (see §3).
 
@@ -98,25 +98,31 @@ Every step is make-or-break; skipping one silently disables compression or block
    ```
 
 2. **Mount with the trigger** — `compress_algorithm=zstd:22` *alone compresses nothing*;
-   `compress_extension=*` is what arms it for all files:
+   `compress_extension=*` is what arms it for all files (the full option set, as shipped in
+   `modules/boot/disk.nix`):
    ```
-   compress_algorithm=zstd:22,compress_extension=*,compress_chksum,
-   nocompress_extension=sqlite,compress_log_size=2,noatime,lazytime,nodiscard
+   compress_algorithm=zstd:22,compress_log_size=2,compress_extension=*,compress_chksum,
+   nocompress_extension=sqlite,nocompress_extension=sqlite-wal,nocompress_extension=sqlite-shm,
+   flush_merge,checkpoint_merge,compress_cache,fsync_mode=nobarrier,noatime,lazytime,nodiscard
    ```
-   Keep `compress_mode=fs` (default) — do **not** set `compress_mode=user`.
+   Keep `compress_mode=fs` (default) — do **not** set `compress_mode=user`. The non-compression
+   flags are explained in OPTIMIZATIONS.md §3.
 
 3. **Seed generation 1 THROUGH a compressed mount** — compression is fixed per-inode at file
    creation and cannot be applied retroactively (`chattr +c` fails on non-empty files). So the
    image builder must write the gen-1 closure onto an **already-zstd-mounted** f2fs:
    - Use **`disko`** (mounts the f2fs with the compress options + dm_crypt and writes the
-     closure through the mount in a real-kernel VM). `disko.imageBuilder.extraRootModules =
-     [ "f2fs" "dm_crypt" ]`.
+     closure through the mount in a real-kernel VM; the builder VM runs from a stable-nixpkgs
+     kernel — `disko.imageBuilder.pkgs`/`kernelPackages` in the consumer flake — whose stock
+     module set covers f2fs + dm_crypt).
    - **`image.repart` cannot** do this (no f2fs entry, no LUKS, never populates) and
      **`sload.f2fs` cannot do zstd** (f2fs-tools 1.16.0 `-a` accepts only `lzo`/`lz4`).
    - Verify with `f2fs_io get_cblocks` on a sample of seeded files **before flashing**.
 
-4. **Carve out the Nix state DB** — `nocompress_extension=sqlite` (covers `db.sqlite`,
-   `-wal`, `-shm`). The DB is mmap'd + randomly overwritten; compressing it is slow, and if a
+4. **Carve out the Nix state DB** — `nocompress_extension=sqlite` PLUS explicit
+   `sqlite-wal`/`sqlite-shm` entries: the f2fs extension match is EXACT (the part after the
+   last dot), so `sqlite` alone would NOT cover `db.sqlite-wal`/`db.sqlite-shm` — the sidecars
+   that are rewritten most. The DB is mmap'd + randomly overwritten; compressing it is slow, and if a
    release pass ever touched it the DB would become write-blocked → total Nix breakage. The
    store is mounted at **`/nix`** (not `/nix/store`) so `/nix/var/nix/{db,profiles,gcroots}`
    persist under tmpfs-root — which is exactly why the DB lands here and must be excluded.
@@ -158,21 +164,19 @@ So the ZFS cap puts us in the safe zone automatically — **no separate kernel p
 f2fs** (it is in-tree and comes with the kernel).
 
 **Kernel choice lives in [`KERNEL.md`](KERNEL.md):** the **CachyOS kernel** via the
-`xddxdd/nix-cachyos-kernel` flake (auto-syncs with nixpkgs → always the current kernel, no pin)
+`xddxdd/nix-cachyos-kernel` flake (`release` branch + the `pinned` overlay: the flake.lock pins a
+rev the maintainer's cache was built for; catch up = a deliberate `nix flake update`)
 with **`zfs_cachyos`**, tuned `x86_64-v3` + ThinLTO. It tracks newest mainline (≈ 7.1.x), trivially
 ≥ 6.12, so every f2fs compression feature holds. Running ZFS ahead of upstream's cap is safe **not**
 by software choice but **structurally** — generation rollback (OS) + scrub/snapshot/backup (pool);
 see KERNEL.md §5.
 
 **f2fs is in-tree** (`F2FS_FS = module`, `F2FS_FS_COMPRESSION = yes`; `F2FS_FS_ZSTD` is `default y`
-under compression → baked into `f2fs.ko`). Assert it at build time *without* a kernel rebuild
-(forcing the config busts the cache → slow-stick kernel compile):
-```nix
-assertions = [{
-  assertion = config.boot.kernelPackages.kernel.config.isEnabled "F2FS_FS_ZSTD";
-  message = "nixnas requires F2FS_FS_ZSTD=y (the /nix store is f2fs zstd:22).";
-}];
-```
+under compression → baked into `f2fs.ko`). This is NOT asserted at eval time (externally-packaged
+kernels don't reliably expose a queryable `.config`, and forcing the config would bust the cache →
+a slow kernel compile); it is proven where it matters — **at runtime in the built image**: the
+`verify-image` DEV self-check reports the live `compress_algorithm=zstd:22` mount and per-file
+compressed-block counts, and a store that mounted without zstd support would fail it loudly.
 
 **Coexistence:** f2fs goes in the **initrd** (`boot.initrd.kernelModules = [ "f2fs" ]`,
 `boot.initrd.systemd.enable`); the operator's **ZFS pools stay out of stage 1** (imported in
@@ -206,8 +210,8 @@ hash. Cryptographic userspace integrity is the deferred **dm-integrity-below-LUK
 `scripts/verify-f2fs-store.sh` runs the loop-device probes (default reclaim, release reclaims,
 released-is-write-blocked-but-deletable, hardlink-to-released, release idempotency, sload-can't-
 zstd, fsck-clean). Two probes are target-only (real Nix-store GC; built-image initrd carries
-f2fs-zstd) and run during QEMU boot-testing. The CachyOS laptop kernel ships **no f2fs module**,
-so all f2fs verification happens on the cluster / in QEMU, never on the laptop.
+f2fs-zstd) and run during QEMU boot-testing. A dev machine whose kernel ships no f2fs module
+can't run the loop-device probes — all f2fs verification then happens in the QEMU boot test.
 
 ## 9. Sources
 
