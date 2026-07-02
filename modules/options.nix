@@ -138,12 +138,16 @@ in
         description = "CachyOS kernel line from the xddxdd/nix-cachyos-kernel flake.";
       };
       march = mkOption {
-        type = types.enum [ "x86_64-v1" "x86_64-v2" "x86_64-v3" "x86_64-v4" "znver3" "native" ];
+        type = types.enum [ "x86_64-v1" "x86_64-v2" "x86_64-v3" "x86_64-v4" "zen4" "znver3" "native" ];
         default = "x86_64-v1";
         description = ''
           Microarchitecture build target. Default `x86_64-v1` boots anywhere (the safe
-          general-distro default). A host built for a known CPU sets `x86_64-v3`/`znver3`/
-          `native` — safe because the image is built locally for that box.
+          general-distro default). For a known CPU pick the highest **cache-available** level so
+          the box pulls a pre-built kernel instead of recompiling: the lantian cache carries
+          `x86_64-v2/-v3/-v4` and `zen4`. A Zen 3 CPU (Ryzen 5000, e.g. the 5950X) is `x86_64-v3`;
+          Zen 4 is `zen4`. `znver3`/`native` are NOT pre-built — selecting them forces a
+          from-source kernel build on the box (avoid; kernel.nix errors early if the combo is
+          absent from the cache).
         '';
       };
       lto = mkOption {

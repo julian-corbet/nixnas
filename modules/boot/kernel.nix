@@ -13,10 +13,23 @@ let
   ltoSuffix = lib.optionalString (cfg.kernel.lto != "none") "-lto";
   marchSuffix = lib.optionalString (cfg.kernel.march != "x86_64-v1") "-${cfg.kernel.march}";
   kernelAttr = "linuxPackages-cachyos-${cfg.kernel.variant}${ltoSuffix}${marchSuffix}";
+  # The lantian cache pre-builds only SOME (variant × lto × march) combos. If the requested one
+  # is absent, `pkgs.cachyosKernels.${kernelAttr}` throws a cryptic "attribute missing". Fail with
+  # an actionable message instead, and make clear a missing combo would force a from-source kernel
+  # build on the box — which defeats nixnas's pull-from-cache design.
+  kernelPackages = pkgs.cachyosKernels.${kernelAttr} or (throw ''
+    nixnas.kernel: no pre-built CachyOS kernel `${kernelAttr}` in the pinned cachyosKernels set.
+    The lantian binary cache pre-builds only certain (variant × lto × march) combinations; this one
+    is not among them, so nixnas would have to COMPILE the kernel from source on the box — which
+    defeats the "pull the kernel from the cache, never recompile" design (docs/KERNEL.md). Pick a
+    cache-available march for kernel.variant=${cfg.kernel.variant} (commonly x86_64-v2 / x86_64-v3 /
+    x86_64-v4 / zen4; the baseline default is x86_64-v1). NOTE: `znver3` and `native` are NOT
+    pre-built — a Zen 3 CPU (e.g. Ryzen 5000) is x86_64-v3, Zen 4 is zen4.
+  '');
 in
 {
   config = lib.mkIf cfg.enable {
-    boot.kernelPackages = pkgs.cachyosKernels.${kernelAttr};
+    boot.kernelPackages = kernelPackages;
 
     # CachyOS ZFS matches the (>upstream-cap) CachyOS kernel. Set when zfs.source=cachyos;
     # only actually built once a data pool enables ZFS. Safety is structural (rollback +
