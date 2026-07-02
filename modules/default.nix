@@ -23,6 +23,7 @@
                              # (thin — mounting itself is native NixOS: fileSystems / boot.zfs)
 
     ./appliance/base.nix          # stable identity (hostName) + Tailscale
+    ./appliance/identity.nix      # machine-id, SSH host keys, tailscale state — persisted on the stick
     ./appliance/ssh.nix           # headless admin sshd (key-only root)
     ./appliance/auto-upgrade.nix  # self-update: stage-only, never self-reboot
     ./appliance/optimizations.nix # ⬢ appliance defaults: zram, journald→RAM, no swap, store.preload

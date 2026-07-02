@@ -64,20 +64,36 @@ in
 
     # ── Common: bring NIC up in the initrd for the remote unlock hand-off. ───────────────
     {
-      assertions = [{
-        assertion = sealActive || cfg.boot.remoteUnlock.hostKeyPath != null;
-        message = ''
-          nixnas.boot.remoteUnlock is enabled but no initrd-SSH host key is configured.
-          Either:
-            • Set crypto.tpm2.enable = true (keeps sealHostKey = true, the secure default):
-              the key is generated + sealed to this box's TPM on first boot; from the 2nd
-              boot the initrd unseals it. First boot needs serial/IPMI-SOL console access.
-            • Or set boot.remoteUnlock.sealHostKey = false and supply a plaintext key via
-              boot.remoteUnlock.hostKeyPath (key is embedded in the initrd at build time,
-              lands on the plaintext ESP — LAN/tailnet-only).
-            • Or set boot.remoteUnlock.enable = false if you unlock over IPMI-SOL instead.
-        '';
-      }];
+      assertions = [
+        {
+          assertion = sealActive || cfg.boot.remoteUnlock.hostKeyPath != null;
+          message = ''
+            nixnas.boot.remoteUnlock is enabled but no initrd-SSH host key is configured.
+            Either:
+              • Set crypto.tpm2.enable = true (keeps sealHostKey = true, the secure default):
+                the key is generated + sealed to this box's TPM on first boot; from the 2nd
+                boot the initrd unseals it. First boot needs serial/IPMI-SOL console access.
+              • Or set boot.remoteUnlock.sealHostKey = false and supply a plaintext key via
+                boot.remoteUnlock.hostKeyPath (key is embedded in the initrd at build time,
+                lands on the plaintext ESP — LAN/tailnet-only).
+              • Or set boot.remoteUnlock.enable = false if you unlock over IPMI-SOL instead.
+          '';
+        }
+        {
+          # Path A's delivery vehicle is the LANZABOOTE stub: it is what scans
+          # \loader\credentials\*.cred and packs the sealed key into the initrd. Plain
+          # systemd-boot (no Secure Boot) boots kernel+initrd directly — no stub, no
+          # credential, and initrd sshd would fail LoadCredentialEncrypted on EVERY boot.
+          # Fail the build instead of shipping a silently-dead unlock path.
+          assertion = sealActive -> cfg.boot.secureBoot.enable;
+          message = ''
+            nixnas.boot.remoteUnlock.sealHostKey = true requires nixnas.boot.secureBoot.enable:
+            only the lanzaboote (UKI) stub delivers the TPM2-sealed host-key credential into
+            the initrd. Enable Secure Boot, or set sealHostKey = false with a plaintext
+            hostKeyPath, or set remoteUnlock.enable = false (IPMI-SOL/serial unlock).
+          '';
+        }
+      ];
 
       # Bring networking up in the initrd, then run sshd there for the unlock hand-off.
       boot.initrd.network.enable = true;

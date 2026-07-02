@@ -22,8 +22,10 @@ in
     # this value, so it bounds the signed UKIs on the ESP for both the SB-on and SB-off paths.
     boot.loader.systemd-boot.configurationLimit = cfg.boot.keepGenerations;
 
-    # Write the boot counter onto new entries (lanzaboote owns the installer under Secure
-    # Boot, so this is its knob). 0 disables counting.
+    # Write the boot counter onto new entries. This is LANZABOOTE's knob — boot-counting
+    # only exists on the Secure Boot path (the lanzaboote stub renames/counts the entries);
+    # without secureBoot.enable the option would be a silent no-op, so it is gated: the
+    # kept-generation menu remains the (guaranteed) rollback on non-SB configs.
     #
     # VALIDATED in the VM: lanzaboote's stub DOES count down — gen-1 installs as `…+3`,
     # the first boot renames it to `…+2-1` (2 tries left, 1 done). The "mark good" half
@@ -34,6 +36,6 @@ in
     # "bad", but systemd-boot still boots a bad entry as a LAST RESORT (no brick), and the
     # manual generation menu (kept by `keepGenerations`) is the GUARANTEED rollback. So the
     # structural failsafe stands; automatic boot-counting rollback awaits a real-UEFI spike.
-    boot.lanzaboote.bootCounting.initialTries = cfg.boot.tries;
+    boot.lanzaboote.bootCounting.initialTries = lib.mkIf cfg.boot.secureBoot.enable cfg.boot.tries;
   };
 }

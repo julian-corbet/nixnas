@@ -4,17 +4,39 @@
 //! The dangerous block-device WRITE is delegated to `caligula` (a separate GPL-3.0
 //! tool invoked as a subprocess — arm's-length, so nixnas stays Apache-2.0). It
 //! brings disk detection, confirmation, and post-write verification. We only do the
-//! safe READ (backup) ourselves.
+//! safe READ (backup) ourselves, and we independently VERIFY the device afterwards —
+//! caligula exits 0 when its confirmation is declined, so its exit code alone must
+//! not be trusted as "written".
 
+use crate::config::config_dir;
 use anyhow::{bail, Context, Result};
-use dialoguer::{theme::ColorfulTheme, Confirm, Select};
-use serde::Deserialize;
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use serde::{Deserialize, Deserializer};
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, Deserialize)]
 struct LsblkOut {
     blockdevices: Vec<BlockDevice>,
+}
+
+/// lsblk emits real JSON booleans on current util-linux but "0"/"1" strings on
+/// older releases — accept both instead of failing the parse.
+fn flexible_bool<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        B(bool),
+        I(i64),
+        S(String),
+    }
+    Ok(match Option::<Raw>::deserialize(d)? {
+        None => None,
+        Some(Raw::B(b)) => Some(b),
+        Some(Raw::I(i)) => Some(i != 0),
+        Some(Raw::S(s)) => Some(s == "1" || s.eq_ignore_ascii_case("true")),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,7 +47,7 @@ struct BlockDevice {
     #[serde(default)]
     model: Option<String>,
     /// removable
-    #[serde(default)]
+    #[serde(default, deserialize_with = "flexible_bool")]
     rm: Option<bool>,
     #[serde(rename = "type", default)]
     dev_type: Option<String>,
@@ -49,9 +71,31 @@ fn removable_devices() -> Result<Vec<BlockDevice>> {
         .collect())
 }
 
+/// Compare the first `len` bytes of two files. Used to prove the device actually
+/// carries the image after caligula returns (its exit code can't be trusted alone).
+fn same_prefix(a: &Path, b: &Path, len: usize) -> Result<bool> {
+    let read_prefix = |p: &Path| -> Result<Vec<u8>> {
+        let mut f = std::fs::File::open(p).with_context(|| format!("opening {}", p.display()))?;
+        let mut buf = vec![0u8; len];
+        let mut got = 0;
+        while got < len {
+            let n = f.read(&mut buf[got..]).with_context(|| format!("reading {}", p.display()))?;
+            if n == 0 {
+                break;
+            }
+            got += n;
+        }
+        buf.truncate(got);
+        Ok(buf)
+    };
+    let pa = read_prefix(a)?;
+    let pb = read_prefix(b)?;
+    Ok(!pa.is_empty() && pa.len() == pb.len().min(pa.len()) && pb[..pa.len()] == pa[..])
+}
+
 pub fn flash(theme: &ColorfulTheme, config_path: &Path) -> Result<()> {
-    let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-    // The disko `.#image` output is a DIRECTORY holding the `.raw`; find the raw file
+    let dir = config_dir(config_path);
+    // The image build output is a DIRECTORY holding the `.raw`; find the raw file
     // (caligula burns the file, not the directory).
     let out_link = dir.join(".nixnas-image");
     let image = std::fs::read_dir(&out_link)
@@ -103,16 +147,32 @@ pub fn flash(theme: &ColorfulTheme, config_path: &Path) -> Result<()> {
         }
     }
 
-    // Hand the dangerous overwrite to caligula (post-write verify included).
+    // The point of no return is OURS, typed in full — not buried in a subprocess.
+    let typed: String = Input::with_theme(theme)
+        .with_prompt(format!("Type the device path ({dev}) to confirm the overwrite"))
+        .interact_text()?;
+    if typed.trim() != dev {
+        bail!("confirmation did not match {dev} — nothing written");
+    }
+
+    // Hand the write to caligula (its own prompt + post-write verify still apply).
     let status = Command::new("caligula")
         .arg("burn")
         .arg(&image)
-        .args(["-o", &dev, "--interactive", "never"])
+        .args(["-o", &dev])
         .status()
         .context("running `caligula burn` (is caligula installed?)")?;
     if !status.success() {
         bail!("caligula burn failed");
     }
-    println!("Done — {dev} is now a nixnas stick.");
+
+    // Independent proof: the stick must now START with the image (caligula exits 0
+    // even when its confirmation is declined — never report success on trust).
+    if !same_prefix(&image, Path::new(&dev), 4 * 1024 * 1024)
+        .context("verifying the written device")?
+    {
+        bail!("{dev} does not carry the image header — the write was declined or failed");
+    }
+    println!("Done — {dev} is now a nixnas stick (header verified).");
     Ok(())
 }

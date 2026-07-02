@@ -115,16 +115,18 @@ in
           description = "FAT ESP size: lanzaboote-signed systemd-boot + one signed UKI per kept generation (~8 per GiB).";
         };
         luksPassphraseFile = mkOption {
-          type = types.nullOr types.path;
+          type = types.nullOr types.str;
           default = null;
           description = ''
-            Build-machine path to the file holding the store's LUKS passphrase, used ONCE to
-            `luksFormat` the store at image-build time (it becomes the recovery keyslot; the
-            TPM2+PIN keyslot is enrolled later on the real hardware). The TUI writes the
-            operator's passphrase to a gitignored file and points this at it, then shreds it
-            after the build. Null = the public demo passphrase `nixnas-demo`. NOTE: whatever
-            this contains is briefly a world-readable store path on the BUILD machine — build
-            on a trusted box. See docs/ARCHITECTURE §6.
+            Path INSIDE the image-builder VM of the file holding the store's LUKS
+            passphrase, used ONCE to `luksFormat` the store at image-build time (it becomes
+            the recovery keyslot; the TPM2+PIN keyslot is enrolled later on the real
+            hardware). Null (the default) means the conventional path
+            `/tmp/nixnas-luks.key`, which the TUI injects into the builder VM with
+            `imageScript --pre-format-files` — the passphrase never touches the Nix store,
+            and a build WITHOUT the injected file FAILS (fail-closed: no silent fallback).
+            The public demo host instead points this at a store-path file holding the
+            published demo passphrase `nixnas-demo` — an explicit, visible opt-in.
           '';
         };
       };
@@ -155,11 +157,9 @@ in
         default = "thin";
         description = "Link-time optimisation. `thin` is cheap + measurable; `full` is RAM-heavy for little gain.";
       };
-      cpusched = mkOption {
-        type = types.enum [ "eevdf" "bore" "bmq" "rt" "rt-bore" ];
-        default = "eevdf";
-        description = "CPU scheduler. `eevdf` is the server-correct baseline; `bore` favours desktop interactivity.";
-      };
+      # (No cpusched option: the pre-built cachyosKernels variants bake eevdf in; a
+      # scheduler knob here would be a silent no-op. Pick via `variant` if the flake
+      # ever exposes scheduler variants.)
     };
 
     ## ── Crypto: single passphrase = TPM2 PIN (only the stick binds to the TPM) ──
@@ -234,14 +234,19 @@ in
         default = { };
         example = literalExpression ''{ tubearchv = "/dev/disk/by-id/ata-ST5000…"; }'';
         description = ''
-          LUKS members to unlock in stage-2, as `name → /dev/disk/by-id/…`. Each opens as
-          `/dev/mapper/<name>` (a STABLE mapper name you then reference in `fileSystems`),
-          with the SINGLE shared passphrase — the store's TPM2 PIN, reused across devices via
-          the kernel keyring — NON-fatally (a missing one never blocks boot). Storage-agnostic:
-          LUKS-under-ZFS / btrfs / xfs are all the same here. nixnas only OPENS these; you
-          MOUNT the result with native NixOS (`fileSystems`, `boot.zfs.extraPools`) at any
-          mount point, and route persistent state onto them with `environment.persistence`
-          (the impermanence module). No `luksFormat`, ever.
+          LUKS data members to unlock POST-boot, as `name → /dev/disk/by-id/…`. Each opens
+          as `/dev/mapper/<name>` (a STABLE mapper name you then reference in
+          `fileSystems`). Members are `noauto`: the OS boots fully with no data secret, and
+          the operator runs `nixnas-unlock` (over SSH/Tailscale), which raises
+          `nixnas-storage.target` — members open SERIALLY with ONE passphrase (systemd's
+          kernel-keyring cache covers the rest), NON-fatally (a missing disk never fails
+          the set). Data members are passphrase-only by design: never TPM-bound, never
+          keyfile-persisted — a seized disk yields nothing, and a disk pulled into another
+          machine opens with the passphrase alone. Storage-agnostic: LUKS-under-ZFS /
+          btrfs / xfs are all the same here. nixnas only OPENS these; you MOUNT the result
+          with native NixOS `fileSystems` (add `"noauto"
+          "x-systemd.wanted-by=nixnas-storage.target"` to their options) and gate
+          dependent services on `nixnas-storage.target`. No `luksFormat`, ever.
         '';
       };
       zfsPools = mkOption {
@@ -249,9 +254,12 @@ in
         default = [ ];
         example = literalExpression ''[ "hot" "cold" ]'';
         description = ''
-          Optional convenience: ZFS pool names to import NON-fatally (`boot.zfs.extraPools`,
-          with `devNodes=/dev/mapper` for ZFS-on-LUKS). Non-ZFS storage needs nothing here —
-          mount it with plain `fileSystems`.
+          Optional convenience: ZFS pool names to import as part of the post-boot unlock.
+          Each pool gets a `nixnas-import-<pool>` service (ordered after the LUKS unlocks,
+          scanning `/dev/mapper`) pulled in by `nixnas-storage.target`; datasets self-mount
+          at their `mountpoint` properties. Also enables ZFS support in the image
+          (`boot.supportedFilesystems.zfs`). Non-ZFS storage needs nothing here — mount it
+          with plain `fileSystems` hooked to the same target.
         '';
       };
     };

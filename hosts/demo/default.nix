@@ -3,11 +3,17 @@
 # Every value is an RFC-5737 (203.0.113.0/24) / RFC-2606 (.invalid) / DEMO-*
 # placeholder. This host ships in the PUBLIC repo; the real machine lives in a
 # separate, private overlay (see ../../templates/host).
-{ lib, ... }:
+{ lib, pkgs, ... }:
 {
   nixnas = {
     enable = true;
     hostName = "demo";
+
+    # DEMO ONLY — an explicit, visible opt-in to the PUBLIC demo passphrase
+    # ("nixnas-demo"), so the sandbox image build works with zero secrets. A real
+    # host leaves this at null: the TUI then injects the operator's passphrase into
+    # the builder VM and a build without it fails (fail-closed).
+    boot.usb.luksPassphraseFile = toString (pkgs.writeText "nixnas-demo-luks" "nixnas-demo");
 
     # Throwaway DEMO key (test/ssh/demo_key) — for the test VM only. A real host lists the
     # operator's own keys here; they authorise BOTH the initrd remote-unlock and admin sshd.

@@ -13,9 +13,13 @@
 #
 # The store is LUKS2-encrypted (single passphrase = the future TPM2 PIN). `passwordFile`
 # (not settings.keyFile) gives an INTERACTIVE runtime unlock prompt — correct here, because a
-# keyfile would live INSIDE the encrypted store and so be unavailable at unlock time. The demo
-# formats with the passphrase "nixnas-demo"; a real host's passphrase is supplied by the TUI at
-# format time (and TPM2-PIN enrolment is a later increment). See docs/STORAGE.md §4, ARCHITECTURE §6.
+# keyfile would live INSIDE the encrypted store and so be unavailable at unlock time.
+#
+# PASSPHRASE DELIVERY (fail-closed): a real host leaves `boot.usb.luksPassphraseFile` at null,
+# which resolves to the conventional in-VM path /tmp/nixnas-luks.key — the TUI injects the
+# operator's passphrase there with `imageScript --pre-format-files`, so it never touches the
+# Nix store. A build WITHOUT the injected file fails at `luksFormat` (no silent fallback).
+# Only the public demo host opts into a store-path demo passphrase, explicitly.
 { config, lib, pkgs, ... }:
 let
   cfg = config.nixnas;
@@ -54,13 +58,14 @@ in
                 type = "luks";
                 name = "cryptstore";
                 # Format-time passphrase (becomes the recovery keyslot; TPM2+PIN is enrolled
-                # later on hardware). The operator's passphrase comes from the TUI via
-                # `boot.usb.luksPassphraseFile`; null = the public demo passphrase. Either way
-                # it is a store path so disko can read it inside the image-builder VM.
+                # later on hardware). The path is read INSIDE the image-builder VM: the TUI
+                # places the real passphrase at the conventional path via
+                # `--pre-format-files`; a build without it FAILS (fail-closed). The demo host
+                # sets an explicit store-path demo passphrase instead.
                 passwordFile =
                   if cfg.boot.usb.luksPassphraseFile != null
-                  then builtins.path { path = cfg.boot.usb.luksPassphraseFile; name = "nixnas-luks-pass"; }
-                  else "${pkgs.writeText "nixnas-demo-luks" "nixnas-demo"}";
+                  then cfg.boot.usb.luksPassphraseFile
+                  else "/tmp/nixnas-luks.key";
                 content = {
                 type = "filesystem";
                 format = "f2fs";
