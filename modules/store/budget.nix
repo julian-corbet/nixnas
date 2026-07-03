@@ -12,7 +12,10 @@ let
   cfg = config.nixnas;
 in
 {
-  config = lib.mkIf (cfg.enable && cfg.store.maxClosureBytes != null) {
+  # Applies to STICK-RESIDENT systems only (store.location = "usb") — the usb appliance AND
+  # the hot-mode RESCUE (a minimal usb nixnas), both of which the stick must hold. A hot-mode
+  # MAIN config's store is unlimited on the pool, so the budget is inert there.
+  config = lib.mkIf (cfg.enable && cfg.store.location == "usb" && cfg.store.maxClosureBytes != null) {
     system.build.storeClosureBudget =
       let
         closure = pkgs.closureInfo { rootPaths = [ config.system.build.toplevel ]; };
