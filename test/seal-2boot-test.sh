@@ -40,11 +40,19 @@ esac; shift; done
 [ -f "$IMG" ] || { echo "no such image: $IMG" >&2; exit 1; }
 
 # --- OVMF firmware (non-secboot: the seal binds to PCR 7 = "SB disabled", stable both boots) ---
-FWDIR=""
-for d in /usr/share/edk2-ovmf/x64 /usr/share/edk2/x64 /usr/share/OVMF; do
-  [ -e "$d/OVMF_CODE.4m.fd" ] && { FWDIR="$d"; break; }
-done
-[ -n "$FWDIR" ] || { echo "OVMF firmware not found (install edk2-ovmf)" >&2; exit 1; }
+# Portable across distros: Arch names it OVMF_CODE.4m.fd, Debian/Ubuntu OVMF_CODE_4M.fd,
+# older/other layouts OVMF_CODE.fd. $OVMF_CODE / $OVMF_VARS env override wins (CI can inject).
+find_fw() { # find_fw "name1 name2 …" → prints first existing path under the known dirs
+  local d n
+  for d in /usr/share/edk2-ovmf/x64 /usr/share/edk2/x64 /usr/share/OVMF /usr/share/ovmf/x64 /usr/share/qemu; do
+    for n in $1; do [ -e "$d/$n" ] && { printf '%s' "$d/$n"; return 0; }; done
+  done
+  return 1
+}
+OVMF_CODE="${OVMF_CODE:-$(find_fw 'OVMF_CODE.4m.fd OVMF_CODE_4M.fd OVMF_CODE.fd')}" \
+  || { echo "OVMF_CODE firmware not found (install edk2-ovmf / ovmf, or set \$OVMF_CODE)" >&2; exit 1; }
+OVMF_VARS_TMPL="${OVMF_VARS:-$(find_fw 'OVMF_VARS.4m.fd OVMF_VARS_4M.fd OVMF_VARS.fd')}" \
+  || { echo "OVMF_VARS template not found (set \$OVMF_VARS)" >&2; exit 1; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d /tmp/nixnas-2boot.XXXXXX)"
@@ -76,7 +84,7 @@ fi
 echo ">> preparing persistent scratch (writable copy; original untouched) …"
 cp --sparse=always "$IMG" "$SCRATCH"
 chmod u+rw "$SCRATCH"   # the source .raw is 0444 (nix store); QEMU needs the scratch writable
-cp "$FWDIR/OVMF_VARS.4m.fd" "$WORK/OVMF_VARS.fd"   # persistent UEFI vars, reused both boots
+cp "$OVMF_VARS_TMPL" "$WORK/OVMF_VARS.fd"   # persistent UEFI vars, reused both boots
 
 # Software TPM2. A FRESH swtpm per boot, both against the SAME persistent --tpmstate dir:
 # the state dir persists the SRK/NV (so the sealed blob stays decryptable), while each boot
@@ -108,7 +116,7 @@ run_qemu() { # run_qemu <logfile>
     -machine q35,smm=on,accel=kvm -cpu host -smp 2 -m 2048 \
     -global ICH9-LPC.disable_s3=1 \
     -global driver=cfi.pflash01,property=secure,value=on \
-    -drive if=pflash,format=raw,unit=0,readonly=on,file="$FWDIR/OVMF_CODE.4m.fd" \
+    -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file="$WORK/OVMF_VARS.fd" \
     -chardev socket,id=chrtpm,path="$TPM_SOCK" \
     -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-crb,tpmdev=tpm0 \

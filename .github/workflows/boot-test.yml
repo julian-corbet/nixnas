@@ -1,0 +1,73 @@
+# Heavy boot-chain verification — for FREE, on GitHub's KVM-capable public runners.
+# Builds the zero-secrets demo image and boots it in QEMU + OVMF + swtpm to prove the
+# REAL boot chain end to end:
+#   * the TPM-sealed initrd-SSH host key survives a genuine power-cycle (seal on boot #1,
+#     the initrd unseals it on boot #2 → initrd-SSH → store unlocked over the network → login),
+#   * and is genuinely bound to THIS box's TPM (--tamper: a fresh/wrong TPM must NOT unseal —
+#     a non-unlock is the pass, the fail-closed proof).
+# swtpm is a full TPM2 and OVMF does real UEFI, so this needs no physical hardware. The only
+# things a VM can't cover are the firmware setup password and final on-the-real-board boot.
+name: boot-test
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'modules/**', 'hosts/**', 'flake.nix', 'flake.lock', 'test/**', '.github/workflows/boot-test.yml' ]
+  pull_request:
+    paths: [ 'modules/**', 'hosts/**', 'flake.nix', 'flake.lock', 'test/**' ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1'   # weekly, catches upstream (nixpkgs/kernel-cache) drift
+
+jobs:
+  boot:
+    name: build demo image + QEMU boot/seal/tamper
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # The demo closure + CachyOS kernel + the .raw need more than the default ~14 GB.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: false   # keep it quick; the tool-cache + swaps free enough
+
+      # QEMU needs /dev/kvm accessible to the runner user for accelerated boots.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install QEMU + swtpm + OVMF
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 swtpm ovmf
+          ls -l /usr/share/OVMF/ || true   # test/*.sh auto-detect the OVMF_CODE_4M.fd names
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          # Pull the CachyOS kernel from the maintainer's lantian cache (else it compiles from
+          # source — slow, RAM-heavy). accept-flake-config honours the flake's own substituters;
+          # extra-sandbox-paths lets disko's image-builder VM reach /dev/kvm if it wants it.
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://attic.xuyh0120.win/lantian
+            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
+            extra-sandbox-paths = /dev/kvm
+
+      - name: Build the demo image (sandbox diskoImages → nixnas.raw, demo passphrase)
+        run: |
+          nix build .#image --accept-flake-config --print-build-logs
+          find -L result -name '*.raw' -printf '%s bytes  %p\n'
+
+      - name: Boot #1 seals → boot #2 initrd unseals → unlock over SSH → login
+        run: test/seal-2boot-test.sh "$(find -L result -name '*.raw' | head -1)"
+
+      - name: Fail-closed — a wrong TPM must NOT unseal the host key (--tamper)
+        run: test/seal-2boot-test.sh "$(find -L result -name '*.raw' | head -1)" --tamper

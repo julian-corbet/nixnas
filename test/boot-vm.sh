@@ -29,14 +29,24 @@ while [ $# -gt 0 ]; do case "$1" in
   *) echo "unknown arg: $1" >&2; exit 2 ;;
 esac; shift; done
 
-# --- locate OVMF firmware (Arch ships it under edk2-ovmf/x64 or edk2/x64) ---
-FWDIR=""
-for d in /usr/share/edk2-ovmf/x64 /usr/share/edk2/x64 /usr/share/OVMF; do
-  [ -e "$d/OVMF_CODE.4m.fd" ] && { FWDIR="$d"; break; }
-done
-[ -n "$FWDIR" ] || { echo "OVMF firmware not found (install edk2-ovmf)" >&2; exit 1; }
-if [ "$SECBOOT" = 1 ]; then CODE="$FWDIR/OVMF_CODE.secboot.4m.fd"; else CODE="$FWDIR/OVMF_CODE.4m.fd"; fi
-[ -f "$CODE" ] || { echo "missing firmware: $CODE" >&2; exit 1; }
+# --- locate OVMF firmware (portable: Arch OVMF_CODE.4m.fd / Debian-Ubuntu OVMF_CODE_4M.fd /
+#     older OVMF_CODE.fd; $OVMF_CODE / $OVMF_VARS env override wins, e.g. for CI) ---
+find_fw() { # find_fw "name1 name2 …" → first existing path under the known dirs
+  local d n
+  for d in /usr/share/edk2-ovmf/x64 /usr/share/edk2/x64 /usr/share/OVMF /usr/share/ovmf/x64 /usr/share/qemu; do
+    for n in $1; do [ -e "$d/$n" ] && { printf '%s' "$d/$n"; return 0; }; done
+  done
+  return 1
+}
+if [ "$SECBOOT" = 1 ]; then
+  CODE="${OVMF_CODE:-$(find_fw 'OVMF_CODE.secboot.4m.fd OVMF_CODE_4M.secboot.fd OVMF_CODE.secboot.fd')}" \
+    || { echo "Secure-Boot OVMF code not found (set \$OVMF_CODE)" >&2; exit 1; }
+else
+  CODE="${OVMF_CODE:-$(find_fw 'OVMF_CODE.4m.fd OVMF_CODE_4M.fd OVMF_CODE.fd')}" \
+    || { echo "OVMF code not found (install edk2-ovmf / ovmf, or set \$OVMF_CODE)" >&2; exit 1; }
+fi
+OVMF_VARS_TMPL="${OVMF_VARS:-$(find_fw 'OVMF_VARS.4m.fd OVMF_VARS_4M.fd OVMF_VARS.fd')}" \
+  || { echo "OVMF vars template not found (set \$OVMF_VARS)" >&2; exit 1; }
 
 WORK="$(mktemp -d /tmp/nixnas-vm.XXXXXX)"
 SWTPM_PID=""
@@ -44,7 +54,7 @@ cleanup(){ [ -n "$SWTPM_PID" ] && kill "$SWTPM_PID" 2>/dev/null || true; rm -rf 
 trap cleanup EXIT
 
 # writable per-run copy of the UEFI variable store (holds SB keys / boot entries)
-cp "$FWDIR/OVMF_VARS.4m.fd" "$WORK/OVMF_VARS.fd"
+cp "$OVMF_VARS_TMPL" "$WORK/OVMF_VARS.fd"
 
 # --- software TPM2 (for TPM2-with-PIN unlock + measured boot) ---
 mkdir -p "$WORK/tpm"
