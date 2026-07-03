@@ -48,7 +48,10 @@ let
   };
 in
 {
-  config = mkIf (cfg.enable && cfg.crypto.tpm2.enable) {
+  # TPM2 auto-unlock is a STICK-store feature (the `cryptstore` mapper disko creates in usb
+  # mode). A hot-mode MAIN has no stick store and unlocks its hot store with the OPERATOR'S
+  # key (never TPM) — so this is usb-mode only (it still applies to the rescue, a usb nixnas).
+  config = mkIf (cfg.enable && cfg.crypto.tpm2.enable && cfg.store.location == "usb") {
     security.tpm2.enable = true;
     environment.systemPackages = [ pkgs.tpm2-tools enrollTpm2 ];
 
