@@ -378,13 +378,25 @@ in
         default = null;
         example = "nixnas-rescue";
         description = ''
-          The `nixosConfigurations.<attr>` name of the RESCUE system — a SECOND, minimal
-          `usb`-mode nixnas (sharing this host's appliance identity: kernel/pin, admin keys,
-          Secure Boot keys). The MAIN system's maintainer builds it from the SAME flake ref as
-          `autoUpgrade.flake` (i.e. the LATEST pulled revision, so it never goes stale after a
-          main update) at `<flake>#nixosConfigurations.<attr>.config.system.build.toplevel`, and
-          from the same nixpkgs pin (load-bearing — the rescue's ZFS/kernel must always import
-          the live pool). Required when `rescue.enable`.
+          SELF-UPGRADING boxes: the `nixosConfigurations.<attr>` name of the RESCUE system — a
+          SECOND, minimal `usb`-mode nixnas (sharing this host's appliance identity: kernel/pin,
+          admin keys, Secure Boot keys). The MAIN system's maintainer builds it from the SAME
+          flake ref as `autoUpgrade.flake` (i.e. the LATEST pulled revision, so it never goes
+          stale after a main update) and from the same nixpkgs pin (load-bearing — the rescue's
+          ZFS/kernel must always import the live pool). Set exactly ONE of `flakeAttr` (needs
+          `autoUpgrade.flake`) or `toplevel`.
+        '';
+      };
+      toplevel = mkOption {
+        type = types.nullOr types.package;
+        default = null;
+        example = literalExpression "self.nixosConfigurations.nixnas-rescue.config.system.build.toplevel";
+        description = ''
+          HUB-BUILT boxes (autoUpgrade off; closures pushed by deploy-rs or similar): the RESCUE
+          system's toplevel, passed as a derivation from the SAME flake evaluation as the main.
+          The maintainer script references it, so the rescue closure rides along with every main
+          deploy (into the hot store — no stick/budget cost) and can never go stale or skew pins.
+          No on-box flake pulls needed. Set exactly ONE of `flakeAttr` or `toplevel`.
         '';
       };
       extraPackages = mkOption {
@@ -392,12 +404,13 @@ in
         default = [ ];
         example = literalExpression "[ pkgs.claude-code pkgs.git ]";
         description = ''
-          Packages to include in the `hot`-mode RESCUE system (the small self-contained
-          system on the stick that boots when the pool is down). The rescue always carries
-          the repair essentials (zfs, cryptsetup, tpm2, sshd, a shell); this adds the
-          operator's own tools — e.g. an AI CLI you want available EXACTLY when you are
-          debugging a broken pool. They ride the stick's f2fs store and update via autoUpgrade
-          when they change (kept within the stick budget). Ignored in `usb` mode.
+          Extra packages for a STICK-RESIDENT system — set this ON the `hot`-mode RESCUE host
+          (which is a small usb-mode nixnas) to carry the operator's own tools, e.g. an AI CLI
+          you want available EXACTLY when you are debugging a broken pool. The rescue always
+          has the repair essentials (zfs, cryptsetup, tpm2, sshd, a shell); these ride the
+          stick's f2fs store, update when the rescue is rebuilt, and count against the stick
+          budget. Consumed in `usb` mode (appliance/base.nix); a hot-mode MAIN ignores it
+          (its own config lists packages normally, on the unlimited hot store).
         '';
       };
     };

@@ -13,6 +13,12 @@ in
     # Stable identity — keep it across re-images so the k3s/node identity is preserved.
     networking.hostName = mkDefault cfg.hostName;
 
+    # rescue.extraPackages: the operator's own tools on a STICK-RESIDENT system — set on the
+    # hot-mode RESCUE host (a usb-mode nixnas), where they must be present exactly when the
+    # pool is dead. usb-gated: a hot-mode MAIN puts tools in its (unlimited) own config.
+    environment.systemPackages =
+      lib.optionals (cfg.store.location == "usb") cfg.rescue.extraPackages;
+
     services.tailscale = mkIf cfg.tailscale.enable ({
       enable = true;
     } // optionalAttrs (cfg.tailscale.authKeySops != null) {

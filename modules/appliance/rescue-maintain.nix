@@ -41,9 +41,10 @@ let
     text = ''
       # ── inputs ─────────────────────────────────────────────────────────────
       # (defaults keep the script eval-safe when built for the demo, where these are null;
-      #  real use is gated by `active`, whose assertions require them non-null.)
+      #  real use is gated by `active`, whose assertions require a rescue source.)
       flake=${lib.escapeShellArg (if cfg.autoUpgrade.flake != null then cfg.autoUpgrade.flake else "")}
       attr=${lib.escapeShellArg (if cfg.rescue.flakeAttr != null then cfg.rescue.flakeAttr else "")}
+      pinnedTop=${if cfg.rescue.toplevel != null then cfg.rescue.toplevel else "\"\""}
       dbkey=${lib.escapeShellArg "${pkiDb}/db.key"}
       dbcert=${lib.escapeShellArg "${pkiDb}/db.pem"}
       esp=/boot
@@ -52,10 +53,18 @@ let
 
       { [ -r "$dbkey" ] && [ -r "$dbcert" ]; } || { echo "rescue-maintain: db signing keys not readable at $dbkey" >&2; exit 1; }
 
-      # ── 1. build the rescue toplevel from the SAME flake rev autoUpgrade uses ─
-      echo "rescue-maintain: building $flake#nixosConfigurations.$attr …"
-      rescueTop=$(nix build --no-link --print-out-paths \
-        "$flake#nixosConfigurations.$attr.config.system.build.toplevel")
+      # ── 1. resolve the rescue toplevel ────────────────────────────────────
+      # Hub-built boxes pin it at eval time (rescue.toplevel — the interpolation above makes
+      # it a store reference, so every main deploy carries the rescue closure). Self-upgrading
+      # boxes build it from the same flake rev autoUpgrade pulls.
+      if [ -n "$pinnedTop" ]; then
+        rescueTop="$pinnedTop"
+        echo "rescue-maintain: using the deploy-pinned rescue toplevel $rescueTop"
+      else
+        echo "rescue-maintain: building $flake#nixosConfigurations.$attr …"
+        rescueTop=$(nix build --no-link --print-out-paths \
+          "$flake#nixosConfigurations.$attr.config.system.build.toplevel")
+      fi
 
       if [ -f "$marker" ] && [ "$(cat "$marker")" = "$rescueTop" ] && [ -f "$espuki" ]; then
         echo "rescue-maintain: rescue unchanged ($rescueTop) — nothing to do."
@@ -68,11 +77,13 @@ let
       work=$(mktemp -d /run/nixnas-rescue.XXXXXX)
       trap 'rm -rf "$work"; [ -n "''${MNT:-}" ] && umount "$MNT" 2>/dev/null; cryptsetup close nixnas-rescue-store 2>/dev/null || true' EXIT
       uki="$work/nixnas-rescue.efi"
+      osrel=()   # cosmetic (menu title); only pass it if the toplevel exposes it
+      [ -e "$rescueTop/etc/os-release" ] && osrel=(--os-release="@$rescueTop/etc/os-release")
       ${pkgs.systemdUkify}/bin/ukify build \
         --linux="$rescueTop/kernel" \
         --initrd="$rescueTop/initrd" \
         --cmdline="$cmdline" \
-        --os-release="@$rescueTop/etc/os-release" \
+        "''${osrel[@]}" \
         --output="$uki"
 
       # ── 3. sign with the db key (same key lanzaboote enrolled) ───────────────
@@ -118,12 +129,12 @@ in
     (lib.mkIf active {
     assertions = [
       {
-        assertion = cfg.rescue.flakeAttr != null;
-        message = "nixnas.rescue.enable requires nixnas.rescue.flakeAttr (the rescue nixosConfigurations attr).";
+        assertion = (cfg.rescue.toplevel != null) != (cfg.rescue.flakeAttr != null);
+        message = "nixnas.rescue.enable needs exactly ONE rescue source: rescue.toplevel (hub-built/deploy-rs boxes) or rescue.flakeAttr (self-upgrading boxes).";
       }
       {
-        assertion = cfg.autoUpgrade.flake != null;
-        message = "the rescue maintainer builds from autoUpgrade.flake — set nixnas.autoUpgrade.flake.";
+        assertion = cfg.rescue.flakeAttr != null -> cfg.autoUpgrade.flake != null;
+        message = "rescue.flakeAttr builds from autoUpgrade.flake — set nixnas.autoUpgrade.flake (or use rescue.toplevel).";
       }
       {
         assertion = cfg.boot.secureBoot.enable && cfg.boot.secureBoot.keysSops != null;

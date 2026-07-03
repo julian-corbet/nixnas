@@ -56,13 +56,13 @@ in
       };
 
       # The MAIN system's /nix = the hot device. neededForBoot ⇒ mounted in stage-1.
-      # (options is a NON-empty list type — use mkIf so non-zfs leaves it at the default
-      # rather than an illegal empty list.)
+      # For zfs the dataset MUST be `mountpoint=legacy` (the initrd mounts it with mount(8);
+      # a property-managed mountpoint would need `zfsutil` and fights the boot ordering —
+      # legacy is the root-on-ZFS convention and the shape nixnas supports).
       fileSystems."/nix" = {
         device = hot.device;
         fsType = hot.fsType;
         neededForBoot = true;
-        options = lib.mkIf (hot.fsType == "zfs") [ "zfsutil" ];
       };
 
       # Open the hot store's LUKS members in the INITRD with the operator's passphrase —
