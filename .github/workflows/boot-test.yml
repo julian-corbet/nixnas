@@ -87,3 +87,43 @@ jobs:
 
       - name: Fail-closed — a wrong TPM must NOT unseal the host key (--tamper)
         run: test/seal-2boot-test.sh "$(find -L result -name '*.raw' | head -1)" --tamper
+
+  # HOT mode: prove the MAIN boots its /nix from an EXTERNAL, operator-key-unlocked LUKS
+  # device (modules/store/location.nix). Builds the demo-hot toplevel (a full build check),
+  # assembles a LUKS2+ext4 /nix disk with the closure, and direct-kernel-boots it — the initrd
+  # must unlock with the operator passphrase and reach login. See test/hot-boot-test.sh.
+  hot-boot:
+    name: hot mode — boot /nix from an external operator-key LUKS device
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install QEMU + disk tools (gdisk/cryptsetup/e2fsprogs)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 gdisk cryptsetup-bin e2fsprogs
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://attic.xuyh0120.win/lantian
+            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
+            extra-sandbox-paths = /dev/kvm
+      # sudo for losetup/cryptsetup/mount; preserve PATH (+sbin for the disk tools) + HOME so
+      # `nix` (daemon client) works as root and cryptsetup/sgdisk/losetup are found.
+      - name: Build the hot toplevel + boot /nix from the external LUKS device
+        run: sudo env "PATH=$PATH:/usr/sbin:/sbin" "HOME=$HOME" FLAKE=. PASS=nixnas-hot test/hot-boot-test.sh
