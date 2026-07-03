@@ -25,7 +25,11 @@ let
   cfg = config.nixnas;
 in
 {
-  config = lib.mkIf cfg.enable {
+  # The on-stick disko layout applies to STICK-RESIDENT systems only — `usb` mode (the
+  # appliance itself) AND the `hot`-mode RESCUE (which is a minimal usb-mode nixnas). A
+  # `hot`-mode MAIN config's /nix is the hot device (modules/store/location.nix), so it
+  # gets NO stick image here. See docs/HOT-MODE.md.
+  config = lib.mkIf (cfg.enable && cfg.store.location == "usb") {
     disko.devices = {
       # Impermanence: root is tmpfs. As a disko `nodev` device it is mounted at the
       # install rootMountPoint (so the installer has a "/") and becomes fileSystems."/".
