@@ -35,6 +35,10 @@ jobs:
         run: |
           nix build --no-link --print-out-paths \
             .#checks.x86_64-linux.demo-rescue-maintainer
+      - name: Build the hot installer (shellcheck nixnas-install-hot)
+        run: |
+          nix build --no-link --print-out-paths \
+            .#checks.x86_64-linux.demo-hot-installer
 
   tui:
     name: cargo check + clippy (tui)

@@ -111,6 +111,8 @@
         demo-hot-toplevel = self.nixosConfigurations.demo-hot.config.system.build.toplevel;
         # … and the rescue maintainer's shell passes shellcheck (writeShellApplication build).
         demo-rescue-maintainer = self.nixosConfigurations.demo.config.system.build.rescueMaintainer;
+        # … and the hot installer's shell too (ships on usb systems — the rescue's install role).
+        demo-hot-installer = self.nixosConfigurations.demo.config.system.build.hotInstaller;
       });
 
       # The personalised USB image. The TUI builds this locally for a real host; here

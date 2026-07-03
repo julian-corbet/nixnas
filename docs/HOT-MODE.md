@@ -92,23 +92,24 @@ fresh machine) — the rescue boots with zero pools and is the bootstrap environ
    pool exists.
 1. Build + flash the **rescue** image (ESP + rescue f2fs) to the stick via the TUI.
    (In `hot` mode the disko image is the RESCUE system; the main store is not in the image.)
-2. Boot the rescue → unlock the pool (`nixnas-unlock`) → stage the target: a tmpfs at
-   `/mnt/target` with the hot store mounted at `/mnt/target/nix` and the stick ESP at
-   `/mnt/target/boot`; seed the Secure Boot PKI into the target store
-   (`mkdir -p /mnt/target/nix/lanzaboote && cp -a /nix/lanzaboote/pki /mnt/target/nix/lanzaboote/`).
-3. Get the MAIN closure into the hot store — build it on your build machine and
-   `nix copy --to "ssh://<rescue>?remote-store=/mnt/target"` it over (hub-built doctrine),
-   or build on the box with `nix build --store /mnt/target` if it has the resources. Then
-   `nixos-install --root /mnt/target --system <toplevel> --no-root-passwd` registers the
-   profile in the hot store and installs the main's signed UKIs onto the shared ESP.
-   (NOT `nixos-rebuild` from the rescue — that would build into the rescue's own stick
+2. Boot the rescue → unlock (or step-0-create) the pool → get the MAIN closure onto the
+   box: build it on your build machine and `nix copy --to ssh://<rescue>` it over
+   (hub-built doctrine), or build on the box if it has the resources.
+3. Run the installer — one command does the whole error-prone dance, verified:
+
+   ```
+   nixnas-install-hot --device pool/system/nix /nix/store/…-nixos-system-main
+   ```
+
+   It stages the target (tmpfs + the hot store + the booted stick's ESP), seeds the Secure
+   Boot PKI into the target store, `nixos-install --system`s the main (profile in the hot
+   store, signed UKIs onto the shared ESP), pre-places the durable
+   `EFI/Linux/nixnas-rescue.efi` (the main's installer prunes the rescue's original
+   `nixos-*` entries, and rescue-maintain only takes over after the main first boots), and
+   verifies all of it before telling you to reboot.
+   (Do NOT `nixos-rebuild` from the rescue — that would build into the rescue's own stick
    store and switch the RESCUE's profile, not the main's.)
-4. Before rebooting, pre-place the rescue's own `EFI/Linux/nixnas-rescue.efi` (the main's
-   bootloader install prunes the rescue's original `nixos-*` entries — see the coexistence
-   rules above; the durable entry normally comes from rescue-maintain, which hasn't run
-   yet). One manual run of the same recipe: ukify the rescue's `/run/current-system`,
-   sbsign with the db key, copy to the ESP.
-5. Reboot → the main UKI's initrd asks for your key → unlocks the hot device → mounts the
+4. Reboot → the main UKI's initrd asks for your key → unlocks the hot device → mounts the
    now-populated `/nix` → the full system boots. From then on the main's rescue-maintain
    keeps the rescue entry + stick store current automatically.
 
