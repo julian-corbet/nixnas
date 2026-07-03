@@ -271,7 +271,49 @@ fn run_pipeline(
             step(2, StepState::Fail);
             bail!("extracting the Secure Boot PKI tar failed");
         }
-        pki_dir = Some(dir);
+        // The tar may carry the bundle bare (`keys/` at the top) or wrapped in a
+        // single top-level directory (e.g. `pki/`). lanzaboote needs the sbctl
+        // layout at the BUNDLE ROOT — descend into a lone wrapper directory, or
+        // the keys would land at /nix/lanzaboote/pki/pki/... and the bootloader
+        // install would fail deep inside the builder VM.
+        let mut bundle = dir.clone();
+        if !bundle.join("keys").is_dir() {
+            let entries: Vec<PathBuf> = std::fs::read_dir(&bundle)
+                .context("listing the extracted PKI tar")?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .collect();
+            if let [only] = entries.as_slice() {
+                if only.is_dir() && only.join("keys").is_dir() {
+                    log(format!(
+                        "(PKI tar wraps its bundle in {}/ — using that as the bundle root)",
+                        only.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                    bundle = only.clone();
+                }
+            }
+        }
+        // Fail FAST on a malformed bundle: inside the builder VM this only
+        // surfaces minutes later as a bootloader-install failure followed by a
+        // kernel panic ("Attempted to kill init") and no exit code.
+        for required in [
+            "keys/PK/PK.pem",
+            "keys/PK/PK.key",
+            "keys/KEK/KEK.pem",
+            "keys/KEK/KEK.key",
+            "keys/db/db.pem",
+            "keys/db/db.key",
+        ] {
+            if !bundle.join(required).is_file() {
+                step(2, StepState::Fail);
+                bail!(
+                    "Secure Boot PKI bundle from {} is missing {required} — expected the \
+                     sbctl layout (keys/{{PK,KEK,db}}/*.pem+*.key) at the tar root or \
+                     inside one wrapper directory",
+                    sops_path.display()
+                );
+            }
+        }
+        pki_dir = Some(bundle);
         step(2, StepState::Ok);
     } else {
         log(
@@ -286,6 +328,13 @@ fn run_pipeline(
     let mut run =
         Command::new(std::fs::canonicalize(&script_link).context("resolving image script")?);
     run.current_dir(&out_dir);
+    // The script's vm-run stage only adds `-smp` when a Nix build environment
+    // says parallel building is on; run directly it would default to ONE vCPU
+    // and the in-VM closure copy (`xargs -P $(nproc)`) crawls. Give the builder
+    // VM the host's cores: stdenv's setup normalises an UNSET NIX_BUILD_CORES
+    // to 1, but turns an explicit 0 into $(nproc).
+    run.env("enableParallelBuilding", "1");
+    run.env("NIX_BUILD_CORES", "0");
     if let Some(mem) = cfg.build_memory_mib {
         run.args(["--build-memory", &mem.to_string()]);
     }

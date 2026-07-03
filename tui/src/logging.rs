@@ -40,6 +40,8 @@ pub struct SessionLog {
     files: Vec<PathBuf>,
     /// Open buffered writer for the currently running action, if any.
     writer: Option<BufWriter<File>>,
+    /// Lines written since the last flush — [`Self::flush`] is a no-op without.
+    dirty: bool,
 }
 
 impl SessionLog {
@@ -50,6 +52,7 @@ impl SessionLog {
             dir: logs_dir(),
             files: Vec::new(),
             writer: None,
+            dirty: false,
         }
     }
 
@@ -191,7 +194,22 @@ impl SessionLog {
             if writeln!(w, "{s}").is_err() {
                 // Disk gone mid-run: stop logging, never break the TUI.
                 self.writer = None;
+            } else {
+                self.dirty = true;
             }
+        }
+    }
+
+    /// Push buffered lines to disk. Called once per event-drain cycle (see
+    /// main.rs), so the file the footer advertises can be `tail -f`ed LIVE
+    /// during a long build — and a Ctrl+C autopsy sees the latest lines
+    /// instead of a file minutes behind the pane.
+    pub fn flush(&mut self) {
+        if self.dirty {
+            if let Some(w) = &mut self.writer {
+                let _ = w.flush();
+            }
+            self.dirty = false;
         }
     }
 

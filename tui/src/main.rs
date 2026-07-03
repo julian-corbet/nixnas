@@ -151,6 +151,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, mut app: App)
         if let Some(v) = app.verify.as_mut() {
             v.drain_events(&mut app.log);
         }
+        // One flush per drain cycle: the advertised log file stays live-tailable
+        // and survives an emergency exit up to the last drained line.
+        app.log.flush();
         terminal.draw(|f| ui::draw(f, &mut app))?;
         // The poll timeout doubles as the redraw tick while workers stream events.
         if event::poll(Duration::from_millis(100)).context("polling terminal events")? {
