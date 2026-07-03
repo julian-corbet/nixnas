@@ -16,3 +16,7 @@ serde_json = "1"
 toml = "0.8"
 ratatui = "0.30.2"
 crossterm = "0.29.0"
+# VERIFY screens (pure-Rust, read-only — no root, no external tools):
+gpt = "4.1.0"   # parse the GPT of the built image / flashed device
+fatfs = "0.3.6" # mount the ESP in-process (systemd-boot + UKI inventory)
+sha2 = "0.11.0" # streamed image digest + flash-fidelity compare

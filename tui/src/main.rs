@@ -16,6 +16,7 @@ mod build;
 mod config;
 mod flash;
 mod ui;
+mod verify;
 
 use anyhow::{bail, Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -25,7 +26,8 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Which screen the state machine is on. Each screen's mutable state lives in its
@@ -36,6 +38,8 @@ pub enum Screen {
     Configure,
     Build,
     Flash,
+    /// Both HOME verify entries (image / install) — the mode lives on the state.
+    Verify,
 }
 
 pub struct App {
@@ -49,6 +53,12 @@ pub struct App {
     pub build: Option<ui::build::BuildScreen>,
     /// Present from entering FLASH until it is backed out of after completion.
     pub flash: Option<ui::flash::FlashScreen>,
+    /// Present from entering VERIFY until it is backed out of after completion.
+    pub verify: Option<ui::verify::VerifyScreen>,
+    /// A yazi path-pick asked for by the CONFIGURE screen. Screens cannot run it
+    /// themselves — suspending the terminal is the main loop's job (it owns the
+    /// terminal handle), so they RECORD the request and the loop services it.
+    pub yazi_pick: Option<ui::configure::YaziRequest>,
     pub quit: bool,
 }
 
@@ -62,16 +72,19 @@ impl App {
             configure: None,
             build: None,
             flash: None,
+            verify: None,
+            yazi_pick: None,
             quit: false,
         }
     }
 
-    /// True while a worker thread owns a build or flash. The screens refuse Esc
-    /// mid-run (backing out of a half-written stick helps nobody); Ctrl+C stays
-    /// available as the emergency exit.
+    /// True while a worker thread owns a build, flash or verify. The screens
+    /// refuse Esc mid-run (backing out of a half-written stick helps nobody);
+    /// Ctrl+C stays available as the emergency exit.
     pub fn op_running(&self) -> bool {
         self.build.as_ref().is_some_and(|b| b.is_running())
             || self.flash.as_ref().is_some_and(|f| f.is_running())
+            || self.verify.as_ref().is_some_and(|v| v.is_running())
     }
 }
 
@@ -128,6 +141,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, mut app: App)
         if let Some(fl) = app.flash.as_mut() {
             fl.drain_events();
         }
+        if let Some(v) = app.verify.as_mut() {
+            v.drain_events();
+        }
         terminal.draw(|f| ui::draw(f, &mut app))?;
         // The poll timeout doubles as the redraw tick while workers stream events.
         if event::poll(Duration::from_millis(100)).context("polling terminal events")? {
@@ -138,8 +154,63 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, mut app: App)
                 }
             }
         }
+        // Service a recorded yazi request AFTER key handling: only here does the
+        // terminal handle live, and the picker needs the real terminal.
+        if let Some(req) = app.yazi_pick.take() {
+            if let Some(path) = run_yazi_picker(terminal, &req.start) {
+                ui::configure::apply_picked(&mut app, req.field, path);
+            }
+        }
     }
     Ok(())
+}
+
+/// Run yazi as the premium path picker: suspend the ratatui world (leave the
+/// alternate screen, cook the terminal), hand the real terminal to
+/// `yazi --chooser-file=<RAM tmpfile>`, then read the pick back, shred the
+/// tmpfile and resurrect the TUI with a forced full repaint. Every failure path
+/// (yazi dying, killed, cancelled inside) restores the terminal and returns
+/// None — the field keeps its old value.
+fn run_yazi_picker(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    start: &Path,
+) -> Option<PathBuf> {
+    // Unique per invocation: the pid alone would collide on the second pick.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let chooser = build::secure_tmp().join(format!(
+        "nixnas-yazi-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    // Suspend: the same idempotent teardown the exit path uses. yazi manages its
+    // own raw mode / alternate screen from the sane state this leaves behind.
+    restore_terminal();
+    let status = std::process::Command::new("yazi")
+        .arg(start)
+        .arg(format!("--chooser-file={}", chooser.display()))
+        .status();
+    // First line of the chooser file is the pick; an empty or absent file means
+    // the operator quit yazi without choosing.
+    let picked = match status {
+        Ok(s) if s.success() => std::fs::read_to_string(&chooser).ok().and_then(|text| {
+            text.lines()
+                .next()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(PathBuf::from)
+        }),
+        // Spawn failure (yazi vanished mid-session) or a killed/failing yazi.
+        _ => None,
+    };
+    // The pick is not a secret, but the file sits in shared tmp — clean it up
+    // with the same shred guard the build secrets use.
+    drop(build::ShredOnDrop(chooser));
+    // Resurrect the TUI (mirror of the startup sequence); the explicit clear
+    // forces the next draw to repaint every cell yazi may have touched.
+    let _ = enable_raw_mode();
+    let _ = crossterm::execute!(std::io::stdout(), EnterAlternateScreen);
+    let _ = terminal.clear();
+    picked
 }
 
 fn on_key(app: &mut App, key: KeyEvent) {
@@ -154,5 +225,6 @@ fn on_key(app: &mut App, key: KeyEvent) {
         Screen::Configure => ui::configure::on_key(app, key),
         Screen::Build => ui::build::on_key(app, key),
         Screen::Flash => ui::flash::on_key(app, key),
+        Screen::Verify => ui::verify::on_key(app, key),
     }
 }

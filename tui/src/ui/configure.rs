@@ -1,7 +1,9 @@
 //! CONFIGURE — the nixnas.config fields as a navigable form. Path fields open a
-//! filesystem browser modal; text/number fields edit inline. The machine's actual
-//! configuration is Nix (in the operator's flake) — this form only edits what the
-//! TUI itself consumes (see config.rs).
+//! picker: yazi when it is on PATH (the premium path, run by the main loop via
+//! [`YaziRequest`]), otherwise the built-in filesystem browser modal — which
+//! stays reachable on 'b' as the fallback either way. Text/number fields edit
+//! inline. The machine's actual configuration is Nix (in the operator's flake)
+//! — this form only edits what the TUI itself consumes (see config.rs).
 
 use crate::config::{config_dir, Config};
 use crate::ui::{self, ACCENT, DIM, ERR, OK, WARN};
@@ -75,6 +77,8 @@ pub struct ConfigureState {
     /// (message, is_error) — save confirmations and validation complaints.
     notice: Option<(String, bool)>,
     dirty: bool,
+    /// yazi found on PATH at screen entry — Enter on a path field picks with it.
+    yazi: bool,
 }
 
 struct EditState {
@@ -97,6 +101,7 @@ impl ConfigureState {
             browser: None,
             notice: None,
             dirty: false,
+            yazi: yazi_on_path(),
         }
     }
 
@@ -137,6 +142,51 @@ impl ConfigureState {
             build_memory_mib,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// yazi — the premium path picker
+// ---------------------------------------------------------------------------
+
+/// A yazi pick asked for by this screen: recorded on [`crate::App`] by on_key
+/// and serviced by the main loop, the only place the terminal handle lives.
+pub struct YaziRequest {
+    /// Which form field receives the picked path.
+    pub field: usize,
+    /// Where yazi opens (same resolution as the built-in browser).
+    pub start: PathBuf,
+}
+
+/// True when a `yazi` binary is on PATH. Checked once at screen entry — a
+/// vanished binary later just makes the pick fail gracefully in the main loop.
+fn yazi_on_path() -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(dir.join("yazi"))
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        })
+    })
+}
+
+/// Land a completed yazi pick in its field. yazi's chooser emits the FILE that
+/// was opened, so a directory field accepts a file pick by taking its parent.
+pub fn apply_picked(app: &mut App, field: usize, path: PathBuf) {
+    let Some(st) = app.configure.as_mut() else {
+        return;
+    };
+    let Some(meta) = FIELDS.get(field) else {
+        return;
+    };
+    let mut path = path;
+    if meta.kind == FieldKind::DirPath && path.is_file() {
+        if let Some(parent) = path.parent() {
+            path = parent.to_path_buf();
+        }
+    }
+    st.values[field] = path.display().to_string();
+    st.dirty = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,11 +329,14 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    // Collected here, set on `app` after the borrow of `st` ends below.
+    let mut yazi_req: Option<YaziRequest> = None;
     match key.code {
         KeyCode::Esc => {
             // Discarding is explicit in the footer; no nag modal.
             app.configure = None;
             app.screen = Screen::Home;
+            return;
         }
         KeyCode::Up | KeyCode::Char('k') => {
             st.selected = st.selected.checked_sub(1).unwrap_or(FIELDS.len() - 1);
@@ -291,11 +344,21 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
         KeyCode::Down | KeyCode::Char('j') => st.selected = (st.selected + 1) % FIELDS.len(),
         KeyCode::Enter => match FIELDS[st.selected].kind {
             FieldKind::DirPath | FieldKind::FilePath => {
-                st.browser = Some(Browser::new(
-                    st.selected,
-                    FIELDS[st.selected].kind == FieldKind::DirPath,
-                    browser_start(&st.values[st.selected], &config_path),
-                ));
+                let start = browser_start(&st.values[st.selected], &config_path);
+                if st.yazi {
+                    // The premium picker: only the REQUEST is recorded here —
+                    // the main loop runs yazi (it owns the terminal handle).
+                    yazi_req = Some(YaziRequest {
+                        field: st.selected,
+                        start,
+                    });
+                } else {
+                    st.browser = Some(Browser::new(
+                        st.selected,
+                        FIELDS[st.selected].kind == FieldKind::DirPath,
+                        start,
+                    ));
+                }
             }
             FieldKind::Text | FieldKind::Number => {
                 st.edit = Some(EditState {
@@ -303,7 +366,21 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 });
             }
         },
-        // Path fields are browser-first, but typing a path by hand must stay possible.
+        // The built-in browser stays reachable as the explicit fallback even
+        // when yazi is on PATH (and is what Enter opens when it is not).
+        KeyCode::Char('b')
+            if matches!(
+                FIELDS[st.selected].kind,
+                FieldKind::DirPath | FieldKind::FilePath
+            ) =>
+        {
+            st.browser = Some(Browser::new(
+                st.selected,
+                FIELDS[st.selected].kind == FieldKind::DirPath,
+                browser_start(&st.values[st.selected], &config_path),
+            ));
+        }
+        // Path fields are picker-first, but typing a path by hand must stay possible.
         KeyCode::Char('e') => {
             st.edit = Some(EditState {
                 buf: st.values[st.selected].clone(),
@@ -327,6 +404,9 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
             Err(msg) => st.notice = Some((msg, true)),
         },
         _ => {}
+    }
+    if let Some(req) = yazi_req {
+        app.yazi_pick = Some(req);
     }
 }
 
@@ -469,18 +549,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             &[("Enter", "apply"), ("Esc", "cancel edit")],
         );
     } else {
-        ui::footer(
-            f,
-            footer_area,
-            &[
-                ("↑↓", "field"),
-                ("Enter", "browse/edit"),
-                ("e", "edit as text"),
-                ("d", "clear"),
-                ("s", "save"),
-                ("Esc", "back (discard)"),
-            ],
+        // The Enter hint states the truth for the SELECTED field: yazi when
+        // available on a path field (with 'b' as the built-in fallback), the
+        // built-in browser otherwise, inline edit for text/number fields.
+        let path_field = matches!(
+            FIELDS[st.selected].kind,
+            FieldKind::DirPath | FieldKind::FilePath
         );
+        let mut hints: Vec<(&str, &str)> = vec![("↑↓", "field")];
+        if path_field && st.yazi {
+            hints.push(("Enter", "pick (yazi)"));
+            hints.push(("b", "built-in browser"));
+        } else if path_field {
+            hints.push(("Enter", "browse"));
+        } else {
+            hints.push(("Enter", "edit"));
+        }
+        hints.extend([
+            ("e", "edit as text"),
+            ("d", "clear"),
+            ("s", "save"),
+            ("Esc", "back (discard)"),
+        ]);
+        ui::footer(f, footer_area, &hints);
     }
 
     // The browser floats above everything.

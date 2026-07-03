@@ -58,7 +58,8 @@ pub enum BuildEvent {
 /// RAII guard: overwrite IN PLACE with zeros (no truncate — truncating first would
 /// free the original blocks unzeroed), fsync, then unlink. Best-effort, and the
 /// files live under /dev/shm when available, so nothing hits a disk to begin with.
-struct ShredOnDrop(PathBuf);
+/// Crate-visible: main.rs shreds the yazi chooser file with the same guard.
+pub(crate) struct ShredOnDrop(pub(crate) PathBuf);
 
 impl Drop for ShredOnDrop {
     fn drop(&mut self) {
@@ -99,7 +100,7 @@ impl Drop for ShredDirOnDrop {
 }
 
 /// RAM-backed temp location when available (no disk residue for secrets).
-fn secure_tmp() -> PathBuf {
+pub(crate) fn secure_tmp() -> PathBuf {
     let shm = Path::new("/dev/shm");
     if shm.is_dir() {
         shm.to_path_buf()

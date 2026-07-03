@@ -20,7 +20,7 @@ const BANNER: [&str; 6] = [
     "╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝",
 ];
 
-const MENU: [(&str, &str); 4] = [
+const MENU: [(&str, &str); 6] = [
     (
         "Configure",
         "edit nixnas.config (flake location, Secure Boot PKI, build knobs)",
@@ -32,6 +32,14 @@ const MENU: [(&str, &str); 4] = [
     (
         "Flash stick",
         "write the built image to a USB stick (typed confirmation)",
+    ),
+    (
+        "Verify image",
+        "read-only checks of the built .raw (GPT, boot chain, LUKS2, digest)",
+    ),
+    (
+        "Verify install",
+        "the same read-only checks against a flashed device",
     ),
     ("Quit", "leave nixnas"),
 ];
@@ -68,6 +76,21 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                     app.flash = Some(ui::flash::FlashScreen::new(&app.config_path));
                 }
                 app.screen = Screen::Flash;
+            }
+            // Both verify entries share one screen slot: a RUNNING verification
+            // is shown as-is whichever entry was chosen (never orphan a worker);
+            // a finished one is replaced by the freshly requested mode.
+            3 => {
+                if app.verify.as_ref().is_none_or(|v| !v.is_running()) {
+                    app.verify = Some(ui::verify::VerifyScreen::new_image(&app.config_path));
+                }
+                app.screen = Screen::Verify;
+            }
+            4 => {
+                if app.verify.as_ref().is_none_or(|v| !v.is_running()) {
+                    app.verify = Some(ui::verify::VerifyScreen::new_install(&app.config_path));
+                }
+                app.screen = Screen::Verify;
             }
             _ => app.quit = true,
         },
@@ -110,7 +133,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .map(|(name, desc)| {
             ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!("  {name:<12}"),
+                    format!("  {name:<16}"),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(*desc, Style::default().fg(DIM)),

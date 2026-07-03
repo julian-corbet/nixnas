@@ -253,7 +253,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn disk_lines(d: &Disk, _selected: bool) -> Vec<Line<'static>> {
+/// Crate-visible: the VERIFY INSTALL screen reuses this exact disk presentation.
+pub(crate) fn disk_lines(d: &Disk, _selected: bool) -> Vec<Line<'static>> {
     let size = d.size.map(flash::human_size).unwrap_or_else(|| "?".into());
     let tran = d.tran.clone().unwrap_or_default();
     let badge = if d.looks_like_usb_stick() {

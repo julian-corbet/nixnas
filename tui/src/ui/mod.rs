@@ -6,6 +6,7 @@ pub mod build;
 pub mod configure;
 pub mod flash;
 pub mod home;
+pub mod verify;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -27,6 +28,7 @@ pub fn draw(f: &mut Frame, app: &mut crate::App) {
         crate::Screen::Configure => configure::draw(f, app),
         crate::Screen::Build => build::draw(f, app),
         crate::Screen::Flash => flash::draw(f, app),
+        crate::Screen::Verify => verify::draw(f, app),
     }
 }
 
