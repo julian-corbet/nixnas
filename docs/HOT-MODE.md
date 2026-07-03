@@ -55,6 +55,19 @@ Storage-agnostic: nixnas only requires the hot store to be an operator-declared,
 device with a filesystem NixOS can mount as `/nix`. ZFS is one choice (then the initrd
 carries ZFS); LUKS+ext4/btrfs/f2fs work too, with no ZFS anywhere.
 
+**Where the Secure Boot PKI lives — DECIDED (footguns beat imaginary attackers).** The
+signing PKI exists in three places: the rescue's stick store (baked in at image build,
+TPM+Secure-Boot-guarded), the main's hot store (seeded at install, passphrase-guarded —
+what lanzaboote and rescue-maintain sign with at runtime), and the operator's encrypted
+config store (sops or equivalent — the root copy). *Considered and rejected:* shredding
+the stick copy after install as extra hardening. Extracting it already requires defeating
+Secure Boot + the PCR-bound TPM + the firmware password (every physical path converges on
+ciphertext, and a brute NVRAM clear wipes an fTPM — destroying the seal, not revealing
+it), while the shred adds real self-inflicted failure modes: disaster recovery that needs
+the build machine at exactly the worst moment, a latent lanzaboote failure on any future
+rescue-side rebuild, and — combined with loss of the config-store copy — a box whose
+firmware trusts a key nobody holds. Keys you can't lose beat keys nobody can steal.
+
 ## Boot flow
 
 ```
