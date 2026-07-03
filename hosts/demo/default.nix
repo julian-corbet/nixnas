@@ -30,6 +30,13 @@
     boot.secureBoot.enable = true;
     crypto.tpm2.enable = true;
 
+    # The 8 GiB-stick guard (see modules/store/budget.nix): fail the build if the host
+    # closure exceeds this. The demo is a minimal appliance (no k3s/docker); 4 GiB is a
+    # generous bound that demonstrates the mechanism. A real host sets its own ceiling —
+    # a lean base+k3s+runtime hub targets ~5 GiB (≈2 GiB compressed on the stick and in
+    # the preload RAM). `system.build.storeClosureBudget` is wired into checks in flake.nix.
+    store.maxClosureBytes = 4 * 1024 * 1024 * 1024;
+
     # Your LUKS members as name → device; each opens at /dev/mapper/<name> (non-fatal, so
     # these non-existent DEMO devices don't block the test boot). An SMR/XFS archive drive
     # is just another entry — no special handling. You mount the results with native

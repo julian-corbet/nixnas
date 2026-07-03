@@ -72,24 +72,25 @@ in
                 mountpoint = "/nix";
                 extraArgs = [ "-O" "extra_attr,inode_checksum,sb_checksum,compression" ];
                 # The STORAGE.md §4 recipe: zstd:22, 16 KiB cluster, compress everything,
-                # exclude the Nix sqlite DB (f2fs extension match is EXACT, so the -wal
-                # and -shm sidecars need their own entries — they are mmap'd + rewritten
-                # in place, the worst case for compression and the release pass), plus
-                # the flash-friendly + RAM-cache flags (OPTIMIZATIONS.md §3):
+                # exclude the Nix sqlite DB, plus the flash-friendly + RAM-cache flags
+                # (OPTIMIZATIONS.md §3):
                 #   flush_merge/checkpoint_merge — coalesce flushes/checkpoints on slow flash
                 #   compress_cache               — cache COMPRESSED blocks in RAM (the
                 #                                  "compressed page cache" the preload warms)
                 #   fsync_mode=nobarrier         — fewer barriers for non-atomic files; safe
                 #                                  here because store paths are re-fetchable
                 #                                  (NEVER the bare `nobarrier` mount option)
+                # NOTE: f2fs extension names are capped at 8 chars (F2FS_EXTENSION_LEN), so
+                # `sqlite-wal`/`sqlite-shm` (10 chars) CANNOT be excluded — f2fs rejects the
+                # whole mount ("invalid extension length"). Only `sqlite` (the main DB) is
+                # excludable; the WAL/SHM sidecars live in /nix/var (never the store-scoped
+                # release pass) and fs-mode compression handles their in-place rewrites fine.
                 mountOptions = [
                   "compress_algorithm=zstd:22"
                   "compress_log_size=2"
                   "compress_extension=*"
                   "compress_chksum"
                   "nocompress_extension=sqlite"
-                  "nocompress_extension=sqlite-wal"
-                  "nocompress_extension=sqlite-shm"
                   "flush_merge"
                   "checkpoint_merge"
                   "compress_cache"

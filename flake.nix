@@ -77,9 +77,11 @@
         ];
       };
 
-      # `nix flake check` proves the demo toplevel builds without the private overlay.
+      # `nix flake check` proves the demo toplevel builds without the private overlay, and
+      # that its closure stays within the 8 GiB-stick budget (modules/store/budget.nix).
       checks = forAllSystems (system: {
         demo-toplevel = self.nixosConfigurations.demo.config.system.build.toplevel;
+        demo-closure-budget = self.nixosConfigurations.demo.config.system.build.storeClosureBudget;
       });
 
       # The personalised USB image. The TUI builds this locally for a real host; here

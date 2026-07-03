@@ -63,6 +63,9 @@ jobs:
             extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
             extra-sandbox-paths = /dev/kvm
 
+      - name: Enforce the 8 GiB-stick closure budget (before the heavy image build)
+        run: nix build .#checks.x86_64-linux.demo-closure-budget --accept-flake-config --print-build-logs -L
+
       - name: Build the demo image (sandbox diskoImages → nixnas.raw, demo passphrase)
         run: |
           set -o pipefail

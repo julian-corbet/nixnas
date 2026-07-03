@@ -276,6 +276,25 @@ in
           RAM-constrained boxes. See docs/OPTIMIZATIONS.md §5.
         '';
       };
+      maxClosureBytes = mkOption {
+        type = types.nullOr types.ints.positive;
+        default = null;
+        example = literalExpression "5 * 1024 * 1024 * 1024"; # ~5 GiB uncompressed
+        description = ''
+          Build-time BUDGET for the host's toplevel closure, in uncompressed bytes. When set,
+          `system.build.storeClosureBudget` FAILS the build if the closure exceeds it — wire
+          that attribute into your flake `checks` so CI (and every rebuild) enforces it.
+
+          Why ONE number bounds everything: the on-stick f2fs store holds this closure per
+          kept generation (compressed ~2.3× by zstd), and `store.preload` warms it into RAM.
+          So a single budget caps BOTH the USB fit (`usb.imageSizeGiB` minus the ESP, across
+          `boot.keepGenerations`) AND the preload RAM. A lean base+k3s+container-runtime host
+          is ~4 GiB uncompressed (~1.8 GiB compressed / ~1.8 GiB RAM); heavy things — dev
+          toolchains, agents, container images, data — belong in build pods / containers on
+          your pool, NEVER the host OS. The budget makes "it stays lean" structural: an
+          accidental fat package fails the build instead of silently overflowing the stick.
+        '';
+      };
       persistLogs = mkOption {
         type = types.bool;
         default = false;
