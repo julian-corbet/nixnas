@@ -371,16 +371,18 @@ in
           rescue in `usb` mode (the whole OS already lives on the stick).
         '';
       };
-      system = mkOption {
-        type = types.nullOr types.raw;
+      flakeAttr = mkOption {
+        type = types.nullOr types.str;
         default = null;
-        example = literalExpression "self.nixosConfigurations.nixnas-rescue";
+        example = "nixnas-rescue";
         description = ''
-          The RESCUE nixosConfiguration — a SECOND, minimal `usb`-mode nixnas (sharing this
-          host's appliance identity: kernel/pin, admin keys, Secure Boot keys) that the flake
-          passes in. The MAIN system builds `system.config.system.build.toplevel` to maintain
-          the rescue on the stick, from the SAME nixpkgs pin (load-bearing — the rescue's
-          ZFS/kernel must always be able to import the live pool). Required when `rescue.enable`.
+          The `nixosConfigurations.<attr>` name of the RESCUE system — a SECOND, minimal
+          `usb`-mode nixnas (sharing this host's appliance identity: kernel/pin, admin keys,
+          Secure Boot keys). The MAIN system's maintainer builds it from the SAME flake ref as
+          `autoUpgrade.flake` (i.e. the LATEST pulled revision, so it never goes stale after a
+          main update) at `<flake>#nixosConfigurations.<attr>.config.system.build.toplevel`, and
+          from the same nixpkgs pin (load-bearing — the rescue's ZFS/kernel must always import
+          the live pool). Required when `rescue.enable`.
         '';
       };
       extraPackages = mkOption {
