@@ -302,9 +302,17 @@ autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
   and `storage.zfsPools` (per-pool `nixnas-import-<pool>` services; datasets self-mount at
   their `mountpoint` properties). Persisting heavy state off the tmpfs root = bind mounts from
   the pools, gated on the same target (identity is already on the stick). See `examples/host.nix`.
-- **/nix lives on the stick, period.** Self-contained (boots even if a pool is missing), and — a
-  hard rule — the stick's OS content **never** relocates onto a data pool: HOT/COLD are for *your
-  workload*, not for the boot/manage essentials. (An earlier "store-on-HOT" idea is dropped.)
+- **/nix location is a choice — `store.location = "usb" | "hot"` (see docs/HOT-MODE.md).** The
+  DEFAULT, **`usb`**, is everything above: /nix on the stick, self-contained (boots even if a
+  pool is missing) — the resilient appliance default, and for it the stick's OS content never
+  relocates onto a data pool. **`hot`** is the deliberate opt-in for hub-class boxes that must
+  install heavy software *system-wide* (beyond an 8 GiB stick): the MAIN system's /nix lives on
+  your encrypted pool, and the stick is relegated to the ESP + a self-contained **RESCUE**
+  system. The operator enters their key in the initrd (never auto), and a dead pool drops to the
+  rescue rather than "boots reachable anyway". It is **not** a composed store (overlaying stick +
+  pool into one /nix is structurally unsound — researched and rejected); it is two *independent*
+  systems, the proven "root-on-ZFS + a USB rescue" pattern. (The earlier flat "never store-on-HOT"
+  rule is exactly the `usb` default; `hot` makes the trade explicit and opt-in.)
 - **Wear isolation (measured) — and why that's enough.** Cheap USB sticks have no SSD-grade flash
   management and die / go slow under a steady write *stream*. Impermanence removes that stream:
   logs (journald `volatile`), `/tmp`, coredumps and swap (zram) all live in RAM; stray writes hit
