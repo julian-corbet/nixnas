@@ -14,7 +14,9 @@
   nixnas.store.hot = {
     device = "/dev/mapper/nixstore-demo";
     fsType = "ext4";
-    unlock.nixstore-demo = "/dev/disk/by-id/DEMO-hot-store-part2";
+    # by-partlabel so the QEMU integration test (test/hot-boot-test.sh) can present a matching
+    # partition regardless of the virtual disk's by-id. Opens at /dev/mapper/nixstore-demo.
+    unlock.nixstore-demo = "/dev/disk/by-partlabel/nixstore-demo";
   };
   nixnas.rescue.enable = false;
 

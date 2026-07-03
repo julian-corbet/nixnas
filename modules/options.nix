@@ -300,7 +300,7 @@ in
           description = "Filesystem of `store.hot.device` (zfs/ext4/btrfs/f2fs/…). `zfs` pulls ZFS into the initrd; others don't.";
         };
         unlock = mkOption {
-          type = types.attrsOf (types.strMatching "/dev/disk/by-id/.+");
+          type = types.attrsOf (types.strMatching "/dev/disk/by-[a-z]+/.+");
           default = { };
           example = literalExpression ''{ hot0 = "/dev/disk/by-id/ata-…"; }'';
           description = ''
