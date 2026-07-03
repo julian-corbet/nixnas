@@ -45,8 +45,8 @@ unattended. The channel is authenticated by the **TPM-sealed initrd host key** (
 tampered initrd/swapped stick can't phish the key. Data confidentiality is a *feature*: you
 must enter a key in a secure environment to unlock anything.
 
-On a box where `/nix` and the data share one LUKS pool (the common case, e.g. example-host's
-whole-disk-LUKS `hot`), the single key you enter at boot unlocks the pool — so `/nix` and
+On a box where `/nix` and the data share one LUKS pool (the common whole-disk-LUKS case),
+the single key you enter at boot unlocks the pool — so `/nix` and
 the data come up together. "Full OS running, data still locked" is not available in that
 layout without a second encryption boundary; the **rescue** system covers the
 data-free-maintenance case instead (it needs no pool at all).

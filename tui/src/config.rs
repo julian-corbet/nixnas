@@ -26,10 +26,22 @@ pub struct Config {
     /// MiB of RAM for the disko image-builder VM (None = disko's default).
     #[serde(default)]
     pub build_memory_mib: Option<u32>,
+
+    /// The flake attribute that builds the STICK image script (`nix build .#<attr>`).
+    /// Default `imageScript` — a `usb`-mode host's appliance image. A HOT-mode setup
+    /// (docs/HOT-MODE.md) flashes its RESCUE system's image instead: either keep the
+    /// flake's `imageScript` pointing at the rescue host, or expose a second attribute
+    /// (e.g. `rescueImageScript`) and name it here. The hot MAIN is never flashed.
+    #[serde(default = "default_image_attr")]
+    pub image_attr: String,
 }
 
 fn default_flake_dir() -> String {
     ".".to_string()
+}
+
+fn default_image_attr() -> String {
+    "imageScript".to_string()
 }
 
 impl Default for Config {
@@ -38,6 +50,7 @@ impl Default for Config {
             flake_dir: default_flake_dir(),
             sb_keys_sops: None,
             build_memory_mib: None,
+            image_attr: default_image_attr(),
         }
     }
 }

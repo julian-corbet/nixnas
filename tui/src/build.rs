@@ -83,15 +83,19 @@ pub fn build_image(config_path: &Path, cfg: &Config) -> Result<PathBuf> {
     let script_link = base.join(".nixnas-imagescript");
     let out_dir = base.join(".nixnas-image");
 
-    // 1. Build the disko image script (pure eval — no secrets involved).
+    // 1. Build the disko image script (pure eval — no secrets involved). WHICH image is
+    //    operator-chosen (`image_attr` in nixnas.config): the usb appliance by default,
+    //    the RESCUE image for a hot-mode setup (the hot MAIN is never flashed — HOT-MODE.md).
+    let image_ref = format!(".#{}", cfg.image_attr);
+    println!(">> building the stick image from {image_ref}");
     let status = Command::new("nix")
-        .args(["build", "--print-build-logs", "--accept-flake-config", ".#imageScript", "--out-link"])
+        .args(["build", "--print-build-logs", "--accept-flake-config", &image_ref, "--out-link"])
         .arg(&script_link)
         .current_dir(&flake_dir)
         .status()
-        .context("running `nix build .#imageScript` (is Nix installed locally?)")?;
+        .with_context(|| format!("running `nix build {image_ref}` (is Nix installed locally?)"))?;
     if !status.success() {
-        bail!("nix build .#imageScript failed");
+        bail!("nix build {image_ref} failed");
     }
 
     // 2. Prompt for the LUKS store passphrase (confirmed, not echoed) → 0600 RAM tmp.
