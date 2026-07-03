@@ -7,7 +7,7 @@
 # SCOPE: nixnas owns boot / crypto / the USB store / kernel-packaging only.
 # k3s, GPU, Samba/NFS, the Arch LXC, the Office VM, the apps are NOT nixnas —
 # they are plain NixOS the operator declares in their own repo. See docs/SCOPE.md.
-{ lib, ... }:
+{ config, lib, ... }:
 let
   inherit (lib) mkOption mkEnableOption types literalExpression;
 
@@ -361,6 +361,28 @@ in
 
     ## ── Rescue system (hot mode only): the self-contained system on the stick ──
     rescue = {
+      enable = mkOption {
+        type = types.bool;
+        default = config.nixnas.store.location == "hot";
+        description = ''
+          Whether the MAIN (hot) system maintains a RESCUE system on the stick (builds it,
+          copies its closure to the stick store, and keeps its signed UKI on the ESP current
+          — see modules/appliance/rescue-maintain.nix). Defaults on in `hot` mode; there is no
+          rescue in `usb` mode (the whole OS already lives on the stick).
+        '';
+      };
+      system = mkOption {
+        type = types.nullOr types.raw;
+        default = null;
+        example = literalExpression "self.nixosConfigurations.nixnas-rescue";
+        description = ''
+          The RESCUE nixosConfiguration — a SECOND, minimal `usb`-mode nixnas (sharing this
+          host's appliance identity: kernel/pin, admin keys, Secure Boot keys) that the flake
+          passes in. The MAIN system builds `system.config.system.build.toplevel` to maintain
+          the rescue on the stick, from the SAME nixpkgs pin (load-bearing — the rescue's
+          ZFS/kernel must always be able to import the live pool). Required when `rescue.enable`.
+        '';
+      };
       extraPackages = mkOption {
         type = types.listOf types.package;
         default = [ ];
