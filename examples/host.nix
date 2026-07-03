@@ -36,16 +36,16 @@
     # just another entry — no special handling. Passphrase-only by design: a seized
     # disk reveals nothing, a disk in another machine opens with the passphrase alone.
     storage.unlock = {
-      fast0     = "/dev/disk/by-id/ata-SSD_A-part1";   # HOT pool member
-      fast1     = "/dev/disk/by-id/ata-SSD_B-part1";   # HOT pool member (mirror)
-      bulk0     = "/dev/disk/by-id/ata-HDD_A-part1";   # COLD pool member
-      bulk1     = "/dev/disk/by-id/ata-HDD_B-part1";   # COLD pool member
+      fast0     = "/dev/disk/by-id/ata-SSD_A-part1";   # fast pool (SSD) member
+      fast1     = "/dev/disk/by-id/ata-SSD_B-part1";   # fast pool (SSD) member (mirror)
+      bulk0     = "/dev/disk/by-id/ata-HDD_A-part1";   # bulk pool (HDD) member
+      bulk1     = "/dev/disk/by-id/ata-HDD_B-part1";   # bulk pool (HDD) member
       archive0  = "/dev/disk/by-id/ata-HDD_ARCHIVE";   # whole-disk-LUKS XFS archive drive
     };
     # Storage, step 2: IMPORT the ZFS pools — nixnas-import-<pool> services, pulled in
     # by nixnas-storage.target. Datasets self-mount at their `mountpoint` properties on
     # import (`fast` → /fast, `bulk/media` → /bulk/media, …) — nothing to declare for them.
-    storage.zfsPools = [ "fast" "bulk" ];   # the SSD (HOT) + HDD (COLD) pools
+    storage.zfsPools = [ "fast" "bulk" ];   # the fast (SSD) + bulk (HDD) pools
   };
 
   ## ── Storage, step 3: MOUNT the non-ZFS pieces — native NixOS, hooked to the target ──

@@ -79,7 +79,7 @@ nixnas-config/
     hostName = "nas";                                    # private literal
     admin.authorizedKeys = [ "ssh-ed25519 …" ];          # your keys
     boot.usb.device = "/dev/disk/by-id/usb-…";           # the ONLY device nixnas partitions
-    storage.unlock.hot0           = "/dev/disk/by-id/ata-…";      # serials, private
+    storage.unlock.tank0           = "/dev/disk/by-id/ata-…";      # serials, private
     boot.secureBoot.enable = true;                       # + keysSops for a stable SB identity
     crypto.tpm2.enable     = true;                       # sealed initrd host key rides on this
     autoUpgrade.flake      = "github:you/nas-config#nas";

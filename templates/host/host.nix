@@ -32,7 +32,7 @@
     # `nixnas-unlock` (over SSH) opens the whole set with ONE passphrase. nixnas never
     # formats. You MOUNT them natively below. (A fully worked example: examples/host.nix.)
     storage.unlock = {
-      poolmember0 = "/dev/disk/by-id/ata-…-part1";  # a member of your HOT/COLD pool
+      poolmember0 = "/dev/disk/by-id/ata-…-part1";  # a member of your ZFS pool
       archive0    = "/dev/disk/by-id/ata-…";        # a whole-disk-LUKS archive drive, etc.
     };
     storage.zfsPools = [ "fast" "bulk" ];  # optional: import these ZFS pools (skip for non-ZFS)
@@ -54,7 +54,7 @@
   # ZFS datasets self-mount at their `mountpoint` property when nixnas-unlock imports
   # the pool. Foreign filesystems on unlocked mappers mount natively, hooked to the
   # unlock target (the mapper doesn't exist at boot):
-  #   fileSystems."/cold" = { device = "/dev/mapper/archive0"; fsType = "xfs";
+  #   fileSystems."/bulk/archive" = { device = "/dev/mapper/archive0"; fsType = "xfs";
   #     options = [ "noauto" "nofail" "x-systemd.wanted-by=nixnas-storage.target" "noatime" ]; };
   #
   # Heavy service state belongs on the pools, gated on the unlock (identity —

@@ -285,7 +285,7 @@ in
         device = mkOption {
           type = types.nullOr types.str;
           default = null;
-          example = "hot/system/nix";
+          example = "tank/nixnas/nix";
           description = ''
             `hot` mode: the `fileSystems."/nix".device` for the MAIN system — the store that
             holds the full OS closure. A ZFS dataset name (with `fsType = "zfs"`), or a
@@ -302,7 +302,7 @@ in
         unlock = mkOption {
           type = types.attrsOf (types.strMatching "/dev/disk/by-[a-z]+/.+");
           default = { };
-          example = literalExpression ''{ hot0 = "/dev/disk/by-id/ata-…"; }'';
+          example = literalExpression ''{ tank0 = "/dev/disk/by-id/ata-…"; }'';
           description = ''
             The LUKS members the INITRD must open (with the OPERATOR'S key — never TPM auto) to
             reach the hot store, as `name → /dev/disk/by-id/…` (opens at `/dev/mapper/<name>`).
@@ -313,7 +313,7 @@ in
         zpool = mkOption {
           type = types.nullOr types.str;
           default = null;
-          example = "hot";
+          example = "tank";
           description = "For `fsType = \"zfs\"`: the pool the initrd imports (via /dev/mapper) before mounting `store.hot.device`.";
         };
       };

@@ -4,7 +4,7 @@
 # operator unlocks/creates their pool, the build machine `nix copy`s the MAIN toplevel over
 # (or the box builds it), and THIS tool does the error-prone dance in one verified shot:
 #
-#   nixnas-install-hot --device hot/system/nix /nix/store/xxxx-nixos-system-main
+#   nixnas-install-hot --device tank/nixnas/nix /nix/store/xxxx-nixos-system-main
 #
 #   1. sanity: the toplevel exists locally; a zfs device's pool is imported (imports it
 #      off /dev/mapper if not) and the dataset is mountpoint=legacy (the hot-mode contract);

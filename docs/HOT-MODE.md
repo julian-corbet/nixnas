@@ -27,7 +27,7 @@ So `hot` does **not** compose. It uses **two independent systems, each a normal 
 store on its own medium** — the proven "NixOS root-on-ZFS + a USB rescue" pattern:
 
 - **MAIN system** — its `/nix` is the operator's hot store (e.g. the ZFS dataset
-  `hot/system/nix`). One normal writable store: autoUpgrade writes new generations, GC
+  `tank/nixnas/nix`). One normal writable store: autoUpgrade writes new generations, GC
   prunes them, exactly as any NixOS-on-ZFS box. This is what runs in normal operation.
 - **RESCUE system** — a small, self-contained NixOS closure on the stick's own f2fs store,
   with its own signed UKI. It references ZERO paths on the hot store, so it boots to a full

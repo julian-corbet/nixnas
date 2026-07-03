@@ -23,7 +23,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Declarative persistence onto your pools (the impermanence module) — nixnas provides
-    # the tmpfs root; you route state with `environment.persistence."/hot" = {...}`. We use
+    # the tmpfs root; you route state with `environment.persistence."/tank" = {...}`. We use
     # the community module rather than reinvent bind-mount routing.
     impermanence.url = "github:nix-community/impermanence";
   };
@@ -113,18 +113,33 @@
         demo-rescue-maintainer = self.nixosConfigurations.demo.config.system.build.rescueMaintainer;
         # … and the hot installer's shell too (ships on usb systems — the rescue's install role).
         demo-hot-installer = self.nixosConfigurations.demo.config.system.build.hotInstaller;
+        # The TUI compiles cleanly.
+        tui-build = self.packages.${system}.tui;
       });
 
       # The personalised USB image. The TUI builds this locally for a real host; here
       # `packages.image` builds the demo image (disko, placeholder config, zero secrets).
       # `diskoImages` builds the .raw in the nix sandbox; `diskoImagesScript` runs a VM
       # (the path the TUI uses, since it can inject the LUKS key via --pre-format-files).
-      packages = forAllSystems (system: {
+      packages = forAllSystems (system:
+        let pkgs = pkgsFor system; in {
         image = self.nixosConfigurations.demo.config.system.build.diskoImages;
         imageScript = self.nixosConfigurations.demo.config.system.build.diskoImagesScript;
         # The hub-side break-glass escrow tool (`nix run .#escrow-recovery -- enroll ...`).
         # Built per-host by the TUI; this demo build is for discovery/inspection.
         escrow-recovery = self.nixosConfigurations.demo.config.system.build.nixnasEscrowRecovery;
+        # The guided TUI: `nix run .#tui` (or `nix build .#tui`).
+        tui = pkgs.rustPlatform.buildRustPackage {
+          pname = "nixnas-tui";
+          version = (pkgs.lib.importTOML ./tui/Cargo.toml).package.version;
+          src = ./tui;
+          cargoLock.lockFile = ./tui/Cargo.lock;
+          meta = {
+            description = "nixnas — guided TUI to configure, build, and flash a nixnas USB stick.";
+            license = pkgs.lib.licenses.asl20;
+            mainProgram = "nixnas";
+          };
+        };
       });
 
       # The build-hub toolchain (sign / seal / escrow run here, never on the node).

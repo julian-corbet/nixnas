@@ -1,0 +1,162 @@
+# Release pipeline for the nixnas TUI.
+#
+# Builds a static x86_64 musl binary, strips it, attaches it with SHA256SUMS
+# to a GitHub release.  Adapted from the dotkeeper house pattern; deviations
+# are documented at the bottom of this file.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to release (e.g. v0.1.2)'
+        required: true
+
+# Deny all permissions by default; individual jobs opt in.
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build: compile a fully-static musl binary, strip it, upload as artifact.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build (x86_64-linux-musl)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl-tools
+        run: sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Derive version tag
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build static release binary
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Strip and name artifact
+        shell: bash
+        run: |
+          ARTIFACT="nixnas-tui-${{ steps.version.outputs.tag }}-x86_64-linux"
+          cp target/x86_64-unknown-linux-musl/release/nixnas "${ARTIFACT}"
+          strip "${ARTIFACT}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary
+          path: tui/nixnas-tui-*-x86_64-linux
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Release: generate SHA256SUMS and publish the GitHub release.
+  # No checkout needed — artifact download + gh CLI API calls are sufficient.
+  # ---------------------------------------------------------------------------
+  release:
+    name: create GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Derive version tag
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binary
+          path: artifacts/
+
+      - name: Generate SHA256SUMS
+        run: sha256sum artifacts/nixnas-tui-* > artifacts/SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "nixnas-tui ${{ steps.version.outputs.tag }}" \
+            --generate-notes \
+            artifacts/nixnas-tui-* artifacts/SHA256SUMS
+
+# =============================================================================
+# Dotkeeper pattern: what was adapted and what was deliberately skipped
+# =============================================================================
+#
+# ADAPTED
+#   persist-credentials: false on checkout               — kept, costs nothing
+#   permissions: {} global + per-job opt-in              — kept exactly
+#   SHA256SUMS via sha256sum <artifacts>                 — kept, same style
+#   gh release create --generate-notes, no --draft       — kept exactly
+#   Two-job split (build → release)                      — kept for separation
+#   workflow_dispatch                                     — ADDED (not in dotkeeper;
+#     required by spec; inputs.version is mandatory so version derivation is
+#     unambiguous — on tag push GITHUB_REF is used instead)
+#
+# SKIPPED / NOT APPLICABLE
+#   PACKAGES_TOKEN PAT instead of GITHUB_TOKEN:
+#     Dotkeeper uses a PAT so that `gh release create` fires the
+#     `release: published` event, which triggers downstream docker/alpine/aur
+#     workflows. nixnas has no such downstream workflows, so GITHUB_TOKEN with
+#     contents: write is sufficient and simpler.
+#
+#   SHA-pinned action refs (@SHA instead of @v4):
+#     Dotkeeper pins every action to a full commit SHA. The nixnas CI (ci.yml)
+#     uses tag refs (@v4, @stable). This file matches the existing CI
+#     convention for consistency.
+#
+#   Version injection into the binary (-ldflags in Go / vergen in Rust):
+#     Dotkeeper bakes version + short SHA into the binary at link time.
+#     The Rust equivalent would require a build.rs using the `vergen` crate,
+#     which is not in Cargo.toml. Skipped — add vergen if the TUI gains a
+#     --version flag.
+#
+#   Multi-arch / multi-OS build matrix:
+#     Dotkeeper builds 14+ targets. The spec says x86_64-linux only.
+#
+#   Native packages (.deb, .rpm, .apk, .pkg.tar.zst via nfpm):
+#     Irrelevant for a developer TUI distributed as a single static binary.
+#
+#   Attestations / SLSA provenance:
+#     Dotkeeper explicitly has none (no cosign, no ossf/slsa-framework).
+#     Matching that decision — skipped.
+#
+#   OpenSSF Scorecard + CodeQL workflows:
+#     These are separate workflow files in dotkeeper (scorecard.yml,
+#     codeql.yml), not part of release.yml. Add them as standalone files
+#     if the project pursues an OpenSSF badge.
+#
+#   Downstream distribution workflows (docker.yml, alpine.yml, aur.yml, homebrew.yml):
+#     No Docker image, no AUR package, no Homebrew tap for nixnas. Skipped.
