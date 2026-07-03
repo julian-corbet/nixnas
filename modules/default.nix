@@ -21,6 +21,7 @@
 
     ./storage/connect.nix    # connect your storage: stage-2 LUKS unlock + optional ZFS import
                              # (thin — mounting itself is native NixOS: fileSystems / boot.zfs)
+    ./store/location.nix     # store.location = usb | hot: the hot-mode MAIN /nix + initrd operator-key unlock
     ./store/budget.nix       # the 8 GiB-stick guard: fail the build if the closure exceeds store.maxClosureBytes
 
     ./appliance/base.nix          # stable identity (hostName) + Tailscale

@@ -264,8 +264,59 @@ in
       };
     };
 
-    ## ── Store behaviour on the slow stick ─────────────────────────────────
+    ## ── Store location: OS /nix on the stick (usb) or on the operator's hot storage (hot) ──
     store = {
+      location = mkOption {
+        type = types.enum [ "usb" "hot" ];
+        default = "usb";
+        description = ''
+          Where the OS's `/nix` store lives (see docs/HOT-MODE.md):
+            "usb" (default): the whole OS store is on the USB stick (LUKS2+f2fs). Small
+              appliances, max resilience — the OS boots from the stick even with the data
+              pool down. The stick is the size ceiling.
+            "hot": the MAIN system's `/nix` lives on the operator's own encrypted storage
+              (`store.hot.*`, e.g. a ZFS dataset on an SSD pool — unlimited, install anything
+              system-wide). The stick holds only the ESP + a self-contained RESCUE system
+              (`rescue.*`). The operator ENTERS THEIR KEY in the initrd to unlock it (never
+              auto/TPM). Hub-class boxes. NOT a composed store — two independent systems.
+        '';
+      };
+      hot = {
+        device = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "hot/system/nix";
+          description = ''
+            `hot` mode: the `fileSystems."/nix".device` for the MAIN system — the store that
+            holds the full OS closure. A ZFS dataset name (with `fsType = "zfs"`), or a
+            `/dev/mapper/<name>` for LUKS+ext4/btrfs/f2fs. Mounted by the initrd (neededForBoot)
+            after `store.hot.unlock` opens the encryption.
+          '';
+        };
+        fsType = mkOption {
+          type = types.str;
+          default = "zfs";
+          example = "ext4";
+          description = "Filesystem of `store.hot.device` (zfs/ext4/btrfs/f2fs/…). `zfs` pulls ZFS into the initrd; others don't.";
+        };
+        unlock = mkOption {
+          type = types.attrsOf (types.strMatching "/dev/disk/by-id/.+");
+          default = { };
+          example = literalExpression ''{ hot0 = "/dev/disk/by-id/ata-…"; }'';
+          description = ''
+            The LUKS members the INITRD must open (with the OPERATOR'S key — never TPM auto) to
+            reach the hot store, as `name → /dev/disk/by-id/…` (opens at `/dev/mapper/<name>`).
+            The operator enters the passphrase over initrd-SSH / console; the box blocks here
+            until they do (data stays sealed). Same shape as `storage.unlock`, but in stage-1.
+          '';
+        };
+        zpool = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "hot";
+          description = "For `fsType = \"zfs\"`: the pool the initrd imports (via /dev/mapper) before mounting `store.hot.device`.";
+        };
+      };
       preload = mkOption {
         type = types.bool;
         default = true;
@@ -304,6 +355,23 @@ in
           debug a problem whose evidence must survive a reboot/crash (e.g. an unlock or boot
           failure, where the data pools aren't up yet). It writes the stick, so turn it back
           off when done.
+        '';
+      };
+    };
+
+    ## ── Rescue system (hot mode only): the self-contained system on the stick ──
+    rescue = {
+      extraPackages = mkOption {
+        type = types.listOf types.package;
+        default = [ ];
+        example = literalExpression "[ pkgs.claude-code pkgs.git ]";
+        description = ''
+          Packages to include in the `hot`-mode RESCUE system (the small self-contained
+          system on the stick that boots when the pool is down). The rescue always carries
+          the repair essentials (zfs, cryptsetup, tpm2, sshd, a shell); this adds the
+          operator's own tools — e.g. an AI CLI you want available EXACTLY when you are
+          debugging a broken pool. They ride the stick's f2fs store and update via autoUpgrade
+          when they change (kept within the stick budget). Ignored in `usb` mode.
         '';
       };
     };
