@@ -9,10 +9,10 @@
 //!   1. `nix build .#imageScript` — a PURE eval; the flake needs no secrets.
 //!   2. Prompt for the LUKS store passphrase → a 0600 file in RAM-backed tmp.
 //!   3. If configured, `sops --decrypt` the Secure Boot PKI tar → RAM-backed tmp.
-//!   4. Run the disko image script:
-//!        --pre-format-files  <passphrase>  /tmp/nixnas-luks.key   (used at luksFormat)
-//!        --post-format-files <pki dir>     /nix/lanzaboote/pki    (lands on the encrypted store)
-//!      The .raw is written into `.nixnas-image/` next to the config.
+//!   4. Run the disko image script with `--pre-format-files <passphrase>
+//!      /tmp/nixnas-luks.key` (used at luksFormat) and `--post-format-files <pki dir>
+//!      /nix/lanzaboote/pki` (lands on the encrypted store). The .raw is written into
+//!      `.nixnas-image/` next to the config.
 //!   5. Zero + remove the secret temp files, regardless of success or failure.
 
 use crate::config::{config_dir, Config};
@@ -179,7 +179,7 @@ pub fn build_image(config_path: &Path, cfg: &Config) -> Result<PathBuf> {
     let raw = std::fs::read_dir(&out_dir)
         .with_context(|| format!("reading built image dir {}", out_dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .find(|p| p.extension().map_or(false, |x| x == "raw"))
+        .find(|p| p.extension().is_some_and(|x| x == "raw"))
         .context("no .raw file in the image output dir")?;
     Ok(raw)
 }

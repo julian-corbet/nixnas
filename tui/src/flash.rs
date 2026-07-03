@@ -102,7 +102,7 @@ pub fn flash(theme: &ColorfulTheme, config_path: &Path) -> Result<()> {
         .ok()
         .and_then(|rd| {
             rd.filter_map(|e| e.ok().map(|e| e.path()))
-                .find(|p| p.extension().map_or(false, |x| x == "raw"))
+                .find(|p| p.extension().is_some_and(|x| x == "raw"))
         })
         .context("no built image found — run `Build image` first")?;
 

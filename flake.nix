@@ -58,9 +58,17 @@
           # The CachyOS kernel set (pkgs.cachyosKernels); modules/boot/kernel.nix reads it.
           { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
           # Build the throwaway image-builder VM from stable nixpkgs (see inputs above).
+          # The host enables ZFS (boot.supportedFilesystems.zfs, for post-boot pool
+          # import), so disko's make-disk-image wants the ZFS module IN THE BUILDER too —
+          # under the host's package name (`zfs_cachyos`). The builder creates NO zfs
+          # filesystem (nixnas only formats the f2fs store), so it just needs the attr to
+          # resolve: alias `zfs_cachyos` → stable's `zfs` (builds against the builder's
+          # own stable kernel; inert since no zfs partition is imaged).
           {
             disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
-            disko.imageBuilder.kernelPackages = nixpkgs-stable.legacyPackages.x86_64-linux.linuxPackages;
+            disko.imageBuilder.kernelPackages =
+              let kp = nixpkgs-stable.legacyPackages.x86_64-linux.linuxPackages;
+              in kp.extend (_: _: { zfs_cachyos = kp.zfs; });
           }
         ];
       };
