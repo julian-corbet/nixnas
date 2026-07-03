@@ -1,4 +1,6 @@
 //! HOME — the appliance front door: banner, live environment status, main menu.
+//! It also owns the quit path, and with it the session-log exit prompt: clean
+//! by default, keep only on request (for inspecting a failed run).
 
 use crate::ui::{self, ACCENT, DIM, ERR, OK, WARN};
 use crate::{App, Screen};
@@ -6,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use std::path::Path;
 
@@ -47,9 +49,39 @@ const MENU: [(&str, &str); 6] = [
 #[derive(Default)]
 pub struct HomeState {
     pub selected: usize,
+    /// The quit-time "clean or keep the session logs" modal is open.
+    pub exit_prompt: bool,
+}
+
+/// Quit — or, when this run wrote session logs, ask what to do with them
+/// first. Ctrl+C (handled in main.rs) bypasses the prompt by design.
+fn request_quit(app: &mut App) {
+    if app.log.has_files() {
+        app.home.exit_prompt = true;
+    } else {
+        app.quit = true;
+    }
 }
 
 pub fn on_key(app: &mut App, key: KeyEvent) {
+    // The exit modal owns the keyboard while open. CLEAN is the default —
+    // Enter, C and even Esc all take it; K is the deliberate choice for a run
+    // worth inspecting. (Ctrl+C never reaches here — main.rs exits instantly,
+    // leaving the files on disk.)
+    if app.home.exit_prompt {
+        match key.code {
+            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => {
+                app.log.clean();
+                app.quit = true;
+            }
+            KeyCode::Char('k') | KeyCode::Char('K') => {
+                app.log.keep_and_prune();
+                app.quit = true;
+            }
+            _ => {}
+        }
+        return;
+    }
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
             app.home.selected = app.home.selected.checked_sub(1).unwrap_or(MENU.len() - 1);
@@ -57,7 +89,7 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
         KeyCode::Down | KeyCode::Char('j') => {
             app.home.selected = (app.home.selected + 1) % MENU.len();
         }
-        KeyCode::Char('q') => app.quit = true,
+        KeyCode::Char('q') => request_quit(app),
         KeyCode::Enter => match app.home.selected {
             0 => {
                 app.configure = Some(ui::configure::ConfigureState::from_config(&app.cfg));
@@ -82,7 +114,14 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
             // a finished one is replaced by the freshly requested mode.
             3 => {
                 if app.verify.as_ref().is_none_or(|v| !v.is_running()) {
-                    app.verify = Some(ui::verify::VerifyScreen::new_image(&app.config_path));
+                    let mut screen = ui::verify::VerifyScreen::new_image(&app.config_path);
+                    // The image verify spawns its worker in the constructor —
+                    // open the session log only when it actually started (a
+                    // missing image is still browsing, not an action).
+                    if screen.is_running() {
+                        screen.session_log = app.log.begin("verify-image");
+                    }
+                    app.verify = Some(screen);
                 }
                 app.screen = Screen::Verify;
             }
@@ -92,7 +131,7 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 }
                 app.screen = Screen::Verify;
             }
-            _ => app.quit = true,
+            _ => request_quit(app),
         },
         _ => {}
     }
@@ -156,6 +195,48 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         footer_area,
         &[("↑↓", "select"), ("Enter", "open"), ("q", "quit")],
     );
+
+    // Quit-time modal: what happens to THIS run's session logs.
+    if app.home.exit_prompt {
+        draw_exit_modal(f, app);
+    }
+}
+
+/// Centered exit prompt over the HOME screen. Clean is the DEFAULT (the tool
+/// is tidy by default); Keep exists for inspecting a failed run and prunes
+/// the directory to the newest files (see logging.rs).
+fn draw_exit_modal(f: &mut Frame, app: &App) {
+    let n = app.log.count();
+    let area = ui::centered_rect(f.area(), 66, 7);
+    let inner = ui::modal(f, area, &format!("Session logs ({n})"));
+    let dir = app
+        .log
+        .dir()
+        .map(|d| d.display().to_string())
+        .unwrap_or_default();
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("This run wrote {n} log file(s) under "),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(dir, Style::default().fg(DIM)),
+        ]),
+        Line::default(),
+        Line::from(vec![
+            Span::styled(
+                " C/Enter/Esc ",
+                Style::default().fg(Color::Black).bg(ACCENT),
+            ),
+            Span::styled(" clean (default)   ", Style::default().fg(Color::White)),
+            Span::styled(" K ", Style::default().fg(Color::Black).bg(ACCENT)),
+            Span::styled(
+                format!(" keep (dir pruned to newest {})", crate::logging::RETAIN),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
 /// One line per fact; ✓/✗ verified against the filesystem on every frame (cheap

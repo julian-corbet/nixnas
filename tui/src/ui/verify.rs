@@ -59,6 +59,11 @@ pub struct VerifyScreen {
     progress: (u64, u64),
     /// The final verdict line (PASS summary or issue list), shown in the panel.
     message: Option<String>,
+    /// THIS verification's session-log file (set when the checks start), so
+    /// the panel/footer never show a stale path from an earlier action.
+    /// pub(crate): the image mode spawns in the constructor, so HOME opens
+    /// the log right after constructing (see ui/home.rs).
+    pub(crate) session_log: Option<PathBuf>,
 }
 
 impl VerifyScreen {
@@ -83,6 +88,7 @@ impl VerifyScreen {
             gauge_title: "",
             progress: (0, 0),
             message: None,
+            session_log: None,
         }
     }
 
@@ -135,19 +141,28 @@ impl VerifyScreen {
         self.selected = self.selected.min(self.disks.len().saturating_sub(1));
     }
 
-    /// Pull everything the worker produced since the last frame.
-    pub fn drain_events(&mut self) {
+    /// Pull everything the worker produced since the last frame, teeing every
+    /// event into the session log — the file gets exactly what this pane shows
+    /// (progress is a gauge, not a line — it is deliberately not logged).
+    pub fn drain_events(&mut self, slog: &mut crate::logging::SessionLog) {
         let Some(rx) = &self.rx else { return };
         let mut done: Option<Result<String, String>> = None;
         while let Ok(ev) = rx.try_recv() {
             match ev {
                 VerifyEvent::Step(i, s) => {
+                    if let Some(name) = self.step_names.get(i) {
+                        slog.step(name, s);
+                    }
                     if let Some(slot) = self.steps.get_mut(i) {
                         *slot = s;
                     }
                 }
-                VerifyEvent::Detail(line) => self.details.push(line),
+                VerifyEvent::Detail(line) => {
+                    slog.line(&line);
+                    self.details.push(line);
+                }
                 VerifyEvent::Phase(title) => {
+                    slog.phase(title);
                     self.gauge_title = title;
                     self.progress = (0, 0);
                 }
@@ -159,10 +174,12 @@ impl VerifyScreen {
             self.rx = None;
             match result {
                 Ok(msg) => {
+                    slog.done(true, &msg);
                     self.message = Some(msg);
                     self.phase = Phase::Done { ok: true };
                 }
                 Err(e) => {
+                    slog.done(false, &e);
                     self.message = Some(e);
                     self.phase = Phase::Done { ok: false };
                 }
@@ -193,6 +210,8 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 // Fresh skip flag per run — a skip from a previous verification
                 // must not silently waive this one's fidelity compare.
                 st.skip = Arc::new(AtomicBool::new(false));
+                // The action is real from here: open its session-log file.
+                st.session_log = app.log.begin("verify-install");
                 st.rx = Some(crate::verify::spawn_verify_install(
                     dev,
                     st.image.as_ref().map(|(p, _)| p.clone()),
@@ -270,42 +289,31 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             );
         }
         Phase::Running => {
+            let log_path = st.session_log.as_ref().map(|p| p.display().to_string());
             draw_checks(f, st, main_area);
             draw_gauge(f, st, aux_area);
+            let mut hints = vec![("↑↓/PgUp/PgDn", "scroll"), ("End", "follow")];
             if st.mode == VerifyMode::Install {
-                ui::footer(
-                    f,
-                    footer_area,
-                    &[
-                        ("↑↓/PgUp/PgDn", "scroll"),
-                        ("End", "follow"),
-                        ("s", "skip fidelity compare"),
-                        ("", "verify running — Esc disabled"),
-                    ],
-                );
-            } else {
-                ui::footer(
-                    f,
-                    footer_area,
-                    &[
-                        ("↑↓/PgUp/PgDn", "scroll"),
-                        ("End", "follow"),
-                        ("", "verify running — Esc disabled"),
-                    ],
-                );
+                hints.push(("s", "skip fidelity compare"));
             }
+            hints.push(("", "verify running — Esc disabled"));
+            if let Some(p) = &log_path {
+                hints.push(("log", p.as_str()));
+            }
+            ui::footer(f, footer_area, &hints);
         }
         Phase::Done { ok } => {
             // Copy the flag out so the borrow of `st.phase` is dead before the
             // mutable borrow draw_checks needs (it clamps the findings scroll).
             let ok = *ok;
+            let log_path = st.session_log.as_ref().map(|p| p.display().to_string());
             draw_checks(f, st, main_area);
             draw_verdict(f, st, ok, aux_area);
-            ui::footer(
-                f,
-                footer_area,
-                &[("↑↓/PgUp/PgDn", "scroll"), ("Esc/Enter", "back to menu")],
-            );
+            let mut hints = vec![("↑↓/PgUp/PgDn", "scroll"), ("Esc/Enter", "back to menu")];
+            if let Some(p) = &log_path {
+                hints.push(("log", p.as_str()));
+            }
+            ui::footer(f, footer_area, &hints);
         }
     }
 }
@@ -475,6 +483,12 @@ fn draw_verdict(f: &mut Frame, st: &VerifyScreen, ok: bool, area: Rect) {
         lines.push(Line::from(Span::styled(
             format!("  {msg}"),
             Style::default().fg(Color::White),
+        )));
+    }
+    if let Some(p) = &st.session_log {
+        lines.push(Line::from(Span::styled(
+            format!("  log: {}", p.display()),
+            Style::default().fg(DIM),
         )));
     }
     f.render_widget(

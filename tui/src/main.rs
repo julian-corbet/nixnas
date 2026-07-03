@@ -15,6 +15,7 @@
 mod build;
 mod config;
 mod flash;
+mod logging;
 mod ui;
 mod verify;
 
@@ -59,6 +60,9 @@ pub struct App {
     /// themselves — suspending the terminal is the main loop's job (it owns the
     /// terminal handle), so they RECORD the request and the loop services it.
     pub yazi_pick: Option<ui::configure::YaziRequest>,
+    /// Session log tee: inert until the first action opens a file (see
+    /// logging.rs); the exit prompt on HOME decides clean/keep at quit time.
+    pub log: logging::SessionLog,
     pub quit: bool,
 }
 
@@ -74,6 +78,7 @@ impl App {
             flash: None,
             verify: None,
             yazi_pick: None,
+            log: logging::SessionLog::new(),
             quit: false,
         }
     }
@@ -135,14 +140,16 @@ fn restore_terminal() {
 fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, mut app: App) -> Result<()> {
     while !app.quit {
         // Pull worker events first so every frame reflects the newest progress.
+        // This drain is also the ONE tee point into the session log — the
+        // workers stay terminal- and file-agnostic (see logging.rs).
         if let Some(b) = app.build.as_mut() {
-            b.drain_events();
+            b.drain_events(&mut app.log);
         }
         if let Some(fl) = app.flash.as_mut() {
-            fl.drain_events();
+            fl.drain_events(&mut app.log);
         }
         if let Some(v) = app.verify.as_mut() {
-            v.drain_events();
+            v.drain_events(&mut app.log);
         }
         terminal.draw(|f| ui::draw(f, &mut app))?;
         // The poll timeout doubles as the redraw tick while workers stream events.
@@ -216,6 +223,8 @@ fn run_yazi_picker(
 fn on_key(app: &mut App, key: KeyEvent) {
     // Global emergency exit. Esc is refused during a running build/flash, so this
     // must always work — the process dies, children are NOT reaped (documented).
+    // It also bypasses HOME's session-log exit prompt: emergency exit stays
+    // instant, and any log files simply remain on disk for inspection.
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         app.quit = true;
         return;

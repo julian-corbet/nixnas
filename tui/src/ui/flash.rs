@@ -41,6 +41,9 @@ pub struct FlashScreen {
     gauge_title: &'static str,
     progress: (u64, u64),
     message: Option<String>,
+    /// THIS flash's session-log file (set when the write is armed), so the
+    /// panel/footer never show a stale path from an earlier action.
+    session_log: Option<PathBuf>,
 }
 
 impl FlashScreen {
@@ -63,6 +66,7 @@ impl FlashScreen {
             gauge_title: "",
             progress: (0, 0),
             message,
+            session_log: None,
         };
         screen.refresh_disks();
         screen
@@ -86,12 +90,16 @@ impl FlashScreen {
         self.selected = self.selected.min(self.disks.len().saturating_sub(1));
     }
 
-    pub fn drain_events(&mut self) {
+    /// Pull everything the worker produced since the last frame, teeing the
+    /// phases and the verdict into the session log (progress is a gauge, not
+    /// a line — it is deliberately not logged).
+    pub fn drain_events(&mut self, slog: &mut crate::logging::SessionLog) {
         let Some(rx) = &self.rx else { return };
         let mut done: Option<Result<String, String>> = None;
         while let Ok(ev) = rx.try_recv() {
             match ev {
                 FlashEvent::Phase(title) => {
+                    slog.phase(title);
                     self.gauge_title = title;
                     self.progress = (0, 0);
                 }
@@ -103,10 +111,12 @@ impl FlashScreen {
             self.rx = None;
             match result {
                 Ok(msg) => {
+                    slog.done(true, &msg);
                     self.message = Some(msg);
                     self.phase = Phase::Done { ok: true };
                 }
                 Err(e) => {
+                    slog.done(false, &e);
                     self.message = Some(e);
                     self.phase = Phase::Done { ok: false };
                 }
@@ -176,6 +186,8 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 if typed.trim() == name {
                     let (image, _) = st.image.clone().expect("confirmed without an image");
                     let backup_to = st.backup.then(|| flash::backup_path(&config_path));
+                    // The action is real from here: open its session-log file.
+                    st.session_log = app.log.begin("flash");
                     st.rx = Some(flash::spawn_flash(image, dev, size, backup_to));
                     st.phase = Phase::Running;
                 } else {
@@ -244,11 +256,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
         Phase::Running => {
             draw_progress(f, st, main_area);
-            ui::footer(f, footer_area, &[("", "writing — do not remove the stick")]);
+            let log_path = st.session_log.as_ref().map(|p| p.display().to_string());
+            let mut hints = vec![("", "writing — do not remove the stick")];
+            if let Some(p) = &log_path {
+                hints.push(("log", p.as_str()));
+            }
+            ui::footer(f, footer_area, &hints);
         }
         Phase::Done { ok } => {
             draw_done(f, st, *ok, main_area);
-            ui::footer(f, footer_area, &[("Esc/Enter", "back to menu")]);
+            let log_path = st.session_log.as_ref().map(|p| p.display().to_string());
+            let mut hints = vec![("Esc/Enter", "back to menu")];
+            if let Some(p) = &log_path {
+                hints.push(("log", p.as_str()));
+            }
+            ui::footer(f, footer_area, &hints);
         }
     }
 }
@@ -516,6 +538,13 @@ fn draw_done(f: &mut Frame, st: &FlashScreen, ok: bool, area: ratatui::layout::R
         lines.push(Line::from(Span::styled(
             format!("  {msg}"),
             Style::default().fg(Color::White),
+        )));
+    }
+    if let Some(p) = &st.session_log {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            format!("  log: {}", p.display()),
+            Style::default().fg(DIM),
         )));
     }
     f.render_widget(

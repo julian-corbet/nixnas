@@ -46,6 +46,9 @@ pub struct BuildScreen {
     rx: Option<Receiver<BuildEvent>>,
     /// The final outcome line (image path or error), shown above the footer.
     message: Option<String>,
+    /// THIS build's session-log file (set when the pipeline starts), so the
+    /// panel/footer never show a stale path from an earlier action.
+    session_log: Option<PathBuf>,
 }
 
 impl BuildScreen {
@@ -61,6 +64,7 @@ impl BuildScreen {
             follow: true,
             rx: None,
             message: None,
+            session_log: None,
         }
     }
 
@@ -68,18 +72,25 @@ impl BuildScreen {
         matches!(self.phase, Phase::Running)
     }
 
-    /// Pull everything the worker produced since the last frame.
-    pub fn drain_events(&mut self) {
+    /// Pull everything the worker produced since the last frame, teeing every
+    /// event into the session log — the file gets exactly what this pane shows.
+    pub fn drain_events(&mut self, slog: &mut crate::logging::SessionLog) {
         let Some(rx) = &self.rx else { return };
         let mut done: Option<Result<PathBuf, String>> = None;
         while let Ok(ev) = rx.try_recv() {
             match ev {
                 BuildEvent::Step(i, s) => {
+                    if let Some(name) = STEP_NAMES.get(i) {
+                        slog.step(name, s);
+                    }
                     if let Some(slot) = self.steps.get_mut(i) {
                         *slot = s;
                     }
                 }
-                BuildEvent::Log(line) => self.log.push(line),
+                BuildEvent::Log(line) => {
+                    slog.line(&line);
+                    self.log.push(line);
+                }
                 BuildEvent::Done(r) => done = Some(r),
             }
         }
@@ -92,10 +103,13 @@ impl BuildScreen {
             self.rx = None;
             match result {
                 Ok(img) => {
-                    self.message = Some(format!("Built image: {}", img.display()));
+                    let msg = format!("Built image: {}", img.display());
+                    slog.done(true, &msg);
+                    self.message = Some(msg);
                     self.phase = Phase::Done { ok: true };
                 }
                 Err(e) => {
+                    slog.done(false, &e);
                     self.message = Some(e);
                     self.phase = Phase::Done { ok: false };
                 }
@@ -145,6 +159,10 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 if first == second {
                     // Passphrase accepted — hand it to the worker and start the
                     // pipeline. The worker owns the RAM-file + shred lifecycle.
+                    // The action is real from here: open its session-log file
+                    // (the passphrase itself never enters the event stream,
+                    // so it can never reach the file — see logging.rs).
+                    st.session_log = app.log.begin("build");
                     st.phase = Phase::Running;
                     st.rx = Some(crate::build::spawn_build(
                         app.config_path.clone(),
@@ -203,9 +221,11 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let Some(st) = app.build.as_mut() else { return };
+    let log_path = st.session_log.as_ref().map(|p| p.display().to_string());
+    // Two message rows: the outcome line plus the session-log path under it.
     let [main_area, message_area, footer_area] = Layout::vertical([
         Constraint::Min(8),
-        Constraint::Length(1),
+        Constraint::Length(2),
         Constraint::Length(1),
     ])
     .areas(f.area());
@@ -258,36 +278,46 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if let Some(msg) = &st.message {
         let ok = matches!(st.phase, Phase::Done { ok: true });
+        let mut lines = vec![Line::from(Span::styled(
+            format!(" {msg}"),
+            Style::default()
+                .fg(if ok { OK } else { ERR })
+                .add_modifier(Modifier::BOLD),
+        ))];
+        if let Some(p) = &log_path {
+            lines.push(Line::from(Span::styled(
+                format!(" log: {p}"),
+                Style::default().fg(DIM),
+            )));
+        }
         f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!(" {msg}"),
-                Style::default()
-                    .fg(if ok { OK } else { ERR })
-                    .add_modifier(Modifier::BOLD),
-            )))
-            .wrap(Wrap { trim: true }),
+            Paragraph::new(lines).wrap(Wrap { trim: true }),
             message_area,
         );
     }
 
     match st.phase {
-        Phase::Running => ui::footer(
-            f,
-            footer_area,
-            &[
+        Phase::Running => {
+            let mut hints = vec![
                 ("↑↓/PgUp/PgDn", "scroll log"),
                 ("End", "follow"),
                 ("", "build running — Esc disabled"),
-            ],
-        ),
-        Phase::Done { .. } => ui::footer(
-            f,
-            footer_area,
-            &[
+            ];
+            if let Some(p) = &log_path {
+                hints.push(("log", p.as_str()));
+            }
+            ui::footer(f, footer_area, &hints);
+        }
+        Phase::Done { .. } => {
+            let mut hints = vec![
                 ("↑↓/PgUp/PgDn", "scroll log"),
                 ("Esc/Enter", "back to menu"),
-            ],
-        ),
+            ];
+            if let Some(p) = &log_path {
+                hints.push(("log", p.as_str()));
+            }
+            ui::footer(f, footer_area, &hints);
+        }
         _ => ui::footer(
             f,
             footer_area,
