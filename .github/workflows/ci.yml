@@ -1,0 +1,43 @@
+# CI for the public nixnas core: prove the zero-secrets demo EVALUATES (full module
+# eval incl. every assertion — the fail-closed guards fire here) and the TUI compiles.
+# Deliberately eval-only for Nix: building the demo toplevel means realizing a whole
+# NixOS closure incl. the CachyOS kernel — real hardware-adjacent validation happens
+# in the QEMU rig (test/), not on a CI runner.
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  eval:
+    name: nix eval (demo host, all assertions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Evaluate the demo toplevel (assertions + module system, no build)
+        run: |
+          nix eval --raw \
+            .#nixosConfigurations.demo.config.system.build.toplevel.drvPath
+      - name: Evaluate the image script derivation
+        run: |
+          nix eval --raw \
+            .#nixosConfigurations.demo.config.system.build.diskoImagesScript.drvPath
+
+  tui:
+    name: cargo check + clippy (tui)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo check --locked
+      - run: cargo clippy --locked -- -D warnings
