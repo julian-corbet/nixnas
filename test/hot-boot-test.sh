@@ -23,7 +23,7 @@ set -uo pipefail
 FLAKE="${FLAKE:-.}"
 PASS="${PASS:-nixnas-hot}"
 
-for c in nix qemu-system-x86_64 sgdisk cryptsetup mkfs.ext4 losetup; do
+for c in nix qemu-system-x86_64 sgdisk cryptsetup mkfs.ext4 mkfs.vfat losetup; do
   command -v "$c" >/dev/null || { echo "!! missing tool: $c" >&2; exit 1; }
 done
 [ "$(id -u)" = 0 ] || { echo "!! must run as root (losetup/cryptsetup/mount)" >&2; exit 1; }
@@ -47,12 +47,17 @@ TOP="$(nix build --no-link --print-out-paths \
   || { echo "!! toplevel build failed" >&2; exit 1; }
 echo "   toplevel: $TOP"
 
-# ── 2. assemble the external LUKS+ext4 /nix disk, populated with the closure ──
-echo ">> assembling the external LUKS+ext4 /nix disk (partlabel nixstore-demo) …"
+# ── 2. assemble the disk: a labelled ESP (for the /boot mount) + the LUKS+ext4 /nix ──
+# demo-hot mounts /boot by-label NIXNAS-ESP (it shares the stick ESP in reality); without it
+# the boot drops to emergency mode. This is direct-kernel-boot, so the ESP need only exist +
+# carry the label — no bootloader is installed on it.
+echo ">> assembling the disk (ESP NIXNAS-ESP + LUKS+ext4 /nix partlabel nixstore-demo) …"
 truncate -s 6G "$DISK"
-sgdisk -n1:0:0 -t1:8300 -c1:nixstore-demo "$DISK" >/dev/null
+sgdisk -n1:0:+64M -t1:EF00 -c1:esp \
+       -n2:0:0     -t2:8300 -c2:nixstore-demo "$DISK" >/dev/null
 LOOP="$(losetup --find --show --partscan "$DISK")"
-part="${LOOP}p1"
+mkfs.vfat -n NIXNAS-ESP "${LOOP}p1" >/dev/null
+part="${LOOP}p2"
 [ -b "$part" ] || { echo "!! loop partition $part not present" >&2; exit 1; }
 # Fast KDF (pbkdf2, low iters) — this is a throwaway CI volume, not a real secret.
 echo -n "$PASS" | cryptsetup luksFormat --type luks2 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --batch-mode "$part" -
