@@ -1,27 +1,43 @@
 # nixnas
 
-Boot **your own** declarative NixOS from a USB stick (8 GB+) into RAM — with the whole
-boot chain hardened, self-update and rollback built in, and your existing storage
-connected. nixnas is the appliance mechanism (boot, crypto, the on-stick store, the
-kernel); the workloads are plain NixOS you bring. A local TUI writes your signed image.
-Built to be adopted (and contributed to) by others, not just one machine.
+Boot **your own** declarative NixOS from a USB stick (8 GB+) — with the whole boot chain
+hardened, self-update and rollback built in, and your existing storage connected. nixnas
+is the appliance mechanism (boot, crypto, the store, the kernel); the workloads are plain
+NixOS you bring. A local TUI writes your signed image. Built to be adopted (and
+contributed to) by others, not just one machine.
 
-- **Boots from a USB stick into RAM** — the root is a tmpfs (impermanence); only `/nix`
+**Two store locations** (`nixnas.store.location` — [`docs/HOT-MODE.md`](docs/HOT-MODE.md)):
+
+| | `usb` (default) | `hot` |
+|---|---|---|
+| The OS `/nix` lives on | the stick (LUKS2+f2fs, runs from RAM) | your encrypted pool — unlimited system-wide installs |
+| The stick holds | the whole OS | the ESP + a self-contained **rescue** system |
+| Unlock at boot | TPM2 (PIN optional) | **you enter your key** in the initrd — never auto |
+| A dead pool means | the OS still boots | the rescue boots (repair shell + your own tools) |
+| For | small appliances, max resilience | hub-class boxes that run a lot |
+
+- **`usb` mode boots into RAM** — the root is a tmpfs (impermanence); only `/nix`
   and the ESP persist, and the booted closure is warmed into a compressed page cache, so
   the slow stick is spared after boot. (This is "run from RAM" done right — not
   `copytoram`, which doesn't compose with self-update.)
 - **Multiple signed versions, rollback**: each past generation stays bootable as its own
   signed UKI; the bootloader menu is the guaranteed manual rollback, and boot-counting
   adds automatic fallback on top.
-- **Survives storage trouble**: the OS is independent of your data storage — the box boots
-  even if a disk is degraded or missing (non-fatal import).
-- **Encrypted at rest, two independent layers**: the on-stick store is LUKS2 + f2fs
-  (zstd-compressed), bound to the TPM2 (PIN optional — with it a powered-off box never
-  auto-decrypts; without it the box self-recovers from a power cut). Your DATA is
-  passphrase-only — never TPM-bound, never keyfile-persisted: the box boots reachable with
-  the data locked, you SSH in and `nixnas-unlock` opens the whole set with ONE passphrase.
-  A seized disk (or box) reveals nothing, and a disk pulled into another machine still
-  opens with the passphrase — no specific box's TPM required.
+- **Survives storage trouble**: in `usb` mode the OS is independent of your data storage —
+  the box boots even if a disk is degraded or missing (non-fatal import). In `hot` mode
+  that role moves to the **rescue** system: a small, self-contained NixOS on the stick that
+  boots with zero pools and carries the repair tools *plus whatever you want at 3 a.m. with
+  a dead pool* (`rescue.extraPackages` — an AI CLI, say). The running main maintains it
+  automatically (closure, GC, signed boot entry).
+- **Encrypted at rest, two independent layers**: in `usb` mode the on-stick store is LUKS2 +
+  f2fs (zstd-compressed), bound to the TPM2 (PIN optional — with it a powered-off box never
+  auto-decrypts; without it the box self-recovers from a power cut). In `hot` mode the OS
+  store shares your pool's encryption and **only your key opens it — entered in the initrd
+  over an authenticated channel (TPM-sealed initrd-SSH host key), never TPM-released**: a
+  stolen, powered-off box sits at the initrd forever. Your DATA is passphrase-only in both
+  modes — never TPM-bound, never keyfile-persisted: post-boot `nixnas-unlock` opens the
+  whole set with ONE passphrase. A seized disk (or box) reveals nothing, and a disk pulled
+  into another machine still opens with the passphrase — no specific box's TPM required.
 - **Bring your own storage**: nixnas imports + unlocks whatever you already use — any Linux
   filesystem and encryption — and never creates, formats, or destroys it.
 - **Kind to the stick**: logs, `/tmp`, coredumps and swap live in RAM, so the USB takes ~no
@@ -68,8 +84,11 @@ See [`docs/SCOPE.md`](docs/SCOPE.md) (what nixnas is / is not),
 
 ## Status
 
-The full decided model boots end-to-end, built locally and validated in a QEMU/OVMF/swtpm
-VM (`test/`):
+The full decided model boots end-to-end — and CI re-proves it on every push, for free, on
+GitHub's KVM-capable public runners (`.github/workflows/boot-test.yml`): the image is
+built and booted in QEMU/OVMF/swtpm (`test/`), the TPM-sealed initrd-SSH host key must
+survive a genuine power cycle, a wrong TPM must fail closed (`--tamper`), and the hot-mode
+external-store boot must reach login from a single operator key entry:
 
 - ✅ CachyOS kernel (x86-64-v3 + ThinLTO, `zfs_cachyos`) + impermanence (tmpfs root) +
   the LUKS2 **f2fs zstd:22** store, all from one disko-built image.
@@ -86,6 +105,14 @@ VM (`test/`):
 - ✅ **Rollback** — bounded kept generations + the bootloader menu (guaranteed), plus
   boot-counting (lanzaboote writes/counts the entry down).
 - ✅ **Self-update** — `autoUpgrade`, stage-only, never self-reboots.
+- ✅ **Hot mode** (`store.location = "hot"`) — the MAIN system boots with `/nix` on an
+  external, operator-key-unlocked LUKS device: the initrd asks for YOUR key and proceeds
+  only then (CI-proven in QEMU, including the serialised single-entry unlock — two LUKS
+  members, one passphrase entry). The stick carries a self-contained rescue; the main
+  maintains it (`rescue-maintain`: closure → stick, GC to current+prev, self-signed UKI at
+  `EFI/Linux/nixnas-rescue.efi` — a name lanzaboote's ESP GC provably never prunes).
+  The hot-store-on-ZFS initrd path (legacy dataset mount + import-after-key) is
+  design-verified but first runs on real hardware.
 
 Hardware spikes remaining (a real UEFI box, not the VM): the boot-counting **bless** loop
 (auto-clear on a good boot; the manual menu is the fallback meanwhile), the firmware setup
