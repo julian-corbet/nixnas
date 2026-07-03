@@ -77,11 +77,40 @@
         ];
       };
 
+      # A hot-mode variant of the demo (store.location = "hot"): CI-builds the hot boot path
+      # (modules/store/location.nix — /nix on an external operator-key-unlocked device). Shares
+      # the demo's builder plumbing; drops the usb-image self-checks (verify-*), which assume
+      # the f2fs stick. rescue.enable is off (keyless demo — see hosts/demo-hot.nix).
+      nixosConfigurations.demo-hot = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          disko.nixosModules.disko
+          lanzaboote.nixosModules.lanzaboote
+          impermanence.nixosModules.impermanence
+          self.nixosModules.nixnas
+          ./hosts/demo
+          ./hosts/demo-hot.nix
+          { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
+          {
+            disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
+            disko.imageBuilder.kernelPackages =
+              let sp = nixpkgs-stable.legacyPackages.x86_64-linux;
+              in sp.linuxPackages.extend (_: _: {
+                zfs_cachyos = sp.linuxPackages.${sp.zfs.kernelModuleAttribute};
+              });
+          }
+        ];
+      };
+
       # `nix flake check` proves the demo toplevel builds without the private overlay, and
       # that its closure stays within the 8 GiB-stick budget (modules/store/budget.nix).
       checks = forAllSystems (system: {
         demo-toplevel = self.nixosConfigurations.demo.config.system.build.toplevel;
         demo-closure-budget = self.nixosConfigurations.demo.config.system.build.storeClosureBudget;
+        # hot mode builds (location.nix + the hot wiring) …
+        demo-hot-toplevel = self.nixosConfigurations.demo-hot.config.system.build.toplevel;
+        # … and the rescue maintainer's shell passes shellcheck (writeShellApplication build).
+        demo-rescue-maintainer = self.nixosConfigurations.demo.config.system.build.rescueMaintainer;
       });
 
       # The personalised USB image. The TUI builds this locally for a real host; here

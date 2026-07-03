@@ -106,7 +106,14 @@ let
   };
 in
 {
-  config = lib.mkIf active {
+  # Expose the maintainer script UNCONDITIONALLY so CI can build it (writeShellApplication
+  # runs shellcheck at build time — that is the cheap guard on this complex shell). Building
+  # it forces the db-key path via config.boot.lanzaboote.pkiBundle, which resolves whenever
+  # Secure Boot is on (always, for any real host and the demo).
+  config = lib.mkMerge [
+    { system.build.rescueMaintainer = maintain; }
+
+    (lib.mkIf active {
     assertions = [
       {
         assertion = cfg.rescue.flakeAttr != null;
@@ -149,5 +156,6 @@ in
 
     # The maintainer is a handy manual command too (nixnas-rescue-maintain).
     environment.systemPackages = [ maintain ];
-  };
+    })
+  ];
 }

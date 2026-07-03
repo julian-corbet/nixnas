@@ -27,6 +27,14 @@ jobs:
         run: |
           nix eval --raw \
             .#nixosConfigurations.demo.config.system.build.diskoImagesScript.drvPath
+      - name: Evaluate the HOT-mode host (store.location = "hot"; location.nix + its assertions)
+        run: |
+          nix eval --raw \
+            .#nixosConfigurations.demo-hot.config.system.build.toplevel.drvPath
+      - name: Build the rescue maintainer (shellcheck the cross-store maintain script)
+        run: |
+          nix build --no-link --print-out-paths \
+            .#checks.x86_64-linux.demo-rescue-maintainer
 
   tui:
     name: cargo check + clippy (tui)
