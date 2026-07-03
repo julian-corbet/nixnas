@@ -40,8 +40,10 @@ let
     ];
     text = ''
       # ── inputs ─────────────────────────────────────────────────────────────
-      flake=${lib.escapeShellArg cfg.autoUpgrade.flake}
-      attr=${lib.escapeShellArg cfg.rescue.flakeAttr}
+      # (defaults keep the script eval-safe when built for the demo, where these are null;
+      #  real use is gated by `active`, whose assertions require them non-null.)
+      flake=${lib.escapeShellArg (if cfg.autoUpgrade.flake != null then cfg.autoUpgrade.flake else "")}
+      attr=${lib.escapeShellArg (if cfg.rescue.flakeAttr != null then cfg.rescue.flakeAttr else "")}
       dbkey=${lib.escapeShellArg "${pkiDb}/db.key"}
       dbcert=${lib.escapeShellArg "${pkiDb}/db.pem"}
       esp=/boot
