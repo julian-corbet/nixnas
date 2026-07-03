@@ -67,6 +67,16 @@ firmware → stick ESP → signed systemd-boot menu:
 
 ## Install — the rescue system IS the install environment
 
+Works the same whether the box already has a pool (a migration) or has BLANK DISKS (a
+fresh machine) — the rescue boots with zero pools and is the bootstrap environment.
+
+0. **Fresh machine only — create your encrypted storage from the rescue shell.** nixnas
+   never formats data storage, so this step is yours, with the tools the rescue ships:
+   `cryptsetup luksFormat` each member with YOUR passphrase → open them at stable mapper
+   names → `zpool create` over `/dev/mapper/*` (or mkfs on LUKS — nixnas is
+   storage-agnostic) → create the OS store dataset with **`mountpoint=legacy`** (e.g.
+   `zfs create -o mountpoint=legacy pool/system/nix`). Migrating boxes skip this — the
+   pool exists.
 1. Build + flash the **rescue** image (ESP + rescue f2fs) to the stick via the TUI.
    (In `hot` mode the disko image is the RESCUE system; the main store is not in the image.)
 2. Boot the rescue → unlock the pool (`nixnas-unlock`) → stage the target: a tmpfs at
