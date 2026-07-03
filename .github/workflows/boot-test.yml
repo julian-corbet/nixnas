@@ -32,7 +32,9 @@ jobs:
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
-          large-packages: false   # keep it quick; the tool-cache + swaps free enough
+          large-packages: true    # reclaim as much as possible for the closure + .raw
+          docker-images: true
+          swap-storage: false
 
       # QEMU needs /dev/kvm accessible to the runner user for accelerated boots.
       - name: Enable KVM
@@ -63,7 +65,18 @@ jobs:
 
       - name: Build the demo image (sandbox diskoImages → nixnas.raw, demo passphrase)
         run: |
-          nix build .#image --accept-flake-config --print-build-logs
+          set -o pipefail
+          echo "== KVM check =="; ls -l /dev/kvm; kvm-ok 2>/dev/null || true
+          echo "== free space =="; df -h / /mnt 2>/dev/null || df -h
+          # The image is built by a disko VM (vmTools). On failure, dump the REAL builder
+          # log (nix streams only the serial console with --print-build-logs).
+          if ! nix build .#image --accept-flake-config --print-build-logs 2>&1 | tee /tmp/build.log; then
+            echo "===================== FULL BUILDER LOG ====================="
+            drv=$(grep -oE '/nix/store/[a-z0-9]+-demo-disko-images\.drv' /tmp/build.log | head -1)
+            [ -n "$drv" ] && nix log "$drv" 2>/dev/null | tail -120
+            echo "== free space after =="; df -h / /mnt 2>/dev/null || df -h
+            exit 1
+          fi
           find -L result -name '*.raw' -printf '%s bytes  %p\n'
 
       - name: Boot #1 seals → boot #2 initrd unseals → unlock over SSH → login
