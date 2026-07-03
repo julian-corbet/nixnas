@@ -30,6 +30,13 @@ in
   # `hot`-mode MAIN config's /nix is the hot device (modules/store/location.nix), so it
   # gets NO stick image here. See docs/HOT-MODE.md.
   config = lib.mkIf (cfg.enable && cfg.store.location == "usb") {
+    # The builder VM's RAM. disko's 1 GiB default OOM-hangs SILENTLY mid-build once the
+    # closure copy starts (diagnosed from a real hung build's session log). 2 GiB is the
+    # nixnas ceiling BY DESIGN — the image must be buildable on modest machines; if 2 GiB
+    # ever proves insufficient, that is a builder bug to fix (write-through tuning), never
+    # a reason to demand more host RAM. (`--build-memory` / build_memory_mib still override.)
+    disko.memSize = lib.mkDefault 2048;
+
     disko.devices = {
       # Impermanence: root is tmpfs. As a disko `nodev` device it is mounted at the
       # install rootMountPoint (so the installer has a "/") and becomes fileSystems."/".
