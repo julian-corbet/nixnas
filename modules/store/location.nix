@@ -38,6 +38,23 @@ in
         }
       ];
 
+      # Impermanence tmpfs root. In usb mode disko's `nodev."/"` provides this; in hot mode
+      # disk.nix is off (no stick image for the main), so define the runtime root here.
+      fileSystems."/" = {
+        device = "tmpfs";
+        fsType = "tmpfs";
+        options = [ "size=50%" "mode=0755" ];
+      };
+
+      # The ESP: the MAIN shares the stick's ESP with the rescue (lanzaboote installs the
+      # main's UKIs; rescue-maintain drops EFI/Linux/nixnas-rescue.efi). Mount it by the label
+      # disk.nix stamps on the stick ESP, so it's found regardless of device path.
+      fileSystems."/boot" = {
+        device = "/dev/disk/by-label/NIXNAS-ESP";
+        fsType = "vfat";
+        options = [ "umask=0077" "noatime" ];
+      };
+
       # The MAIN system's /nix = the hot device. neededForBoot ⇒ mounted in stage-1.
       fileSystems."/nix" = {
         device = hot.device;

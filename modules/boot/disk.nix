@@ -53,6 +53,9 @@ in
                 type = "filesystem";
                 format = "vfat";
                 mountpoint = "/boot";
+                # Label the ESP so hot-mode MAIN systems can mount it by-label (they share this
+                # stick's ESP with the rescue; disk.nix doesn't run for them). See location.nix.
+                extraArgs = [ "-n" "NIXNAS-ESP" ];
                 mountOptions = [ "umask=0077" "noatime" ];
               };
             };

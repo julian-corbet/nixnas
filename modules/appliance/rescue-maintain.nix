@@ -48,7 +48,7 @@ let
       espuki="$esp/EFI/Linux/nixnas-rescue.efi"
       marker=/var/lib/nixnas/rescue-installed   # the toplevel we last installed
 
-      test -r "$dbkey" -a -r "$dbcert" || { echo "rescue-maintain: db signing keys not readable at $dbkey" >&2; exit 1; }
+      { [ -r "$dbkey" ] && [ -r "$dbcert" ]; } || { echo "rescue-maintain: db signing keys not readable at $dbkey" >&2; exit 1; }
 
       # ── 1. build the rescue toplevel from the SAME flake rev autoUpgrade uses ─
       echo "rescue-maintain: building $flake#nixosConfigurations.$attr …"
