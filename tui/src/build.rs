@@ -7,20 +7,53 @@
 //!
 //! Pipeline (all secrets stay out of the Nix store):
 //!   1. `nix build .#imageScript` — a PURE eval; the flake needs no secrets.
-//!   2. Prompt for the LUKS store passphrase → a 0600 file in RAM-backed tmp.
+//!   2. The LUKS store passphrase (collected by the UI) → a 0600 file in RAM-backed tmp.
 //!   3. If configured, `sops --decrypt` the Secure Boot PKI tar → RAM-backed tmp.
 //!   4. Run the disko image script with `--pre-format-files <passphrase>
 //!      /tmp/nixnas-luks.key` (used at luksFormat) and `--post-format-files <pki dir>
 //!      /nix/lanzaboote/pki` (lands on the encrypted store). The .raw is written into
 //!      `.nixnas-image/` next to the config.
 //!   5. Zero + remove the secret temp files, regardless of success or failure.
+//!
+//! The pipeline runs on a worker thread and reports through [`BuildEvent`]s so the
+//! full-screen UI can show a live step checklist and stream the child-process logs
+//! without the worker ever touching the terminal itself.
 
 use crate::config::{config_dir, Config};
 use anyhow::{bail, Context, Result};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{Receiver, Sender};
+
+/// The step checklist as the UI presents it. Indices are the protocol between the
+/// pipeline and the BUILD screen — keep them in sync with `run_pipeline`.
+pub const STEP_NAMES: [&str; 5] = [
+    "Evaluate image script (nix build)",
+    "LUKS store passphrase → RAM file",
+    "Secure Boot PKI (sops decrypt + inject)",
+    "disko builder VM (write .raw)",
+    ".raw image ready",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepState {
+    Pending,
+    Running,
+    Ok,
+    /// The step does not apply to this config (no `sb_keys_sops`).
+    Skipped,
+    Fail,
+}
+
+/// Worker → UI protocol for a running build.
+pub enum BuildEvent {
+    Step(usize, StepState),
+    Log(String),
+    /// Terminal event: the built `.raw` path, or the rendered error chain.
+    Done(Result<PathBuf, String>),
+}
 
 /// RAII guard: overwrite IN PLACE with zeros (no truncate — truncating first would
 /// free the original blocks unzeroed), fsync, then unlink. Best-effort, and the
@@ -75,36 +108,104 @@ fn secure_tmp() -> PathBuf {
     }
 }
 
+/// Forward every line of `r` into the UI's log pane. `\r`-style progress redraws
+/// arrive as long single lines — acceptable for a log, and nothing is lost.
+fn stream_lines<R: Read + Send + 'static>(
+    r: R,
+    tx: Sender<BuildEvent>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        for line in BufReader::new(r).lines().map_while(Result::ok) {
+            if tx.send(BuildEvent::Log(line)).is_err() {
+                break; // UI gone — stop forwarding, let the child run to completion
+            }
+        }
+    })
+}
+
+/// Run a child with stdout+stderr piped into the log pane (never inherited — the
+/// alternate screen belongs to the UI). Returns the exit status.
+fn run_streamed(
+    mut cmd: Command,
+    tx: &Sender<BuildEvent>,
+    what: &str,
+) -> Result<std::process::ExitStatus> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().with_context(|| format!("running {what}"))?;
+    let mut readers = Vec::new();
+    if let Some(out) = child.stdout.take() {
+        readers.push(stream_lines(out, tx.clone()));
+    }
+    if let Some(err) = child.stderr.take() {
+        readers.push(stream_lines(err, tx.clone()));
+    }
+    let status = child
+        .wait()
+        .with_context(|| format!("waiting for {what}"))?;
+    for r in readers {
+        let _ = r.join(); // drain the tail of the output before reporting the status
+    }
+    Ok(status)
+}
+
+/// Spawn the build pipeline on a worker thread. The passphrase is collected by the
+/// UI (masked modal, entered twice) BEFORE spawning, so the worker never prompts.
+pub fn spawn_build(config_path: PathBuf, cfg: Config, passphrase: String) -> Receiver<BuildEvent> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = run_pipeline(&config_path, &cfg, passphrase, &tx);
+        // Render the anyhow chain here — the UI side only displays strings.
+        let _ = tx.send(BuildEvent::Done(result.map_err(|e| format!("{e:#}"))));
+    });
+    rx
+}
+
 /// Builds the image script from the operator's flake and runs it with the secrets
 /// injected. Returns the path of the built `.raw`.
-pub fn build_image(config_path: &Path, cfg: &Config) -> Result<PathBuf> {
+fn run_pipeline(
+    config_path: &Path,
+    cfg: &Config,
+    passphrase: String,
+    tx: &Sender<BuildEvent>,
+) -> Result<PathBuf> {
     let base = config_dir(config_path);
     let flake_dir = cfg.resolved_flake_dir(config_path);
     let script_link = base.join(".nixnas-imagescript");
     let out_dir = base.join(".nixnas-image");
+    let step = |i: usize, s: StepState| {
+        let _ = tx.send(BuildEvent::Step(i, s));
+    };
+    let log = |s: String| {
+        let _ = tx.send(BuildEvent::Log(s));
+    };
 
     // 1. Build the disko image script (pure eval — no secrets involved). WHICH image is
     //    operator-chosen (`image_attr` in nixnas.config): the usb appliance by default,
     //    the RESCUE image for a hot-mode setup (the hot MAIN is never flashed — HOT-MODE.md).
     let image_ref = format!(".#{}", cfg.image_attr);
-    println!(">> building the stick image from {image_ref}");
-    let status = Command::new("nix")
-        .args(["build", "--print-build-logs", "--accept-flake-config", &image_ref, "--out-link"])
-        .arg(&script_link)
-        .current_dir(&flake_dir)
-        .status()
-        .with_context(|| format!("running `nix build {image_ref}` (is Nix installed locally?)"))?;
+    step(0, StepState::Running);
+    log(format!(">> building the stick image from {image_ref}"));
+    let mut nix = Command::new("nix");
+    nix.args([
+        "build",
+        "--print-build-logs",
+        "--accept-flake-config",
+        &image_ref,
+        "--out-link",
+    ])
+    .arg(&script_link)
+    .current_dir(&flake_dir);
+    let status = run_streamed(nix, tx, "`nix build` (is Nix installed locally?)")?;
     if !status.success() {
+        step(0, StepState::Fail);
         bail!("nix build {image_ref} failed");
     }
+    step(0, StepState::Ok);
 
-    // 2. Prompt for the LUKS store passphrase (confirmed, not echoed) → 0600 RAM tmp.
-    let passphrase = dialoguer::Password::new()
-        .with_prompt("LUKS store passphrase (RAM-backed 0600 file; zeroed after the build)")
-        .with_confirmation("Confirm passphrase", "Passphrases do not match")
-        .interact()
-        .context("reading LUKS passphrase")?;
-
+    // 2. Write the (already collected) LUKS passphrase to a 0600 RAM-backed file.
+    step(1, StepState::Running);
     let key_path = secure_tmp().join(format!("nixnas-luks-{}", std::process::id()));
     {
         let mut f = std::fs::OpenOptions::new()
@@ -117,14 +218,21 @@ pub fn build_image(config_path: &Path, cfg: &Config) -> Result<PathBuf> {
             .context("writing passphrase to temp file")?;
     }
     let _key_guard = ShredOnDrop(key_path.clone());
+    step(1, StepState::Ok);
 
     // 3. Optional: decrypt the Secure Boot PKI (sops tar) into a RAM tmp dir.
+    //    sops output is the SECRET tar stream — captured, never sent to the log pane.
     let mut pki_dir: Option<PathBuf> = None;
     let mut _pki_guard: Option<ShredDirOnDrop> = None;
     if let Some(sops_file) = &cfg.sb_keys_sops {
+        step(2, StepState::Running);
         let sops_path = {
             let p = Path::new(sops_file);
-            if p.is_absolute() { p.to_path_buf() } else { base.join(p) }
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                base.join(p)
+            }
         };
         let dir = secure_tmp().join(format!("nixnas-sbpki-{}", std::process::id()));
         std::fs::create_dir(&dir).context("creating PKI temp dir")?;
@@ -138,6 +246,7 @@ pub fn build_image(config_path: &Path, cfg: &Config) -> Result<PathBuf> {
             .output()
             .context("running sops (is it installed, with the age key available?)")?;
         if !decrypted.status.success() {
+            step(2, StepState::Fail);
             bail!(
                 "sops --decrypt {} failed:\n{}",
                 sops_path.display(),
@@ -148,6 +257,8 @@ pub fn build_image(config_path: &Path, cfg: &Config) -> Result<PathBuf> {
             .args(["-xf", "-", "-C"])
             .arg(&dir)
             .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .context("running tar")?;
         tar.stdin
@@ -156,34 +267,53 @@ pub fn build_image(config_path: &Path, cfg: &Config) -> Result<PathBuf> {
             .write_all(&decrypted.stdout)
             .context("streaming PKI tar to tar")?;
         if !tar.wait().context("waiting for tar")?.success() {
+            step(2, StepState::Fail);
             bail!("extracting the Secure Boot PKI tar failed");
         }
         pki_dir = Some(dir);
+        step(2, StepState::Ok);
+    } else {
+        log(
+            "(no sb_keys_sops configured — lanzaboote will autogenerate keys on first boot)".into(),
+        );
+        step(2, StepState::Skipped);
     }
 
     // 4. Run the image script; the .raw lands in out_dir (the script writes to CWD).
+    step(3, StepState::Running);
     std::fs::create_dir_all(&out_dir).context("creating image output dir")?;
-    let mut run = Command::new(std::fs::canonicalize(&script_link).context("resolving image script")?);
+    let mut run =
+        Command::new(std::fs::canonicalize(&script_link).context("resolving image script")?);
     run.current_dir(&out_dir);
     if let Some(mem) = cfg.build_memory_mib {
         run.args(["--build-memory", &mem.to_string()]);
     }
     // The conventional in-VM path modules/boot/disk.nix reads at luksFormat time.
-    run.arg("--pre-format-files").arg(&key_path).arg("/tmp/nixnas-luks.key");
+    run.arg("--pre-format-files")
+        .arg(&key_path)
+        .arg("/tmp/nixnas-luks.key");
     if let Some(pki) = &pki_dir {
         // Lands on the finished image's encrypted store; lanzaboote signs from day one.
-        run.arg("--post-format-files").arg(pki).arg("/nix/lanzaboote/pki");
+        run.arg("--post-format-files")
+            .arg(pki)
+            .arg("/nix/lanzaboote/pki");
     }
-    let status = run.status().context("running the disko image script")?;
+    let status = run_streamed(run, tx, "the disko image script")?;
     if !status.success() {
+        step(3, StepState::Fail);
         bail!("image build failed");
     }
+    step(3, StepState::Ok);
 
     // 5. Find the built .raw (disko names it after the disk's imageName).
+    step(4, StepState::Running);
     let raw = std::fs::read_dir(&out_dir)
         .with_context(|| format!("reading built image dir {}", out_dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .find(|p| p.extension().is_some_and(|x| x == "raw"))
-        .context("no .raw file in the image output dir")?;
+        .inspect(|_| step(4, StepState::Ok))
+        .context("no .raw file in the image output dir")
+        .inspect_err(|_| step(4, StepState::Fail))?;
+    log(format!(">> built image: {}", raw.display()));
     Ok(raw)
 }

@@ -70,13 +70,40 @@ impl Config {
         if !path.exists() {
             return Ok(Config::default());
         }
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        let text = toml::to_string_pretty(self).context("serialising config")?;
+        // Merge into the existing file's table instead of overwriting it, so keys
+        // written by a NEWER nixnas (or by hand) survive a round-trip through this
+        // version. Comments and key order are NOT preserved — that would need
+        // toml_edit, which is deliberately not pulled in for four fields.
+        let mut table: toml::Table = if path.exists() {
+            std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?
+                .parse()
+                .with_context(|| format!("parsing {}", path.display()))?
+        } else {
+            toml::Table::new()
+        };
+        let own = toml::Value::try_from(self)
+            .context("serialising config")?
+            .as_table()
+            .cloned()
+            .unwrap_or_default();
+        // `None` options serialise to NO key at all — remove them explicitly, or the
+        // stale on-disk value would silently survive a "clear this field" edit.
+        for key in ["sb_keys_sops", "build_memory_mib"] {
+            if !own.contains_key(key) {
+                table.remove(key);
+            }
+        }
+        for (k, v) in own {
+            table.insert(k, v);
+        }
+        let text = toml::to_string_pretty(&table).context("serialising config")?;
         std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))
     }
 
