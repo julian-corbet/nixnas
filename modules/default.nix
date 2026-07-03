@@ -28,6 +28,7 @@
     ./appliance/identity.nix      # machine-id, SSH host keys, tailscale state — persisted on the stick
     ./appliance/ssh.nix           # headless admin sshd (key-only root)
     ./appliance/auto-upgrade.nix  # self-update: stage-only, never self-reboot
+    ./appliance/rescue-maintain.nix # hot mode: the main keeps the stick's RESCUE current (closure + signed UKI)
     ./appliance/optimizations.nix # ⬢ appliance defaults: zram, journald→RAM, no swap, store.preload
     # NOTE: k3s / GPU / shares / the Arch LXC / the Office VM / the apps are NOT nixnas —
     # they are plain NixOS the operator declares in their own repo alongside
