@@ -17,6 +17,14 @@ let
   cfg = config.nixnas;
   hot = cfg.store.hot;
   isHot = cfg.enable && cfg.store.location == "hot";
+  # The pool backing a zfs hot store — explicit, or derived from the dataset name.
+  # Falls back to a dummy: attr NAMES eval eagerly even under mkIf, so this must never be
+  # null (usb hosts have no hot.device; their "zfs-import--unset-" attr sits behind mkIf false).
+  hotPool =
+    if hot.zpool != null then hot.zpool
+    else if hot.device != null then builtins.head (lib.splitString "/" hot.device)
+    else "-unset-";
+  unlockNames = lib.attrNames hot.unlock; # attrNames is sorted — a stable chain order
 in
 {
   config = lib.mkIf isHot (lib.mkMerge [
@@ -71,6 +79,17 @@ in
       boot.initrd.luks.devices = lib.mapAttrs
         (_: dev: { device = dev; })
         hot.unlock;
+
+      # Serialise the member unlocks (same pattern as storage/connect.nix stage-2): the
+      # first member prompts, systemd caches the passphrase in the kernel keyring, and
+      # every later member finds it and opens silently — ONE entry for the whole set.
+      # Without this all members race and queue N password-agent questions in parallel.
+      boot.initrd.systemd.services = lib.listToAttrs (lib.imap0
+        (i: n: lib.nameValuePair "systemd-cryptsetup@${n}" {
+          overrideStrategy = "asDropin";
+          after = lib.optional (i > 0) "systemd-cryptsetup@${builtins.elemAt unlockNames (i - 1)}.service";
+        })
+        unlockNames);
     }
 
     # ZFS-in-initrd only when the hot store is ZFS (a dataset). LUKS does the crypto, so ZFS
@@ -79,7 +98,21 @@ in
       boot.initrd.supportedFilesystems = [ "zfs" ];
       boot.zfs.requestEncryptionCredentials = lib.mkDefault false;
       boot.zfs.devNodes = lib.mkDefault "/dev/mapper";
+      # Stage-2 belt-and-braces only; the INITRD import is generated from the neededForBoot
+      # /nix fileSystems entry itself (the pool derives from the dataset name), not from this.
       boot.zfs.extraPools = lib.mkIf (hot.zpool != null) [ hot.zpool ];
+
+      # THE first-boot brick guard: nixpkgs' generated initrd zfs-import-<pool> service
+      # polls for the pool for only ~60s and then fails terminally — but the pool's
+      # /dev/mapper members appear only after the OPERATOR enters the passphrase (a human
+      # loop over initrd-SSH, easily >60s; on the very first boot there is no sealed host
+      # key yet, so it is a serial-console entry). Order the import after cryptsetup.target,
+      # which blocks indefinitely on the passphrase — the 60s poll then starts with all
+      # mappers already present.
+      boot.initrd.systemd.services."zfs-import-${hotPool}" = {
+        wants = [ "cryptsetup.target" ];
+        after = [ "cryptsetup.target" ];
+      };
     })
   ]);
 }

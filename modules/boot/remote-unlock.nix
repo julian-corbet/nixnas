@@ -184,7 +184,14 @@ in
             "$tmpkey" \
             "${credEspPath}"
           chmod 600 "${credEspPath}"
-          echo "nixnas: initrd SSH host key sealed to ${credEspPath}"
+          # Surface the PUBLIC half (it is public — plaintext ESP is fine) so the operator can
+          # VERIFY the first initrd-SSH connection instead of TOFU-accepting it: the .pub next
+          # to the .cred, plus the fingerprint on journal+console. Without this the fingerprint
+          # would be destroyed with the tmpdir and the unlock channel starts unverifiable.
+          install -m 0644 "$tmpkey.pub" "${lib.removeSuffix ".cred" credEspPath}.pub"
+          echo "nixnas: initrd SSH host key fingerprint (verify this on your first initrd-SSH connect):"
+          ssh-keygen -lf "$tmpkey.pub"
+          echo "nixnas: initrd SSH host key sealed to ${credEspPath} (public key beside it)"
           echo "=== NIXNAS-SEAL-END ==="
         '';
       };

@@ -65,15 +65,29 @@ firmware → stick ESP → signed systemd-boot menu:
   └─ RESCUE      → UKI → boots wholly from the stick (no pool) → repair shell (+ extraPackages)
 ```
 
-## Install — the rescue system IS the installer (no external build host)
+## Install — the rescue system IS the install environment
 
-1. Build + flash the **rescue** image (ESP 2 GiB + rescue f2fs) to the stick via the TUI.
+1. Build + flash the **rescue** image (ESP + rescue f2fs) to the stick via the TUI.
    (In `hot` mode the disko image is the RESCUE system; the main store is not in the image.)
-2. Boot the rescue → enter the pool key at the initrd → `nixos-rebuild boot` the **MAIN**
-   system, which builds the main closure **into the hot store** (on the box, no external
-   builder) and installs the main UKI onto the stick's ESP as the default entry.
-3. Reboot → the main UKI's initrd unlocks the hot device with your key → mounts the
-   now-populated `/nix` → the full system boots.
+2. Boot the rescue → unlock the pool (`nixnas-unlock`) → stage the target: a tmpfs at
+   `/mnt/target` with the hot store mounted at `/mnt/target/nix` and the stick ESP at
+   `/mnt/target/boot`; seed the Secure Boot PKI into the target store
+   (`mkdir -p /mnt/target/nix/lanzaboote && cp -a /nix/lanzaboote/pki /mnt/target/nix/lanzaboote/`).
+3. Get the MAIN closure into the hot store — build it on your build machine and
+   `nix copy --to "ssh://<rescue>?remote-store=/mnt/target"` it over (hub-built doctrine),
+   or build on the box with `nix build --store /mnt/target` if it has the resources. Then
+   `nixos-install --root /mnt/target --system <toplevel> --no-root-passwd` registers the
+   profile in the hot store and installs the main's signed UKIs onto the shared ESP.
+   (NOT `nixos-rebuild` from the rescue — that would build into the rescue's own stick
+   store and switch the RESCUE's profile, not the main's.)
+4. Before rebooting, pre-place the rescue's own `EFI/Linux/nixnas-rescue.efi` (the main's
+   bootloader install prunes the rescue's original `nixos-*` entries — see the coexistence
+   rules above; the durable entry normally comes from rescue-maintain, which hasn't run
+   yet). One manual run of the same recipe: ukify the rescue's `/run/current-system`,
+   sbsign with the db key, copy to the ESP.
+5. Reboot → the main UKI's initrd asks for your key → unlocks the hot device → mounts the
+   now-populated `/nix` → the full system boots. From then on the main's rescue-maintain
+   keeps the rescue entry + stick store current automatically.
 
 ## autoUpgrade — maintains BOTH stores, from ONE nixpkgs pin
 
@@ -87,30 +101,38 @@ ZFS/kernel must always be able to import the live pool). Each run:
   signed rescue UKI → ESP. A pure main-app change writes nothing to the stick.
 
 Result: the big closure never touches the stick; the stick takes one main UKI per update
-(~200–300 MiB on the ESP) and a rescue write only on rescue changes — kinder to the stick
-than `usb` mode. `keepGenerations` splits into "bootable main UKIs on the ESP" (small) vs
-"hot-store history depth" (as deep as you like).
+(a UKI is the kernel + initrd in one PE — typically ~80–150 MiB, more if the initrd carries
+ZFS; measure yours) and a rescue write only on rescue changes — kinder to the stick than
+`usb` mode. Budget the ESP explicitly: set `boot.keepGenerations` so
+(keepGenerations + 1 rescue + 1 rescue-prev) × your-UKI-size fits `boot.usb.espSizeMiB`.
+`keepGenerations` thus splits into "bootable main UKIs on the ESP" (small) vs "hot-store
+history depth" (as deep as you like).
 
 Rollback: per store, independent. Caveat: don't `zpool upgrade` casually — an older main (or
 rescue) built against a pre-upgrade ZFS can't import an upgraded pool; keep the rescue
 current (the shared pin does this).
 
-## Stick sizing
+## Stick sizing (recommended per-host settings — the RESCUE host sets these)
 
-`boot.usb.espSizeMiB` = **2048** (2 GiB, holds the main + rescue UKIs). The image never
-occupies more than **32 GiB** regardless of stick size (a rescue system + generations never
-needs more): 8 GiB → 2 + 6; 16 GiB → ~2 + 12; 32 GiB → ~2 + 28; a 1 TB stick still uses 32.
-The rescue closure alone is ~1.5–3 GiB, comfortable in 6 GiB with generations.
+Recommended: `boot.usb.espSizeMiB = 2048` (2 GiB — holds the main's kept UKIs + the rescue
+pair; see the ESP budget rule above) and an image that never occupies more than **32 GiB**
+regardless of stick size (a rescue system + generations never needs more): 8 GB stick →
+`imageSizeGiB = 7` (2 + ~5); 16 GB → ~2 + 12; 32 GB → ~2 + 28; a 1 TB stick still gets 32.
+The rescue closure alone is ~1.5–3 GiB, comfortable in ~5 GiB with current+prev (which is
+exactly what rescue-maintain's GC keeps).
 
 ## What changes vs `usb` mode (implementation map)
 
-- `modules/store/location.nix` (new): the `nixnas.store.location` switch + shared wiring.
-- `modules/boot/disk.nix`: in `hot`, the stick f2fs holds the RESCUE store; `/nix` for the
-  MAIN system is `fileSystems."/nix"` on the hot device (ZFS/LUKS), `neededForBoot`.
-- `modules/boot/rescue.nix` (new): the minimal self-contained rescue nixosConfiguration +
-  `rescue.extraPackages`; its own signed UKI/ESP entry.
-- `modules/boot/hot-unlock.nix` (new): the initrd operator-key unlock + mount of the hot
-  device (no TPM auto); ZFS-in-initrd gated on the operator using a ZFS store.
-- `modules/appliance/auto-upgrade.nix`: build + place both UKIs; rescue only on hash change.
-- `modules/store/budget.nix`: in `hot`, budgets the RESCUE closure (the stick tier).
+- `modules/store/location.nix`: the `store.location` switch; the hot-mode MAIN /nix
+  (`store.hot.*`, neededForBoot), the initrd operator-key LUKS unlock (serialised — one
+  entry opens all members via the kernel-keyring cache), ZFS-in-initrd when the hot store
+  is a dataset (with the import ordered after cryptsetup.target — the pool appears only
+  after the operator's key), and the tmpfs root + by-label ESP mount disko no longer provides.
+- `modules/boot/disk.nix` + `modules/store/budget.nix` + `modules/crypto/tpm2.nix`
+  (auto-unlock half): gated to `usb`-mode systems — which includes the RESCUE, a minimal
+  usb nixnas the operator declares as a second host (there is no separate rescue module;
+  `rescue.extraPackages` rides `appliance/base.nix`).
+- `modules/appliance/rescue-maintain.nix`: the MAIN maintains the rescue (closure → stick
+  f2fs with the shared compression options + GC to current/prev; self-contained signed UKI
+  → ESP). Runs at boot, on deploys that change the rescue, and daily.
 - Docs: this file + ARCHITECTURE §10 (the composed-store rejection).

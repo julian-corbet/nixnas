@@ -92,20 +92,9 @@ in
                 # whole mount ("invalid extension length"). Only `sqlite` (the main DB) is
                 # excludable; the WAL/SHM sidecars live in /nix/var (never the store-scoped
                 # release pass) and fs-mode compression handles their in-place rewrites fine.
-                mountOptions = [
-                  "compress_algorithm=zstd:22"
-                  "compress_log_size=2"
-                  "compress_extension=*"
-                  "compress_chksum"
-                  "nocompress_extension=sqlite"
-                  "flush_merge"
-                  "checkpoint_merge"
-                  "compress_cache"
-                  "fsync_mode=nobarrier"
-                  "noatime"
-                  "lazytime"
-                  "nodiscard"
-                ];
+                # The list is SHARED with rescue-maintain (hot mode re-mounts this store) —
+                # one source so the compression config cannot drift.
+                mountOptions = import ../lib/f2fs-store-mount-opts.nix;
                 };
               };
             };

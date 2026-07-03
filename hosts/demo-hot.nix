@@ -14,9 +14,15 @@
   nixnas.store.hot = {
     device = "/dev/mapper/nixstore-demo";
     fsType = "ext4";
-    # by-partlabel so the QEMU integration test (test/hot-boot-test.sh) can present a matching
-    # partition regardless of the virtual disk's by-id. Opens at /dev/mapper/nixstore-demo.
-    unlock.nixstore-demo = "/dev/disk/by-partlabel/nixstore-demo";
+    # by-partlabel so the QEMU integration test (test/hot-boot-test.sh) can present matching
+    # partitions regardless of the virtual disk's by-id. TWO members: the second carries no
+    # filesystem — it exists to PROVE the serialised single-entry unlock (the first member
+    # prompts; the second must open silently from the kernel-keyring cache; the test feeds
+    # the passphrase exactly once and the boot must still complete).
+    unlock = {
+      nixstore-demo  = "/dev/disk/by-partlabel/nixstore-demo";
+      nixstore-demo2 = "/dev/disk/by-partlabel/nixstore-demo2";
+    };
   };
   nixnas.rescue.enable = false;
 

@@ -51,16 +51,21 @@ echo "   toplevel: $TOP"
 # demo-hot mounts /boot by-label NIXNAS-ESP (it shares the stick ESP in reality); without it
 # the boot drops to emergency mode. This is direct-kernel-boot, so the ESP need only exist +
 # carry the label — no bootloader is installed on it.
-echo ">> assembling the disk (ESP NIXNAS-ESP + LUKS+ext4 /nix partlabel nixstore-demo) …"
+echo ">> assembling the disk (ESP NIXNAS-ESP + LUKS+ext4 /nix + a 2nd bare LUKS member) …"
 truncate -s 6G "$DISK"
 sgdisk -n1:0:+64M -t1:EF00 -c1:esp \
-       -n2:0:0     -t2:8300 -c2:nixstore-demo "$DISK" >/dev/null
+       -n2:0:+5G  -t2:8300 -c2:nixstore-demo \
+       -n3:0:0    -t3:8300 -c3:nixstore-demo2 "$DISK" >/dev/null
 LOOP="$(losetup --find --show --partscan "$DISK")"
 mkfs.vfat -n NIXNAS-ESP "${LOOP}p1" >/dev/null
 part="${LOOP}p2"
 [ -b "$part" ] || { echo "!! loop partition $part not present" >&2; exit 1; }
 # Fast KDF (pbkdf2, low iters) — this is a throwaway CI volume, not a real secret.
 echo -n "$PASS" | cryptsetup luksFormat --type luks2 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --batch-mode "$part" -
+# The 2nd member (same passphrase, NO filesystem): it exists to prove the SERIALISED
+# single-entry unlock — the initrd must open it from the kernel-keyring cache without a
+# second prompt (the feeder below deliberately answers only ONCE).
+echo -n "$PASS" | cryptsetup luksFormat --type luks2 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --batch-mode "${LOOP}p3" -
 echo -n "$PASS" | cryptsetup open "$part" nixstore-demo -; MAPPER=1
 mkfs.ext4 -q -L nixstore /dev/mapper/nixstore-demo
 # Mount at $ROOT/nix so $ROOT is a chroot-store root (store at $ROOT/nix/store) — exactly the
@@ -88,12 +93,13 @@ qemu-system-x86_64 \
 VM=$!
 exec 3> "$FIFO"                        # hold the FIFO writer open so the serial stays live
 
-# Feed the passphrase as soon as the LUKS prompt shows (retry a few times — systemd-cryptsetup
-# re-prompts). Give up feeding after the box is clearly past unlock.
+# Feed the passphrase EXACTLY ONCE. Two LUKS members are enrolled; the serialised unlock
+# (location.nix drop-ins) must open the second from the kernel-keyring cache with no second
+# prompt — if it re-prompts, the boot hangs and the test FAILS. That is the assertion.
 fed=0
 for _ in $(seq 1 60); do
   kill -0 "$VM" 2>/dev/null || break
-  if grep -qaiE 'please enter|passphrase for|unlocking|nixstore-demo' "$LOG" && [ "$fed" -lt 3 ]; then
+  if grep -qaiE 'please enter|passphrase for|unlocking|nixstore-demo' "$LOG" && [ "$fed" -lt 1 ]; then
     printf '%s\n' "$PASS" >&3; fed=$((fed+1)); sleep 3; continue
   fi
   grep -qa 'demo login:' "$LOG" && break
