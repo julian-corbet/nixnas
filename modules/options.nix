@@ -319,12 +319,14 @@ in
       };
       preload = mkOption {
         type = types.bool;
-        default = true;
+        default = config.nixnas.store.location == "usb";
+        defaultText = literalExpression ''store.location == "usb"'';
         description = ''
           Warm the booted generation's closure into the (compress-)cache after boot, so
           runtime reads come from RAM and the slow stick is untouched — "copytoram done
-          right" (compressed in RAM, self-update intact). Default on; turn off on very
-          RAM-constrained boxes. See docs/OPTIMIZATIONS.md §5.
+          right" (compressed in RAM, self-update intact). Defaults ON in `usb` mode; OFF in
+          `hot` mode, where /nix is already on the fast pool so warming it into RAM only
+          wastes memory. Turn off on very RAM-constrained boxes. See docs/OPTIMIZATIONS.md §5.
         '';
       };
       maxClosureBytes = mkOption {
