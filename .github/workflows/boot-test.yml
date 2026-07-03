@@ -127,3 +127,61 @@ jobs:
       # `nix` (daemon client) works as root and cryptsetup/sgdisk/losetup are found.
       - name: Build the hot toplevel + boot /nix from the external LUKS device
         run: sudo env "PATH=$PATH:/usr/sbin:/sbin" "HOME=$HOME" FLAKE=. PASS=nixnas-hot test/hot-boot-test.sh
+
+  # Matrix eval: cheap eval-only proof of six operator-persona variants (no builds, no QEMU).
+  # Confirms option wiring, assertion guards, and module interactions across the matrix.
+  matrix-eval:
+    name: matrix variant eval checks (no-tpm / stick-4/16/32g / hot-ext4 / pin-strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://attic.xuyh0120.win/lantian
+            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
+      # No KVM, no OVMF, no disk tools needed — eval-only probes via nix eval.
+      - name: Matrix variant eval checks
+        run: FLAKE=. test/matrix-eval-test.sh
+
+  # ZFS hot-mode: boot /nix from a ZFS pool whose vdevs are LUKS-encrypted.
+  # Two LUKS members (single passphrase via kernel-keyring serialised unlock); pool import
+  # in the initrd; legacy-mount dataset at /nix. See test/hot-boot-zfs-test.sh.
+  zfs-hot:
+    name: ZFS hot mode — boot /nix from LUKS-encrypted ZFS pool (initrd import + keyring)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install QEMU + ZFS + disk tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 zfsutils-linux gdisk cryptsetup-bin dosfstools
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://attic.xuyh0120.win/lantian
+            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
+            extra-sandbox-paths = /dev/kvm
+      # sudo for losetup/cryptsetup/zpool/zfs/mount; preserve PATH + HOME for nix + disk tools.
+      - name: Build the ZFS hot toplevel + boot /nix from LUKS-encrypted ZFS pool
+        run: sudo env "PATH=$PATH:/usr/sbin:/sbin" "HOME=$HOME" FLAKE=. PASS=nixnas-hot test/hot-boot-zfs-test.sh

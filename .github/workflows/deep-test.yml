@@ -1,0 +1,244 @@
+# Long-running boot-chain integration tests — lifecycle, failure-injection, and upgrade-soak.
+# These tests each take 45-120 minutes and run on a separate schedule so they do not block
+# every push. They also run on workflow_dispatch and on push/PR paths that touch test/** so
+# a developer who edits a test script can trigger them explicitly.
+#
+#   lifecycle      — three-boot install-hot flow (rescue → install → main boot → rescue-only)
+#   failure-*      — power-cut f2fs recovery, pool-absent initrd stall, no-TPM passphrase fallback
+#   upgrade-soak   — N=5 generation cycles, UKI pruning + store-growth table
+name: deep-test
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'   # weekly Sunday night/Monday morning (offset from boot-test's Monday 04:00)
+  workflow_dispatch:
+  push:
+    paths: [ 'test/**' ]
+  pull_request:
+    paths: [ 'test/**' ]
+
+jobs:
+  # ── lifecycle: rescue → nixnas-install-hot → main boot → rescue-only ─────────────────
+  lifecycle:
+    name: full install-hot lifecycle (rescue → install → main → rescue-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install QEMU + swtpm + OVMF + disk tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 swtpm ovmf gdisk cryptsetup-bin e2fsprogs
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://attic.xuyh0120.win/lantian
+            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
+            extra-sandbox-paths = /dev/kvm
+
+      - name: Full lifecycle proof (rescue → install-hot → main boot → rescue-only)
+        run: test/lifecycle-test.sh
+
+  # ── failure-injection: power-cut f2fs recovery ────────────────────────────────────────
+  failure-power-cut:
+    name: failure-injection — power-cut mid-write (f2fs recovery)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install QEMU + swtpm + OVMF
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 swtpm ovmf
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://attic.xuyh0120.win/lantian
+            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
+            extra-sandbox-paths = /dev/kvm
+
+      - name: Build the demo image
+        run: |
+          nix build .#image --accept-flake-config --print-build-logs
+          find -L result -name '*.raw' -printf '%s bytes  %p\n'
+
+      - name: power-cut-mid-write — f2fs must recover after kill -9 mid-write
+        run: |
+          test/failure-injection-test.sh power-cut-mid-write \
+            "$(find -L result -name '*.raw' | head -1)" --pass nixnas-demo
+
+  # ── failure-injection: pool-absent initrd stall ───────────────────────────────────────
+  failure-pool-absent:
+    name: failure-injection — pool-absent (HOT main must NOT reach login without store disk)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://attic.xuyh0120.win/lantian
+            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
+            extra-sandbox-paths = /dev/kvm
+
+      - name: Build demo-hot toplevel
+        run: |
+          TOP=$(nix build --no-link --print-out-paths \
+            .#nixosConfigurations.demo-hot.config.system.build.toplevel \
+            --accept-flake-config)
+          echo "DEMO_HOT_TOP=$TOP" >> "$GITHUB_ENV"
+
+      - name: pool-absent — HOT main must NOT reach login without its store disk
+        run: |
+          test/failure-injection-test.sh pool-absent --toplevel "$DEMO_HOT_TOP"
+
+  # ── failure-injection: no-TPM graceful degradation ───────────────────────────────────
+  failure-no-tpm:
+    name: failure-injection — no-tpm (passphrase fallback, no TPM hard dependency)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install QEMU + OVMF (no swtpm needed)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://attic.xuyh0120.win/lantian
+            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
+            extra-sandbox-paths = /dev/kvm
+
+      - name: Build the demo image
+        run: |
+          nix build .#image --accept-flake-config --print-build-logs
+          find -L result -name '*.raw' -printf '%s bytes  %p\n'
+
+      - name: no-tpm — passphrase fallback must work with no TPM device
+        run: |
+          test/failure-injection-test.sh no-tpm \
+            "$(find -L result -name '*.raw' | head -1)" --pass nixnas-demo
+
+  # ── upgrade-soak: N=5 generation cycles, UKI pruning, store-growth table ─────────────
+  upgrade-soak:
+    name: upgrade soak — N=5 generation cycles (UKI pruning + store growth)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install QEMU + swtpm + OVMF
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 swtpm ovmf
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            accept-flake-config = true
+            extra-substituters = https://attic.xuyh0120.win/lantian
+            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
+            extra-sandbox-paths = /dev/kvm
+
+      - name: Build the demo image
+        run: |
+          if ! nix build .#image --accept-flake-config --print-build-logs 2>&1 | tee /tmp/build.log; then
+            echo "===================== FULL BUILDER LOG ====================="
+            drv=$(grep -oE '/nix/store/[a-z0-9]+-demo-disko-images\.drv' /tmp/build.log | head -1)
+            [ -n "$drv" ] && nix log "$drv" 2>/dev/null | tail -80
+            exit 1
+          fi
+          find -L result -name '*.raw' -printf '%s bytes  %p\n'
+
+      - name: N=5 generation cycles — boots newest, UKI count, bootctl, store growth
+        run: test/upgrade-soak-test.sh "$(find -L result -name '*.raw' | head -1)"

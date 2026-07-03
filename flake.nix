@@ -33,6 +33,24 @@
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
+      # Shared module list for every matrix nixosConfiguration (eval-level variants).
+      # Mirrors demo-hot's builder plumbing; each matrix entry appends one variant overlay.
+      matrixBase = [
+        disko.nixosModules.disko
+        lanzaboote.nixosModules.lanzaboote
+        impermanence.nixosModules.impermanence
+        self.nixosModules.nixnas
+        ./hosts/demo
+        { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
+        {
+          disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
+          disko.imageBuilder.kernelPackages =
+            let sp = nixpkgs-stable.legacyPackages.x86_64-linux;
+            in sp.linuxPackages.extend (_: _: {
+              zfs_cachyos = sp.linuxPackages.${sp.zfs.kernelModuleAttribute};
+            });
+        }
+      ];
     in
     {
       # The reusable, FOSS-clean appliance module. All behaviour lives here,
@@ -102,6 +120,81 @@
         ];
       };
 
+      # ZFS hot-mode variant: proves the ZFS hot boot path (LUKS vdevs, pool import in initrd).
+      # Two LUKS members (qapool-luks0/luks1) form a stripe; the test feeder answers ONCE and
+      # the kernel-keyring serialised unlock covers the second member. See test/hot-boot-zfs-test.sh.
+      nixosConfigurations.demo-hot-zfs = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          disko.nixosModules.disko
+          lanzaboote.nixosModules.lanzaboote
+          impermanence.nixosModules.impermanence
+          self.nixosModules.nixnas
+          ./hosts/demo
+          ./hosts/demo-hot-zfs.nix
+          { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
+          {
+            disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
+            disko.imageBuilder.kernelPackages =
+              let sp = nixpkgs-stable.legacyPackages.x86_64-linux;
+              in sp.linuxPackages.extend (_: _: {
+                zfs_cachyos = sp.linuxPackages.${sp.zfs.kernelModuleAttribute};
+              });
+          }
+        ];
+      };
+
+      # Upgrade-soak variant: N=5 generation cycles to prove lzbt keepGenerations pruning.
+      # keepGenerations=3 so cycles 3-5 exercise the UKI eviction path. The 5 specialisations
+      # (soak-gen-2..6) are pre-built here and nix-copied into the VM — no in-VM Nix eval.
+      nixosConfigurations.demo-upgrade-soak = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          disko.nixosModules.disko
+          lanzaboote.nixosModules.lanzaboote
+          impermanence.nixosModules.impermanence
+          self.nixosModules.nixnas
+          ./hosts/demo
+          ./hosts/demo-upgrade-soak.nix
+          { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
+          {
+            disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
+            disko.imageBuilder.kernelPackages =
+              let sp = nixpkgs-stable.legacyPackages.x86_64-linux;
+              in sp.linuxPackages.extend (_: _: {
+                zfs_cachyos = sp.linuxPackages.${sp.zfs.kernelModuleAttribute};
+              });
+          }
+        ];
+      };
+
+      # Matrix: cheap eval-level variants — one per real-operator persona.
+      # Each is demo-base + the variant overlay; no image build, no QEMU needed.
+      nixosConfigurations.matrix-no-tpm = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = matrixBase ++ [ ./hosts/matrix/no-tpm.nix ];
+      };
+      nixosConfigurations.matrix-stick-4g = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = matrixBase ++ [ ./hosts/matrix/stick-4g.nix ];
+      };
+      nixosConfigurations.matrix-stick-16g = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = matrixBase ++ [ ./hosts/matrix/stick-16g.nix ];
+      };
+      nixosConfigurations.matrix-stick-32g = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = matrixBase ++ [ ./hosts/matrix/stick-32g.nix ];
+      };
+      nixosConfigurations.matrix-hot-ext4 = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = matrixBase ++ [ ./hosts/matrix/hot-ext4.nix ];
+      };
+      nixosConfigurations.matrix-pin-strict = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = matrixBase ++ [ ./hosts/matrix/pin-strict.nix ];
+      };
+
       # `nix flake check` proves the demo toplevel builds without the private overlay, and
       # that its closure stays within the 8 GiB-stick budget (modules/store/budget.nix).
       checks = forAllSystems (system: {
@@ -115,6 +208,17 @@
         demo-hot-installer = self.nixosConfigurations.demo.config.system.build.hotInstaller;
         # The TUI compiles cleanly.
         tui-build = self.packages.${system}.tui;
+        # ZFS hot-mode topology builds (ZFS initrd + LUKS vdevs).
+        demo-hot-zfs-toplevel = self.nixosConfigurations.demo-hot-zfs.config.system.build.toplevel;
+        # Soak specialisations evaluate and the host config is structurally valid.
+        demo-upgrade-soak-toplevel = self.nixosConfigurations.demo-upgrade-soak.config.system.build.toplevel;
+        # Matrix variant toplevels — prove all six personas evaluate and build.
+        matrix-no-tpm-toplevel     = self.nixosConfigurations.matrix-no-tpm.config.system.build.toplevel;
+        matrix-stick-4g-toplevel   = self.nixosConfigurations.matrix-stick-4g.config.system.build.toplevel;
+        matrix-stick-16g-toplevel  = self.nixosConfigurations.matrix-stick-16g.config.system.build.toplevel;
+        matrix-stick-32g-toplevel  = self.nixosConfigurations.matrix-stick-32g.config.system.build.toplevel;
+        matrix-hot-ext4-toplevel   = self.nixosConfigurations.matrix-hot-ext4.config.system.build.toplevel;
+        matrix-pin-strict-toplevel = self.nixosConfigurations.matrix-pin-strict.config.system.build.toplevel;
       });
 
       # The personalised USB image. The TUI builds this locally for a real host; here
