@@ -67,8 +67,12 @@
           {
             disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
             disko.imageBuilder.kernelPackages =
-              let kp = nixpkgs-stable.legacyPackages.x86_64-linux.linuxPackages;
-              in kp.extend (_: _: { zfs_cachyos = kp.zfs; });
+              let sp = nixpkgs-stable.legacyPackages.x86_64-linux;
+              # `linuxPackages.zfs` is a throw in 25.05 — use the canonical module attr
+              # (sp.zfs.kernelModuleAttribute, e.g. "zfs_2_3") the nixpkgs error points to.
+              in sp.linuxPackages.extend (_: _: {
+                zfs_cachyos = sp.linuxPackages.${sp.zfs.kernelModuleAttribute};
+              });
           }
         ];
       };
