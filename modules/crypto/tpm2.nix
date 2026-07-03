@@ -48,21 +48,31 @@ let
   };
 in
 {
-  # TPM2 auto-unlock is a STICK-store feature (the `cryptstore` mapper disko creates in usb
-  # mode). A hot-mode MAIN has no stick store and unlocks its hot store with the OPERATOR'S
-  # key (never TPM) — so this is usb-mode only (it still applies to the rescue, a usb nixnas).
-  config = mkIf (cfg.enable && cfg.crypto.tpm2.enable && cfg.store.location == "usb") {
-    security.tpm2.enable = true;
-    environment.systemPackages = [ pkgs.tpm2-tools enrollTpm2 ];
+  # TWO distinct TPM roles, gated separately:
+  #   * TPM PRESENCE (any mode): tools + the initrd driver. The sealed initrd-SSH host key
+  #     (remote-unlock) unseals in stage-1 in BOTH modes — in hot mode this is the TPM's
+  #     ONLY role: authenticate the channel the operator types their key into. It never
+  #     unlocks any store or data there.
+  #   * STORE AUTO-UNLOCK (usb mode only): the `cryptstore` stick mapper disko creates. A
+  #     hot-mode MAIN has no stick store — its hot store is operator-key, never TPM.
+  config = mkIf (cfg.enable && cfg.crypto.tpm2.enable) (lib.mkMerge [
+    {
+      security.tpm2.enable = true;
+      environment.systemPackages = [ pkgs.tpm2-tools ];
 
-    # Initrd needs the TPM driver to talk to the chip during the store unlock.
-    # (systemd-initrd's own TPM2 unsealing support is pulled in by boot.initrd.systemd.tpm2.)
-    boot.initrd.availableKernelModules = [ "tpm_crb" "tpm_tis" ];
+      # Initrd needs the TPM driver to talk to the chip (store unlock in usb mode; the
+      # sealed host-key unseal in both modes).
+      boot.initrd.availableKernelModules = [ "tpm_crb" "tpm_tis" ];
+    }
 
-    # Tell the initrd store-unlock to try the TPM2 keyslot first (+ demand the PIN when
-    # strict). Merges with disko's generated `cryptstore` device entry. Harmless before
-    # enrollment: with no TPM2 token present, systemd-cryptsetup falls back to the passphrase.
-    boot.initrd.luks.devices.cryptstore.crypttabExtraOpts =
-      [ "tpm2-device=auto" ] ++ optional cfg.crypto.tpm2.requirePin "tpm2-pin=yes";
-  };
+    (mkIf (cfg.store.location == "usb") {
+      environment.systemPackages = [ enrollTpm2 ];
+
+      # Tell the initrd store-unlock to try the TPM2 keyslot first (+ demand the PIN when
+      # strict). Merges with disko's generated `cryptstore` device entry. Harmless before
+      # enrollment: with no TPM2 token present, systemd-cryptsetup falls back to the passphrase.
+      boot.initrd.luks.devices.cryptstore.crypttabExtraOpts =
+        [ "tpm2-device=auto" ] ++ optional cfg.crypto.tpm2.requirePin "tpm2-pin=yes";
+    })
+  ]);
 }
