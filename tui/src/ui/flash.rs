@@ -20,6 +20,12 @@ enum Phase {
     Summary,
     /// Explicit yes/no: back up the current device contents before overwriting?
     BackupAsk,
+    /// Only when the image is smaller than the device (workbench grow applies): the LUKS
+    /// store passphrase for the offline f2fs grow. SKIPPABLE — Enter on an empty field
+    /// skips the grow (the stick boots; the extra space stays unused).
+    StorePass {
+        buf: String,
+    },
     Confirm {
         typed: String,
         error: Option<String>,
@@ -45,6 +51,9 @@ pub struct FlashScreen {
     /// Back the current stick contents up before overwriting (default ON —
     /// same safety default as the old flow).
     backup: bool,
+    /// The LUKS store passphrase for the workbench f2fs grow, collected by the
+    /// StorePass phase when grow applies; None = skipped (partition-only grow).
+    store_pass: Option<String>,
     phase: Phase,
     rx: Option<Receiver<FlashEvent>>,
     gauge_title: &'static str,
@@ -70,6 +79,7 @@ impl FlashScreen {
             selected: 0,
             list_error: None,
             backup: true,
+            store_pass: None,
             phase,
             rx: None,
             gauge_title: "",
@@ -145,9 +155,10 @@ impl FlashScreen {
         }
     }
 
-    /// True when the image is SMALLER than the device: grow-to-fill applies (extend the last
-    /// partition now, grow the f2fs on first boot). False (or unknown size) ⇒ no grow — an
-    /// exact-fit image already reaches the device end.
+    /// True when the image is SMALLER than the device: the workbench grow applies (extend the
+    /// last partition, then grow the f2fs inside the LUKS store right here — offline, with the
+    /// operator's passphrase). False (or unknown size) ⇒ no grow — an exact-fit image already
+    /// reaches the device end.
     fn grows_to_fill(&self) -> bool {
         matches!(
             (&self.image, self.selected_disk().and_then(|d| d.size)),
@@ -169,8 +180,13 @@ impl FlashScreen {
         let (image, _) = self.image.clone().expect("armed without an image");
         let backup_to = self.backup.then(|| flash::backup_path(config_path));
         let grow = self.grows_to_fill();
+        // The store passphrase (for the workbench f2fs grow) leaves the screen state here and
+        // lives on only inside the worker's zeroizing Secret.
+        let store_pass = self.store_pass.take().map(crate::sudo::Secret::new);
         self.session_log = log.begin("flash");
-        self.rx = Some(flash::spawn_flash(image, dev, size, backup_to, grow, elev));
+        self.rx = Some(flash::spawn_flash(
+            image, dev, size, backup_to, grow, store_pass, elev,
+        ));
         self.phase = Phase::Running;
     }
 }
@@ -200,20 +216,37 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
         },
         Phase::BackupAsk => match key.code {
             KeyCode::Esc => st.phase = Phase::Summary,
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                st.backup = true;
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('n') | KeyCode::Char('N') => {
+                st.backup = matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y'));
+                // When the image is smaller than the device, the workbench grow wants the
+                // store passphrase next (skippable); otherwise straight to the typed gate.
+                st.phase = if st.grows_to_fill() {
+                    Phase::StorePass { buf: String::new() }
+                } else {
+                    Phase::Confirm {
+                        typed: String::new(),
+                        error: None,
+                    }
+                };
+            }
+            _ => {}
+        },
+        Phase::StorePass { buf } => match key.code {
+            KeyCode::Esc => st.phase = Phase::Summary,
+            KeyCode::Enter => {
+                let entered = std::mem::take(buf);
+                // Empty = skip the f2fs grow (partition still extends; the stick boots,
+                // the extra space stays unused). Non-empty = grow with this passphrase.
+                st.store_pass = (!entered.is_empty()).then_some(entered);
                 st.phase = Phase::Confirm {
                     typed: String::new(),
                     error: None,
                 };
             }
-            KeyCode::Char('n') | KeyCode::Char('N') => {
-                st.backup = false;
-                st.phase = Phase::Confirm {
-                    typed: String::new(),
-                    error: None,
-                };
+            KeyCode::Backspace => {
+                buf.pop();
             }
+            KeyCode::Char(c) => buf.push(c),
             _ => {}
         },
         Phase::Confirm { typed, .. } => match key.code {
@@ -326,7 +359,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 ],
             );
         }
-        Phase::Summary | Phase::BackupAsk | Phase::Confirm { .. } | Phase::SudoPass { .. } => {
+        Phase::Summary
+        | Phase::BackupAsk
+        | Phase::StorePass { .. }
+        | Phase::Confirm { .. }
+        | Phase::SudoPass { .. } => {
             draw_summary(f, st, &config_path, main_area);
             match &st.phase {
                 Phase::Summary => {
@@ -335,10 +372,30 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Phase::BackupAsk => {
                     ui::footer(f, footer_area, &[("y/n", "answer"), ("Esc", "back")])
                 }
+                Phase::StorePass { .. } => ui::footer(
+                    f,
+                    footer_area,
+                    &[
+                        ("Enter", "confirm"),
+                        ("Enter (empty)", "skip grow"),
+                        ("Esc", "back"),
+                    ],
+                ),
                 _ => ui::footer(f, footer_area, &[("Enter", "confirm"), ("Esc", "back")]),
             }
             match &st.phase {
                 Phase::BackupAsk => draw_backup_ask(f, st.selected_disk(), &config_path),
+                Phase::StorePass { buf } => {
+                    crate::ui::build::draw_pass_modal_prompt(
+                        f,
+                        "LUKS store passphrase — grow the store to the full stick",
+                        "Opens the encrypted store to grow its f2fs to the full partition, right \
+                         here at the workbench. Leave EMPTY and press Enter to skip the grow \
+                         (the stick boots; the extra space stays unused).",
+                        buf,
+                        None,
+                    );
+                }
                 Phase::Confirm { typed, error } => {
                     draw_confirm_modal(f, st.selected_disk(), typed, error.as_deref());
                 }
@@ -530,7 +587,8 @@ fn draw_summary(
     }
     if st.grows_to_fill() {
         lines.push(Line::from(Span::styled(
-            "  ⤢ Image smaller than the device — grow to fill (partition now, filesystem on first boot).",
+            "  ⤢ Image smaller than the device — grow to fill (partition + f2fs, right here; \
+             asks for the store passphrase, skippable).",
             Style::default().fg(OK),
         )));
     }

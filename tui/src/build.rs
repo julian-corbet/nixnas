@@ -8,12 +8,16 @@
 //! Pipeline (all secrets stay out of the Nix store):
 //!   1. `nix build .#imageScript` — a PURE eval; the flake needs no secrets.
 //!   2. The LUKS store passphrase (collected by the UI) → a 0600 file in RAM-backed tmp.
-//!   3. If configured, `sops --decrypt` the Secure Boot PKI tar → RAM-backed tmp.
-//!   4. Run the disko image script with `--pre-format-files <passphrase>
-//!      /tmp/nixnas-luks.key` (used at luksFormat) and `--post-format-files <pki dir>
-//!      /nix/lanzaboote/pki` (lands on the encrypted store). The .raw is written into
-//!      `.nixnas-image/` next to the config.
-//!   5. Zero + remove the secret temp files, regardless of success or failure.
+//!   3. The console-auth hash: `mkpasswd -m yescrypt --stdin` over the SAME passphrase
+//!      → a 0600 RAM file (root's — and the optional admin user's — console password IS
+//!      the store passphrase; see modules/appliance/auth.nix).
+//!   4. If configured, `sops --decrypt` the Secure Boot PKI tar → RAM-backed tmp.
+//!   5. Run the disko image script with `--pre-format-files <passphrase>
+//!      /tmp/nixnas-luks.key` (used at luksFormat) and `--post-format-files` for the
+//!      hash (→ /nix/nixnas/auth/passphrase.hash) and the PKI dir (→ /nix/lanzaboote/pki)
+//!      — both land on the encrypted store. The .raw is written into `.nixnas-image/`
+//!      next to the config.
+//!   6. Zero + remove the secret temp files, regardless of success or failure.
 //!
 //! The pipeline runs on a worker thread and reports through [`BuildEvent`]s so the
 //! full-screen UI can show a live step checklist and stream the child-process logs
@@ -34,9 +38,10 @@ pub const MIN_IMAGE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Size of the MINIMAL reusable image ("Build image", Pathway B): the smallest that comfortably
 /// holds the ESP (≤2 GiB) + a lean appliance closure (~2 GiB compressed) across ~2 kept
-/// generations. Built ONCE and reflashed to any stick — grow-to-fill (`boot.usb.growToFill`)
-/// then expands the store to the real device. A documented safe constant rather than a closure
-/// eval (the TUI can't cheaply read the host's closure/`espSizeMiB`).
+/// generations. Built ONCE and reflashed to any stick — the flash-time workbench grow (partition
+/// extend + offline f2fs grow, see flash.rs) then expands the store to the real device. A
+/// documented safe constant rather than a closure eval (the TUI can't cheaply read the host's
+/// closure/`espSizeMiB`).
 pub const MINIMAL_IMAGE_GIB: u32 = 6;
 
 /// How the build sizes the disko image. disko bakes `disk.imageSize` into `qemu-img create` and
@@ -97,9 +102,10 @@ pub fn check_target_bytes(dev_bytes: u64) -> Result<(), String> {
 
 /// The step checklist as the UI presents it. Indices are the protocol between the
 /// pipeline and the BUILD screen — keep them in sync with `run_pipeline`.
-pub const STEP_NAMES: [&str; 5] = [
+pub const STEP_NAMES: [&str; 6] = [
     "Evaluate image script (nix build)",
     "LUKS store passphrase → RAM file",
+    "Console auth hash (mkpasswd) → RAM file",
     "Secure Boot PKI (sops decrypt + inject)",
     "disko builder VM (write .raw)",
     ".raw image ready",
@@ -339,12 +345,72 @@ fn run_pipeline(
     let _key_guard = ShredOnDrop(key_path.clone());
     step(1, StepState::Ok);
 
-    // 3. Optional: decrypt the Secure Boot PKI (sops tar) into a RAM tmp dir.
+    // 3. Derive the CONSOLE AUTH hash from the same passphrase (the product auth model:
+    //    root's — and the optional admin user's — console password IS the store passphrase;
+    //    see modules/appliance/auth.nix). `mkpasswd -m yescrypt --stdin` (passphrase on
+    //    stdin, hash captured — neither ever reaches the log pane); the hash goes into a
+    //    0600 RAM file injected below as the RUNTIME file /nix/nixnas/auth/passphrase.hash
+    //    on the ENCRYPTED store. Hard-fail when mkpasswd is missing: a silently skipped
+    //    hash would ship a locked console — the exact lockout this step exists to end.
+    step(2, StepState::Running);
+    let hash_path = secure_tmp().join(format!("nixnas-auth-hash-{}", std::process::id()));
+    {
+        let mut mk = Command::new("mkpasswd")
+            .args(["-m", "yescrypt", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                step(2, StepState::Fail);
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    anyhow::anyhow!(
+                        "mkpasswd not found — it derives the console-login hash from the \
+                         passphrase (run the TUI via `nix run`, which bundles it, or install \
+                         the `mkpasswd` package)"
+                    )
+                } else {
+                    anyhow::Error::new(e).context("running mkpasswd")
+                }
+            })?;
+        mk.stdin
+            .as_mut()
+            .context("opening mkpasswd stdin")?
+            .write_all(passphrase.as_bytes())
+            .context("feeding the passphrase to mkpasswd")?;
+        // Close stdin (EOF terminates --stdin input) before waiting.
+        drop(mk.stdin.take());
+        let out = mk.wait_with_output().context("waiting for mkpasswd")?;
+        let hash = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        // yescrypt hashes start with $y$ — treat anything else as a failure, loudly.
+        if !out.status.success() || !hash.starts_with("$y$") {
+            step(2, StepState::Fail);
+            bail!(
+                "mkpasswd did not produce a yescrypt hash: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&hash_path)
+            .with_context(|| format!("creating temp hash file {}", hash_path.display()))?;
+        // One trailing newline, as /etc/shadow-style hash files conventionally carry
+        // (NixOS chomps it when reading hashedPasswordFile at activation).
+        f.write_all(hash.as_bytes())
+            .and_then(|()| f.write_all(b"\n"))
+            .context("writing the auth hash to the temp file")?;
+    }
+    let _hash_guard = ShredOnDrop(hash_path.clone());
+    step(2, StepState::Ok);
+
+    // 4. Optional: decrypt the Secure Boot PKI (sops tar) into a RAM tmp dir.
     //    sops output is the SECRET tar stream — captured, never sent to the log pane.
     let mut pki_dir: Option<PathBuf> = None;
     let mut _pki_guard: Option<ShredDirOnDrop> = None;
     if let Some(sops_file) = &cfg.sb_keys_sops {
-        step(2, StepState::Running);
+        step(3, StepState::Running);
         let sops_path = {
             let p = Path::new(sops_file);
             if p.is_absolute() {
@@ -365,7 +431,7 @@ fn run_pipeline(
             .output()
             .context("running sops (is it installed, with the age key available?)")?;
         if !decrypted.status.success() {
-            step(2, StepState::Fail);
+            step(3, StepState::Fail);
             bail!(
                 "sops --decrypt {} failed:\n{}",
                 sops_path.display(),
@@ -386,7 +452,7 @@ fn run_pipeline(
             .write_all(&decrypted.stdout)
             .context("streaming PKI tar to tar")?;
         if !tar.wait().context("waiting for tar")?.success() {
-            step(2, StepState::Fail);
+            step(3, StepState::Fail);
             bail!("extracting the Secure Boot PKI tar failed");
         }
         // The tar may carry the bundle bare (`keys/` at the top) or wrapped in a
@@ -422,7 +488,7 @@ fn run_pipeline(
             "keys/db/db.key",
         ] {
             if !bundle.join(required).is_file() {
-                step(2, StepState::Fail);
+                step(3, StepState::Fail);
                 bail!(
                     "Secure Boot PKI bundle from {} is missing {required} — expected the \
                      sbctl layout (keys/{{PK,KEK,db}}/*.pem+*.key) at the tar root or \
@@ -432,16 +498,16 @@ fn run_pipeline(
             }
         }
         pki_dir = Some(bundle);
-        step(2, StepState::Ok);
+        step(3, StepState::Ok);
     } else {
         log(
             "(no sb_keys_sops configured — lanzaboote will autogenerate keys on first boot)".into(),
         );
-        step(2, StepState::Skipped);
+        step(3, StepState::Skipped);
     }
 
-    // 4. Run the image script; the .raw lands in out_dir (the script writes to CWD).
-    step(3, StepState::Running);
+    // 5. Run the image script; the .raw lands in out_dir (the script writes to CWD).
+    step(4, StepState::Running);
     std::fs::create_dir_all(&out_dir).context("creating image output dir")?;
     let mut run =
         Command::new(std::fs::canonicalize(&script_link).context("resolving image script")?);
@@ -460,6 +526,12 @@ fn run_pipeline(
     run.arg("--pre-format-files")
         .arg(&key_path)
         .arg("/tmp/nixnas-luks.key");
+    // The console-auth hash — a RUNTIME file on the finished image's ENCRYPTED store
+    // (never the Nix store), read by NixOS activation as `hashedPasswordFile`
+    // (modules/appliance/auth.nix). disko preserves the 0600 mode, owner becomes root.
+    run.arg("--post-format-files")
+        .arg(&hash_path)
+        .arg("/nix/nixnas/auth/passphrase.hash");
     if let Some(pki) = &pki_dir {
         // Lands on the finished image's encrypted store; lanzaboote signs from day one.
         run.arg("--post-format-files")
@@ -468,20 +540,20 @@ fn run_pipeline(
     }
     let status = run_streamed(run, tx, "the disko image script")?;
     if !status.success() {
-        step(3, StepState::Fail);
+        step(4, StepState::Fail);
         bail!("image build failed");
     }
-    step(3, StepState::Ok);
+    step(4, StepState::Ok);
 
-    // 5. Find the built .raw (disko names it after the disk's imageName).
-    step(4, StepState::Running);
+    // 6. Find the built .raw (disko names it after the disk's imageName).
+    step(5, StepState::Running);
     let raw = std::fs::read_dir(&out_dir)
         .with_context(|| format!("reading built image dir {}", out_dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .find(|p| p.extension().is_some_and(|x| x == "raw"))
-        .inspect(|_| step(4, StepState::Ok))
+        .inspect(|_| step(5, StepState::Ok))
         .context("no .raw file in the image output dir")
-        .inspect_err(|_| step(4, StepState::Fail))?;
+        .inspect_err(|_| step(5, StepState::Fail))?;
     log(format!(">> built image: {}", raw.display()));
     Ok(raw)
 }

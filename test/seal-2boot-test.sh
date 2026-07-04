@@ -55,6 +55,9 @@ OVMF_VARS_TMPL="${OVMF_VARS:-$(find_fw 'OVMF_VARS.4m.fd OVMF_VARS_4M.fd OVMF_VAR
   || { echo "OVMF_VARS template not found (set \$OVMF_VARS)" >&2; exit 1; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Failed-units gate (assert_no_failed_units*): systemctl --failed must be EMPTY on every
+# booted system we reach over SSH. Allowlist: NIXNAS_FAILED_UNITS_ALLOWLIST (default empty).
+. "$HERE/assert-no-failed-units.sh"
 WORK="$(mktemp -d /tmp/nixnas-2boot.XXXXXX)"
 # A fresh clone checks the demo key out 0644 and OpenSSH refuses world-readable
 # private keys — use a 0600 copy, never the repo file directly.
@@ -149,7 +152,11 @@ kill "$FEED1" 2>/dev/null || true
 if [ "$sealed" != 1 ]; then
   echo "!! boot #1 never produced the sealed blob. Serial tail:"; tail -30 "$LOG1"; exit 1
 fi
-echo ">> boot #1: sealed blob present on the ESP — powering off cleanly over SSH …"
+echo ">> boot #1: sealed blob present on the ESP …"
+# CI quality gate: the sealed-blob marker only proves the happy path progressed — a
+# failed oneshot behind it would sail through. The booted system must be CLEAN.
+assert_no_failed_units "boot #1 (running system)" || exit 1
+echo ">> powering off cleanly over SSH …"
 "${SSH[@]}" 'systemctl poweroff' 2>/dev/null || true
 for _ in $(seq 1 30); do kill -0 "$VM1" 2>/dev/null || break; sleep 2; done
 exec 3>&-                              # release the FIFO writer
@@ -210,12 +217,23 @@ for _ in $(seq 1 40); do
   kill -0 "$VM2" 2>/dev/null || break
   sleep 2
 done
-echo "================ RESULT ================"
+
+# CI quality gate on the boot-#2 RUNNING system: after switch-root the forwarded port
+# moves from initrd-SSH to the running sshd — reconnect and require zero failed units.
+clean=1
 if [ "$ok" = 1 ]; then
+  assert_no_failed_units_after_ssh_wait "boot #2 (running system)" 20 || clean=0
+fi
+
+echo "================ RESULT ================"
+if [ "$ok" = 1 ] && [ "$clean" = 1 ]; then
   echo "PASS — sealed in boot #1; boot #2 unsealed the host key in the initrd, initrd-SSH"
-  echo "       came up, the store was unlocked over the network, box reached login headless."
-else
+  echo "       came up, the store was unlocked over the network, box reached login headless,"
+  echo "       and systemctl --failed is empty on both booted systems."
+elif [ "$ok" != 1 ]; then
   echo "FAIL — initrd-SSH came up but the unlock hand-off did not reach login. Serial tail:"
   tail -40 "$LOG2"
+else
+  echo "FAIL — boot #2 reached login but the booted system has FAILED units (see gate output above)."
 fi
-[ "$ok" = 1 ]
+[ "$ok" = 1 ] && [ "$clean" = 1 ]

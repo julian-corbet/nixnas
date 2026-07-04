@@ -35,6 +35,12 @@ set -uo pipefail
 SUBCMD="${1:?usage: failure-injection-test.sh <power-cut-mid-write|pool-absent|no-tpm> [args...]}"
 shift
 
+# Failed-units gate (assert_no_failed_units*): systemctl --failed must be EMPTY on every
+# booted system we reach over SSH (only power-cut-mid-write reaches one — pool-absent
+# must never boot, and no-tpm has no SSH forward). Allowlist:
+# NIXNAS_FAILED_UNITS_ALLOWLIST (default empty).
+. "$(cd "$(dirname "$0")" && pwd)/assert-no-failed-units.sh"
+
 # ── portable OVMF firmware detection (same logic as seal-2boot-test.sh + boot-vm.sh) ──
 find_fw() { # find_fw "name1 name2 …" → first existing path under the known dirs
   local d n
@@ -170,7 +176,12 @@ cmd_power_cut_mid_write() {
     echo "!! boot #1 never produced the sealed host-key blob — cannot proceed."
     echo "   serial tail:"; tail -30 "$LOG1"; exit 1
   fi
-  echo ">> boot #1: sealed credential confirmed — starting /nix write, then power-cut …"
+  echo ">> boot #1: sealed credential confirmed."
+
+  # CI quality gate: boot #1 is a NORMAL boot — it must be clean before we injure it.
+  assert_no_failed_units "boot #1 (running system, pre-power-cut)" || exit 1
+
+  echo ">> starting /nix write, then power-cut …"
 
   # Write a large file into the f2fs store (/nix is the LUKS+f2fs store partition).
   # Run in the background on the HOST side; we will kill QEMU while the dd is still in
@@ -240,11 +251,24 @@ cmd_power_cut_mid_write() {
     sleep 2
   done
 
-  echo "================ RESULT (power-cut-mid-write) ================"
+  # CI quality gate on the RECOVERED system: after switch-root the forwarded port moves
+  # from initrd-SSH to the running sshd — reconnect and require zero failed units (a
+  # unit failing as a consequence of the power-cut is a real recovery defect).
+  clean=1
   if [ "$ok" = 1 ]; then
+    assert_no_failed_units_after_ssh_wait "boot #2 (recovered running system)" 20 || clean=0
+  fi
+
+  echo "================ RESULT (power-cut-mid-write) ================"
+  if [ "$ok" = 1 ] && [ "$clean" = 1 ]; then
     echo "PASS — f2fs replayed its journal after the abrupt power-cut mid-write;"
-    echo "       /nix mounted in boot #2, initrd-SSH came up, system reached login."
+    echo "       /nix mounted in boot #2, initrd-SSH came up, system reached login,"
+    echo "       and systemctl --failed is empty on the recovered system."
     exit 0
+  fi
+  if [ "$ok" = 1 ]; then
+    echo "FAIL — recovered system reached login but has FAILED units (see gate output above)."
+    exit 1
   fi
   echo "FAIL — system did not reach login after the power-cut. serial tail:"
   tail -40 "$LOG2"; exit 1

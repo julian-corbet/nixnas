@@ -21,11 +21,21 @@
 #        `LoadCredentialEncrypted=nixnas-initrd-hostkey`, so systemd inherits + TPM2-decrypts
 #        the credential during sshd activation and drops the plaintext key in the unit's
 #        $CREDENTIALS_DIRECTORY; sshd_config `HostKey` points there.
-#   BOOTSTRAP CAVEAT: first boot has no credential yet → LoadCredentialEncrypted fails → sshd
-#   does NOT start → that one unlock happens at the machine: on the attached monitor
-#   (consolePrimary = "video", the default) or over serial/IPMI-SOL ("serial"). From the
-#   second boot on, initrd-SSH is available. A tampered boot chain (PCR 7 mismatch) makes the
-#   TPM refuse to release the key, so a stolen stick cannot impersonate the box's unlock prompt.
+#   BOOTSTRAP (first boot): the credential does not exist yet. systemd treats a MISSING
+#   inherited credential as non-fatal (ID-only LoadCredentialEncrypted= is "missing_ok" —
+#   skipped, not a unit failure), so sshd would launch, find no host key at all and die in a
+#   restart loop ("sshd: no hostkeys available"). Instead, a preStart detects the empty
+#   $CREDENTIALS_DIRECTORY and generates an EPHEMERAL ed25519 host key in the initrd's
+#   RAM-backed rootfs (never persisted — the initrd fs is discarded at switch-root), served
+#   with a LOUD SSH banner: the fingerprint is a throwaway and WILL CHANGE once
+#   `nixnas-seal-hostkey` seals the real identity later that same boot. Remote unlock
+#   therefore works on the VERY FIRST boot too — no monitor, no IPMI needed. SECURITY: a
+#   credential that WAS delivered but fails to DECRYPT (tampered boot chain, PCR 7 mismatch)
+#   still hard-fails the unit during credential setup — BEFORE the preStart — that lockout
+#   is intentional. DELETING the .cred from the plaintext ESP, however, is indistinguishable
+#   from a genuine first boot and DOES yield an ephemeral prompt — an inherent residual of
+#   the first-boot fallback. The protection there is client-side: your known-hosts pin turns
+#   the swapped fingerprint into a LOUD mismatch, never a silent accept.
 #   PCR 7 (Secure Boot state) is update-stable; kernel/UKI updates need no reseal.
 #
 # PATH B: sealHostKey = false (or crypto.tpm2.enable = false)
@@ -59,6 +69,17 @@ let
   credEspPath = "/boot/loader/credentials/${credName}.cred";
   # Where systemd hands the DECRYPTED credential to the sshd unit ($CREDENTIALS_DIRECTORY).
   hostKeyCredPath = "/run/credentials/sshd.service/${credName}";
+  # The seal service drops the PUBLIC half beside the .cred for out-of-band verification.
+  pubEspPath = "${lib.removeSuffix ".cred" credEspPath}.pub";
+
+  # ── Path A first-boot fallback: EPHEMERAL host key, generated in the initrd. ──
+  # Both paths live on the initrd's RAM-backed rootfs — discarded at switch-root, never
+  # persisted anywhere. /etc/ssh already exists in the initrd (sshd_config lives there).
+  ephemeralKeyPath = "/etc/ssh/nixnas_initrd_ephemeral_ed25519_key";
+  bannerPath = "/etc/ssh/nixnas_initrd_banner";
+  # Same openssh package whose sshd the nixpkgs initrd-ssh module copies in — reusing it
+  # for ssh-keygen adds (almost) nothing to the initrd closure.
+  sshPackage = config.programs.ssh.package;
 in
 {
   config = lib.mkIf (cfg.enable && cfg.boot.remoteUnlock.enable) (lib.mkMerge [
@@ -73,9 +94,9 @@ in
             Either:
               • Set crypto.tpm2.enable = true (keeps sealHostKey = true, the secure default):
                 the key is generated + sealed to this box's TPM on first boot; from the 2nd
-                boot the initrd unseals it. First boot is unlocked at the machine — on the
-                attached monitor (consolePrimary = "video", the default) or over
-                serial/IPMI-SOL.
+                boot the initrd unseals it. The very first boot serves initrd-SSH with a
+                loudly-flagged EPHEMERAL RAM-only host key (fingerprint changes once the
+                sealed identity exists) — no monitor or IPMI needed even on boot #1.
               • Or set boot.remoteUnlock.sealHostKey = false and supply a plaintext key via
                 boot.remoteUnlock.hostKeyPath (key is embedded in the initrd at build time,
                 lands on the plaintext ESP — LAN/tailnet-only).
@@ -86,8 +107,10 @@ in
           # Path A's delivery vehicle is the LANZABOOTE stub: it is what scans
           # \loader\credentials\*.cred and packs the sealed key into the initrd. Plain
           # systemd-boot (no Secure Boot) boots kernel+initrd directly — no stub, no
-          # credential, and initrd sshd would fail LoadCredentialEncrypted on EVERY boot.
-          # Fail the build instead of shipping a silently-dead unlock path.
+          # credential, so the sealed key would never arrive and the first-boot fallback
+          # would serve a DIFFERENT ephemeral key (with a bogus "first boot" banner) on
+          # EVERY boot. Fail the build instead of shipping a permanently-unpinnable
+          # unlock channel.
           assertion = sealActive -> cfg.boot.secureBoot.enable;
           message = ''
             nixnas.boot.remoteUnlock.sealHostKey = true requires nixnas.boot.secureBoot.enable:
@@ -139,17 +162,70 @@ in
 
       # No static key in the initrd. sshd itself loads the TPM2-sealed credential the stub
       # delivered and systemd decrypts it during activation — the plaintext lands in the unit's
-      # $CREDENTIALS_DIRECTORY, which we point HostKey at. ignoreEmptyHostKeys silences the
-      # NixOS empty-hostKeys assertion. No ESP mount, no vfat/codepage modules, no unseal unit.
+      # $CREDENTIALS_DIRECTORY, which the first HostKey points at. The second HostKey is the
+      # first-boot EPHEMERAL fallback (generated by the preStart below); on every other boot
+      # that file simply does not exist — sshd logs "Unable to load host key" for the absent
+      # one and carries on with whichever is present. The Banner file is only written on the
+      # ephemeral path; when it is absent sshd sends no banner (both behaviors verified against
+      # a live sshd). ignoreEmptyHostKeys silences the NixOS empty-hostKeys assertion.
+      # No ESP mount, no vfat/codepage modules, no unseal unit.
       boot.initrd.network.ssh.ignoreEmptyHostKeys = true;
-      boot.initrd.network.ssh.extraConfig = "HostKey ${hostKeyCredPath}\n";
+      boot.initrd.network.ssh.extraConfig = ''
+        HostKey ${hostKeyCredPath}
+        HostKey ${ephemeralKeyPath}
+        Banner ${bannerPath}
+      '';
 
       # sshd inherits the stub-provided credential by name and TPM2-decrypts it (auto-initrd key).
-      # On FIRST boot the credential does not exist yet ⇒ LoadCredentialEncrypted fails ⇒ sshd
-      # does not start ⇒ the operator does that one bootstrap unlock at the machine (monitor +
-      # keyboard with the "video" console default, or serial/IPMI-SOL). From the second boot
-      # the sealed .cred is on the ESP, the stub packs it in, and sshd comes up.
+      # Failure semantics (systemd, exec-credential.c) are load-bearing here:
+      #   • credential DELIVERED + decrypts        → boot 2+ normal path, stable identity.
+      #   • credential DELIVERED + decrypt FAILS   → tampered chain / PCR mismatch: the unit
+      #     hard-fails during credential setup, before any ExecStartPre — NO ephemeral
+      #     fallback, the box stays locked (intentional; a stolen stick cannot present a
+      #     plausible unlock prompt).
+      #   • credential MISSING (genuine first boot) → an ID-only LoadCredentialEncrypted= is
+      #     "missing_ok": non-fatal, the unit starts with an empty $CREDENTIALS_DIRECTORY and
+      #     the preStart below generates the ephemeral key + warning banner.
       boot.initrd.systemd.services.sshd.serviceConfig.LoadCredentialEncrypted = [ credName ];
+
+      # make-initrd-ng copies listed objects + ELF library deps only — it does NOT chase
+      # store references inside script text, so the ssh-keygen the preStart calls must be
+      # listed explicitly (same pattern as the nixpkgs module's sshd binaries).
+      boot.initrd.systemd.storePaths = [ "${sshPackage}/bin/ssh-keygen" ];
+
+      # ── First-boot fallback: serve an EPHEMERAL host key rather than not serving at all.
+      # nixnas must be unlockable without IPMI and without a monitor even on the very first
+      # boot. The key lives on the initrd's RAM rootfs; nothing survives switch-root. Loud,
+      # honest UX: the SSH banner (shown before authentication) says the fingerprint is a
+      # throwaway and where to verify the real one from boot #2 on.
+      boot.initrd.systemd.services.sshd.preStart = ''
+        # Boot 2+: systemd decrypted the sealed credential — stable identity, nothing to do.
+        if [ -s "''${CREDENTIALS_DIRECTORY:-/run/credentials/sshd.service}/${credName}" ]; then
+          exit 0
+        fi
+        # GENUINE first boot: no credential was delivered by the stub. (A delivered-but-
+        # undecryptable credential never reaches this script — see the comment above.)
+        if [ ! -s ${ephemeralKeyPath} ] || [ ! -s ${ephemeralKeyPath}.pub ]; then
+          rm -f ${ephemeralKeyPath} ${ephemeralKeyPath}.pub
+          ${sshPackage}/bin/ssh-keygen -t ed25519 -N "" -C "nixnas-ephemeral-first-boot" \
+            -f ${ephemeralKeyPath} -q
+        fi
+        fp="$(${sshPackage}/bin/ssh-keygen -lf ${ephemeralKeyPath}.pub)"
+        {
+          echo "=================================================================="
+          echo " nixnas FIRST BOOT: initrd SSH is using an EPHEMERAL host key"
+          echo "   $fp"
+          echo " RAM-only, thrown away at switch-root. The fingerprint WILL"
+          echo " CHANGE once the TPM-sealed identity is created later this boot"
+          echo " (nixnas-seal-hostkey, right after you unlock). From the NEXT"
+          echo " boot on, verify the new fingerprint against"
+          echo "   ${pubEspPath}"
+          echo " (also printed on console+journal by the seal service) and expect"
+          echo " a one-time ssh known-hosts change warning — that one is expected."
+          echo "=================================================================="
+        } > ${bannerPath}
+        echo "nixnas: FIRST BOOT - initrd sshd is serving an EPHEMERAL host key: $fp"
+      '';
 
       # ── Stage-2 seal service (first boot only) ────────────────────────────────────────
       # Generates the ed25519 key and TPM2-seals it into the ESP's loader/credentials/ dir with
@@ -192,7 +268,7 @@ in
           # VERIFY the first initrd-SSH connection instead of TOFU-accepting it: the .pub next
           # to the .cred, plus the fingerprint on journal+console. Without this the fingerprint
           # would be destroyed with the tmpdir and the unlock channel starts unverifiable.
-          install -m 0644 "$tmpkey.pub" "${lib.removeSuffix ".cred" credEspPath}.pub"
+          install -m 0644 "$tmpkey.pub" "${pubEspPath}"
           echo "nixnas: initrd SSH host key fingerprint (verify this on your first initrd-SSH connect):"
           ssh-keygen -lf "$tmpkey.pub"
           echo "nixnas: initrd SSH host key sealed to ${credEspPath} (public key beside it)"

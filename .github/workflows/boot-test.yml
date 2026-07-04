@@ -27,6 +27,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Gate: a test script with a syntax error must fail the job HERE, loudly — not
+      # leave it silently dead. (Runs before any expensive setup.)
+      - name: Syntax-check test scripts (bash -n) before running them
+        run: |
+          rc=0
+          for f in test/*.sh; do
+            if bash -n "$f"; then
+              echo "ok: $f"
+            else
+              echo "::error file=$f::bash -n failed — syntax error in $f"
+              rc=1
+            fi
+          done
+          exit "$rc"
+
       # The demo closure + CachyOS kernel + the .raw need more than the default ~14 GB.
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -92,12 +107,27 @@ jobs:
   # device (modules/store/location.nix). Builds the demo-hot toplevel (a full build check),
   # assembles a LUKS2+ext4 /nix disk with the closure, and direct-kernel-boots it — the initrd
   # must unlock with the operator passphrase and reach login. See test/hot-boot-test.sh.
+  # A SECOND boot in the same job runs the consolePrimary="video" variant (extendModules):
+  # same serial login gate + the LUKS prompt must still appear on the serial log — the
+  # runtime proof that SOL/serial users survive the video console default.
   hot-boot:
-    name: hot mode — boot /nix from an external operator-key LUKS device
+    name: hot mode — external LUKS /nix boot (serial-primary + video-primary consoles)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - name: Syntax-check test scripts (bash -n) before running them
+        run: |
+          rc=0
+          for f in test/*.sh; do
+            if bash -n "$f"; then
+              echo "ok: $f"
+            else
+              echo "::error file=$f::bash -n failed — syntax error in $f"
+              rc=1
+            fi
+          done
+          exit "$rc"
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -125,7 +155,8 @@ jobs:
             extra-sandbox-paths = /dev/kvm
       # sudo for losetup/cryptsetup/mount; preserve PATH (+sbin for the disk tools) + HOME so
       # `nix` (daemon client) works as root and cryptsetup/sgdisk/losetup are found.
-      - name: Build the hot toplevel + boot /nix from the external LUKS device
+      # Boots TWICE: serial-primary (demo-hot as-is), then the video-primary variant.
+      - name: Build the hot toplevel + boot /nix from the external LUKS device (serial + video console)
         run: sudo env "PATH=$PATH:/usr/sbin:/sbin" "HOME=$HOME" FLAKE=. PASS=nixnas-hot test/hot-boot-test.sh
 
   # Matrix eval: cheap eval-only proof of six operator-persona variants (no builds, no QEMU).
@@ -136,6 +167,18 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Syntax-check test scripts (bash -n) before running them
+        run: |
+          rc=0
+          for f in test/*.sh; do
+            if bash -n "$f"; then
+              echo "ok: $f"
+            else
+              echo "::error file=$f::bash -n failed — syntax error in $f"
+              rc=1
+            fi
+          done
+          exit "$rc"
       - uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -156,6 +199,18 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      - name: Syntax-check test scripts (bash -n) before running them
+        run: |
+          rc=0
+          for f in test/*.sh; do
+            if bash -n "$f"; then
+              echo "ok: $f"
+            else
+              echo "::error file=$f::bash -n failed — syntax error in $f"
+              rc=1
+            fi
+          done
+          exit "$rc"
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
         with:

@@ -62,6 +62,9 @@ if ss -ltn 2>/dev/null | grep -q ":${PORT} "; then
 fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Failed-units gate (assert_no_failed_units*): systemctl --failed must be EMPTY on every
+# booted system we reach over SSH. Allowlist: NIXNAS_FAILED_UNITS_ALLOWLIST (default empty).
+. "$HERE/assert-no-failed-units.sh"
 WORK="$(mktemp -d /tmp/nixnas-lifecycle.XXXXXX)"
 SWTPM_PID=""
 TPM_SOCK="$WORK/tpm/sock"
@@ -297,6 +300,10 @@ echo ">> running nixnas-install-hot …"
   || { echo "!! nixnas-install-hot failed"; exit 1; }
 echo "   install-hot complete."
 
+# CI quality gate: the install succeeding is not enough — the booted rescue itself must
+# have ZERO failed units (a broken oneshot would otherwise sail through this suite).
+assert_no_failed_units "boot #1 (rescue)" || exit 1
+
 # Set the rescue entry as the DEFAULT for boot #3.
 # We write loader.conf directly (reliable across systemd-boot versions).
 # timeout 3 gives a visible pause in CI logs to confirm the right entry booted.
@@ -384,6 +391,9 @@ if [ "$esp_fail" = 1 ]; then
 fi
 echo "   ESP OK: main UKI(s) and nixnas-rescue.efi both present. ✔"
 
+# CI quality gate: the MAIN's booted system must have ZERO failed units.
+assert_no_failed_units "boot #2 (MAIN)" || exit 1
+
 echo ">> powering off the MAIN (boot #2 done) …"
 "${SSH[@]}" 'systemctl poweroff' 2>/dev/null || true
 for _ in $(seq 1 30); do kill -0 "$VM2" 2>/dev/null || break; sleep 2; done
@@ -424,10 +434,21 @@ for _ in $(seq 1 20); do
   kill -0 "$VM3" 2>/dev/null || break
   sleep 2
 done
+
+# CI quality gate: the rescue-only boot also runs a full system — its sshd is reachable
+# over the same forwarded port; require zero failed units there too.
+clean3=1
+if [ "$ok3" = 1 ]; then
+  assert_no_failed_units_after_ssh_wait "boot #3 (rescue-only)" 20 || clean3=0
+fi
 exec 3>&-
 kill "$VM3" 2>/dev/null || true; wait "$VM3" 2>/dev/null || true
 
 echo "================ RESULT ================"
+if [ "$ok3" = 1 ] && [ "$clean3" != 1 ]; then
+  echo "FAIL — rescue-only boot reached login but has FAILED units (see gate output above)."
+  exit 1
+fi
 if [ "$ok3" = 1 ]; then
   echo "PASS — full install-hot lifecycle verified:"
   echo "  1. rescue boot:  lanzaboote PKI generated; pool disk (LUKS2+ext4) created over SSH;"
@@ -436,6 +457,7 @@ if [ "$ok3" = 1 ]; then
   echo "                   operator key (serial prompt); pool unlocked; /nix mounted; login."
   echo "                   ESP has nixos-generation-*.efi + nixnas-rescue.efi — coexistence ✔"
   echo "  3. rescue-only:  rescue entry booted with pool disk absent; stick self-sufficient ✔"
+  echo "  gate: systemctl --failed was EMPTY on all three booted systems ✔"
   exit 0
 fi
 echo "FAIL — rescue-only boot (boot #3) did not reach login. Serial tail:"

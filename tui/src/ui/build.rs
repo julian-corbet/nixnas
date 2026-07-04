@@ -391,20 +391,35 @@ pub(crate) fn draw_pass_modal(
     error: Option<&str>,
     confirming: bool,
 ) {
-    let area = ui::centered_rect(f.area(), 62, 7);
-    let inner = ui::modal(f, area, title);
-    let [text_area, input_area, error_area] = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
     let prompt = if confirming {
         "Type the passphrase again to confirm."
     } else {
         "Unlocks the encrypted store at boot. Held in a RAM-backed 0600 file \
          during the build, zeroed afterwards."
     };
+    draw_pass_modal_prompt(f, title, prompt, buf, error);
+}
+
+/// The masked-input modal with a CALLER-supplied prompt text (the flash screen's
+/// workbench-grow passphrase explains skipping; the build screens use the fixed
+/// prompts above). The prompt area grows with the text (2–4 wrapped lines).
+pub(crate) fn draw_pass_modal_prompt(
+    f: &mut Frame,
+    title: &str,
+    prompt: &str,
+    buf: &str,
+    error: Option<&str>,
+) {
+    // Conservative wrap estimate (word-wrap can spend a few cells per line).
+    let text_rows = (prompt.chars().count() as u16).div_ceil(55).clamp(2, 4);
+    let area = ui::centered_rect(f.area(), 62, text_rows + 5);
+    let inner = ui::modal(f, area, title);
+    let [text_area, input_area, error_area] = Layout::vertical([
+        Constraint::Length(text_rows),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
     f.render_widget(
         Paragraph::new(prompt)
             .style(Style::default().fg(DIM))

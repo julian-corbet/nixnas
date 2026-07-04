@@ -16,6 +16,15 @@
 # At the initrd's LUKS prompt we feed the passphrase over serial; PASS == the box reaches
 # `demo login:` (the store was unlocked with the operator key and mounted as /nix).
 #
+# SECOND BOOT — VIDEO-primary console coverage (closes the console-flip open risk):
+# the same system is rebuilt via extendModules with nixnas.boot.consolePrimary FORCED to
+# "video" (tty0 last = /dev/console; the option's default for real operators — the CI
+# hosts pin "serial"). The video build must (a) reach the same serial `demo login:` gate
+# as the serial build, and (b) still print the LUKS passphrase prompt ON THE SERIAL LOG —
+# systemd's password agent asks on every console in /sys/class/tty/console/active, which
+# is exactly what keeps IPMI/SOL users alive under the video default (the reorder-never-
+# drop invariant of modules/boot/image.nix, proven here at runtime, not just by eval).
+#
 # Needs root (losetup/cryptsetup/mount); CI runs it under sudo. No TPM, no OVMF.
 # Usage: [FLAKE=.] [PASS=nixnas-hot] test/hot-boot-test.sh
 set -uo pipefail
@@ -47,6 +56,34 @@ TOP="$(nix build --no-link --print-out-paths \
   || { echo "!! toplevel build failed" >&2; exit 1; }
 echo "   toplevel: $TOP"
 
+# ── 1b. build the VIDEO-primary variant of the SAME system (extendModules) ──────────
+# nixnas.boot.consolePrimary is FORCED to "video" (mkForce: hosts/demo pins "serial"
+# for the serial-observed CI rigs). Nearly free: the closure is shared, only the
+# toplevel + kernel-params differ. $FLAKE may be a path (resolve to absolute for
+# builtins.getFlake) or already a proper flake ref.
+echo ">> building demo-hot VIDEO-primary variant (consolePrimary forced to \"video\") …"
+FLAKE_URI="$FLAKE"
+[ -e "$FLAKE" ] && FLAKE_URI="$(readlink -f "$FLAKE")"
+TOP_VIDEO="$(nix build --no-link --print-out-paths --impure --expr "
+  ((builtins.getFlake \"${FLAKE_URI}\").nixosConfigurations.demo-hot.extendModules {
+    modules = [ ({ lib, ... }: { nixnas.boot.consolePrimary = lib.mkForce \"video\"; }) ];
+  }).config.system.build.toplevel")" \
+  || { echo "!! video-variant toplevel build failed" >&2; exit 1; }
+echo "   video toplevel: $TOP_VIDEO"
+
+# Structural pre-flight on both kernel command lines (fail fast, before any QEMU):
+#   serial build: console=ttyS0,115200 LAST (serial is /dev/console),
+#   video  build: console=tty0 LAST (display is /dev/console),
+#   and console=ttyS0 must be PRESENT in the video build — reorder, never drop.
+last_console() { grep -o 'console=[^ ]*' "$1/kernel-params" | tail -1; }
+[ "$(last_console "$TOP")" = "console=ttyS0,115200" ] \
+  || { echo "!! serial build: expected console=ttyS0,115200 last, got '$(last_console "$TOP")'" >&2; exit 1; }
+[ "$(last_console "$TOP_VIDEO")" = "console=tty0" ] \
+  || { echo "!! video build: expected console=tty0 last, got '$(last_console "$TOP_VIDEO")'" >&2; exit 1; }
+grep -q 'console=ttyS0,115200' "$TOP_VIDEO/kernel-params" \
+  || { echo "!! video build DROPPED console=ttyS0 — SOL/serial users would lose the LUKS prompt" >&2; exit 1; }
+echo "   console ordering verified: serial=[…,ttyS0] video=[…,tty0] (ttyS0 kept). ✔"
+
 # ── 2. assemble the disk: a labelled ESP (for the /boot mount) + the LUKS+ext4 /nix ──
 # demo-hot mounts /boot by-label ESP (it shares the stick ESP in reality); without it
 # the boot drops to emergency mode. This is direct-kernel-boot, so the ESP need only exist +
@@ -72,15 +109,18 @@ mkfs.ext4 -q -L nixstore /dev/mapper/nixstore-demo
 # shape rescue-maintain copies into.
 ROOT="$WORK/root"; MNT="$ROOT/nix"; mkdir -p "$MNT"
 mount /dev/mapper/nixstore-demo "$MNT"
-echo ">> copying the toplevel closure onto the ext4 store (nix copy → chroot store) …"
-nix copy --no-check-sigs --to "$ROOT" "$TOP" || { echo "!! nix copy to the chroot store failed" >&2; exit 1; }
+echo ">> copying BOTH toplevel closures onto the ext4 store (nix copy → chroot store) …"
+# Both boots share one disk: the video toplevel's delta over the serial one is tiny
+# (toplevel dir + kernel-params — kernel/initrd/store contents are identical).
+nix copy --no-check-sigs --to "$ROOT" "$TOP" "$TOP_VIDEO" \
+  || { echo "!! nix copy to the chroot store failed" >&2; exit 1; }
 sync
 umount "$MNT"; MNT=""
 cryptsetup close nixstore-demo; MAPPER=""
 losetup -d "$LOOP"; LOOP=""
 
-# ── 3. direct-kernel-boot; feed the passphrase to the initrd LUKS prompt over serial ──
-echo ">> booting (direct kernel) — the initrd must unlock nixstore-demo with the operator key …"
+# ── 3. BOOT #1 (serial-primary): feed the passphrase to the initrd LUKS prompt over serial ──
+echo ">> BOOT #1 (serial-primary): the initrd must unlock nixstore-demo with the operator key …"
 LOG="$WORK/serial.log"; FIFO="$WORK/in"; mkfifo "$FIFO"
 ACCEL=""; [ -e /dev/kvm ] && ACCEL=",accel=kvm"
 qemu-system-x86_64 \
@@ -115,12 +155,80 @@ done
 exec 3>&-
 kill "$VM" 2>/dev/null; wait "$VM" 2>/dev/null
 
+if [ "$ok" != 1 ]; then
+  echo "================ RESULT ================"
+  echo "FAIL — the hot-mode system (serial-primary) did not reach login. Serial tail:"
+  tail -50 "$LOG"
+  exit 1
+fi
+echo ">> BOOT #1 (serial-primary) reached login. ✔"
+
+# ── 4. BOOT #2 (VIDEO-primary): same disk, same serial gates, tty0 is /dev/console ──
+# The video build keeps console=ttyS0,115200 on the cmdline (verified above), so the
+# serial port must still carry: the kernel log, the LUKS passphrase prompt (systemd's
+# password agent asks on EVERY console in /sys/class/tty/console/active — this boot is
+# the runtime proof that SOL/serial users survive the video default), and a getty.
+# Differences vs boot #1:
+#   * NO extra `console=ttyS0` is appended — that would put ttyS0 last again and undo
+#     the very console order under test; the build's own kernel-params are authoritative.
+#   * snapshot=on — boot #1's writes are irrelevant here, and the ext4 journal replay
+#     after boot #1's hard kill lands in the throwaway overlay (the disk stays pristine).
+echo ">> BOOT #2 (VIDEO-primary): serial must still show the LUKS prompt and reach login …"
+LOG_V="$WORK/serial-video.log"; FIFO_V="$WORK/in-video"; mkfifo "$FIFO_V"
+qemu-system-x86_64 \
+  -machine "q35${ACCEL}" -cpu "$([ -e /dev/kvm ] && echo host || echo max)" -smp 2 -m 2048 \
+  -kernel "$TOP_VIDEO/kernel" -initrd "$TOP_VIDEO/initrd" \
+  -append "init=$TOP_VIDEO/init $(cat "$TOP_VIDEO/kernel-params")" \
+  -drive if=virtio,format=raw,snapshot=on,file="$DISK" \
+  -netdev user,id=n0 -device virtio-net,netdev=n0 \
+  -nographic -serial "mon:stdio" -no-reboot < "$FIFO_V" > "$LOG_V" 2>&1 &
+VMV=$!
+exec 3> "$FIFO_V"
+
+# Feed once, but trigger ONLY on the password agent's actual ask line ('please enter' /
+# 'passphrase for') — with tty0 primary, systemd's status stream stays off the serial,
+# and looser matches (unit names in the kernel log) could fire before an agent listens.
+fedv=0
+for _ in $(seq 1 60); do
+  kill -0 "$VMV" 2>/dev/null || break
+  if grep -qaiE 'please enter|passphrase for' "$LOG_V" && [ "$fedv" -lt 1 ]; then
+    printf '%s\n' "$PASS" >&3; fedv=$((fedv+1)); sleep 3; continue
+  fi
+  grep -qa 'demo login:' "$LOG_V" && break
+  sleep 2
+done
+
+okv=0
+for _ in $(seq 1 20); do
+  grep -qa 'demo login:' "$LOG_V" && { okv=1; break; }
+  kill -0 "$VMV" 2>/dev/null || break
+  sleep 2
+done
+exec 3>&-
+kill "$VMV" 2>/dev/null; wait "$VMV" 2>/dev/null
+
+# Assertion (b): the LUKS prompt line must be IN the serial log of the video build.
+LUKS_PROMPT_LINE="$(grep -aiE 'please enter|passphrase for' "$LOG_V" | head -1)"
+
 echo "================ RESULT ================"
-if [ "$ok" = 1 ]; then
-  echo "PASS — the initrd unlocked the EXTERNAL LUKS device with the operator passphrase,"
-  echo "       mounted it as /nix, and the hot-mode system reached login. (location.nix ✔)"
+if [ "$okv" = 1 ] && [ -n "$LUKS_PROMPT_LINE" ]; then
+  echo "PASS — serial-primary boot: initrd unlocked the EXTERNAL LUKS device with the"
+  echo "       operator passphrase, mounted it as /nix, reached login. (location.nix ✔)"
+  echo "     — VIDEO-primary boot (consolePrimary=\"video\" forced via extendModules):"
+  echo "       reached the SAME serial login gate, and the LUKS prompt appeared on the"
+  echo "       serial log — SOL/serial users survive the video default. ✔"
+  echo "       prompt line: ${LUKS_PROMPT_LINE}"
   exit 0
 fi
-echo "FAIL — the hot-mode system did not reach login. Serial tail:"
-tail -50 "$LOG"
+if [ "$okv" = 1 ]; then
+  echo "FAIL — VIDEO-primary boot reached login but NO LUKS prompt line appeared on the"
+  echo "       serial log (the password agent did not fan out to ttyS0 — SOL users would"
+  echo "       be locked out under the video default). Serial extract:"
+  grep -aiE 'passphrase|cryptsetup|ask-password|nixstore' "$LOG_V" | head -20
+  exit 1
+fi
+echo "FAIL — the VIDEO-primary boot did not reach login (serial-primary boot passed)."
+echo "       LUKS prompt on serial: ${LUKS_PROMPT_LINE:-<never appeared>}"
+echo "       Serial tail:"
+tail -50 "$LOG_V"
 exit 1

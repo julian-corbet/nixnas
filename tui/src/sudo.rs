@@ -36,6 +36,13 @@ impl Secret {
         v.push(b'\n');
         v
     }
+    /// The raw secret bytes, NO trailing newline. For secrets that are NOT a sudo
+    /// password — e.g. the LUKS store passphrase fed to `cryptsetup --key-file=-`,
+    /// which reads stdin VERBATIM (a trailing newline would become part of the key
+    /// and fail the unlock — verified against cryptsetup 2.8.6).
+    pub fn bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
 }
 
 impl Drop for Secret {
@@ -196,6 +203,30 @@ impl Elevation {
             .with_context(|| format!("running {}", argv.join(" ")))?;
         if let (Some(line), Some(mut stdin)) = (self.password_line(), child.stdin.take()) {
             let _ = stdin.write_all(&line);
+        }
+        child
+            .wait_with_output()
+            .with_context(|| format!("waiting for {}", argv.join(" ")))
+    }
+
+    /// Run a privileged command whose STDIN must carry DATA (not the sudo password) —
+    /// e.g. `cryptsetup open --key-file=-` reading the LUKS passphrase. Like the dd
+    /// write path it uses `sudo -n`, leaning on the timestamp the surrounding `-S`
+    /// commands keep fresh; when root the command runs directly. `input` is written
+    /// to the child's stdin, then stdin is closed (EOF).
+    pub fn run_with_input(&self, argv: &[&str], input: &[u8]) -> Result<std::process::Output> {
+        let mut child = self
+            .command(argv, false)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("running {}", argv.join(" ")))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input)
+                .with_context(|| format!("feeding stdin of {}", argv.join(" ")))?;
+            // dropping stdin closes it — the child sees EOF after the payload
         }
         child
             .wait_with_output()

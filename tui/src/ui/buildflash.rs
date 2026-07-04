@@ -292,6 +292,7 @@ impl BuildFlowScreen {
             Some(bytes),
             backup_to,
             false,
+            None, // exact fit — no workbench grow, no store passphrase needed
             elev,
         ));
     }

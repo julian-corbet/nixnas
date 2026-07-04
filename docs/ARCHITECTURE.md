@@ -159,11 +159,16 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
     mismatch) makes the TPM refuse the key, so a stolen stick can't impersonate the unlock prompt —
     closing the one evil-maid wart of generic initrd-SSH, and reusing systemd's own credential
     plumbing rather than a hand-rolled mount/decrypt service. *Bootstrap:* the very first boot has
-    no credential yet, so sshd doesn't start and that one unlock happens **at the machine** — the
-    passphrase prompt appears on the attached monitor (`boot.consolePrimary = "video"`, the
-    default: tty0 is `/dev/console`; `= "serial"` keeps ttyS0 primary for IPMI-SOL/BMC boxes and
-    the CI VMs — both consoles always carry the prompt) — or over serial/IPMI-SOL; from boot #2
-    onward initrd-SSH is available. Fallback for no-TPM boxes: `boot.remoteUnlock.sealHostKey =
+    no credential yet — the initrd sshd still starts, on an **ephemeral** RAM-only host key
+    generated in the initrd (discarded at switch-root, never persisted), with a pre-auth SSH
+    banner warning that the fingerprint is a throwaway and will change once the sealed identity
+    is created later that boot — so remote unlock works on boot #1 too, monitor-less and
+    IPMI-less. A credential that was *delivered* but fails to decrypt (tampered chain / PCR
+    mismatch) still hard-fails sshd with **no** ephemeral fallback — the downgrade path stays
+    closed. The console prompt remains available in parallel on every boot
+    (`boot.consolePrimary = "video"`, the default: tty0 is `/dev/console`; `= "serial"` keeps
+    ttyS0 primary for IPMI-SOL/BMC boxes and the CI VMs — both consoles always carry the
+    prompt). Fallback for no-TPM boxes: `boot.remoteUnlock.sealHostKey =
     false` + a plaintext `hostKeyPath` (embedded in the initrd, lands on the ESP → LAN/tailnet-only).
     `modules/boot/remote-unlock.nix`; verified by `test/verify-sealed-hostkey.nix` (stage-2 seal +
     decrypt round-trip) **and `test/seal-2boot-test.sh`** (a real power-cycle: boot #1 seals, boot #2

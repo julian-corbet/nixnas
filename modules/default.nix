@@ -27,6 +27,7 @@
     ./appliance/base.nix          # stable identity (hostName) + Tailscale
     ./appliance/identity.nix      # machine-id, SSH host keys, tailscale state — persisted on the stick
     ./appliance/ssh.nix           # headless admin sshd (key-only root)
+    ./appliance/auth.nix          # console login: root (+ optional admin user) by the ONE store passphrase
     ./appliance/auto-upgrade.nix  # self-update: stage-only, never self-reboot
     ./appliance/rescue-maintain.nix # hot mode: the main keeps the stick's RESCUE current (closure + signed UKI)
     ./appliance/install-hot.nix     # `nixnas-install-hot` on usb systems: install a hot-mode MAIN from the rescue

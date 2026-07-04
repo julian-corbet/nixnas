@@ -69,6 +69,9 @@ if ss -ltn 2>/dev/null | grep -q ":${PORT} "; then
 fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Failed-units gate (assert_no_failed_units*): systemctl --failed must be EMPTY on every
+# booted system we reach over SSH. Allowlist: NIXNAS_FAILED_UNITS_ALLOWLIST (default empty).
+. "$HERE/assert-no-failed-units.sh"
 WORK="$(mktemp -d /tmp/nixnas-soak.XXXXXX)"
 KEY="$WORK/demo_key"
 install -m600 "$HERE/ssh/demo_key" "$KEY"
@@ -188,6 +191,10 @@ store_mib_base=$("${SSH[@]}" "du -s /nix/store | awk '{print int(\$1/1024)}'")
 uki_count_base=$("${SSH[@]}" "find /boot/EFI/Linux -name 'nixos-generation-*.efi' | wc -l")
 bootctl_count_base=$("${SSH[@]}" "bootctl list 2>/dev/null | grep -c 'type:' || true")
 
+# CI quality gate: boot 0's fully-booted baseline system must have ZERO failed units
+# before we start cycling (a broken oneshot would otherwise taint all five cycles).
+assert_no_failed_units "boot 0 (baseline)" || exit 1
+
 # Stage cycle 1: install soak-gen-2 as the next boot.
 echo ">> staging soak-gen-2 (generation 2) for first cycle reboot ..."
 "${SSH[@]}" "nix-env -p /nix/var/nix/profiles/system --set '${GEN_TOPS[0]}'"
@@ -298,6 +305,14 @@ for cycle in $(seq 1 "$N"); do
       cycle_ok=0
     fi
     PREV_STORE_MIB="$store_mib"
+
+    # (e) CI quality gate: zero failed units on the freshly booted generation.
+    if assert_no_failed_units "cycle ${cycle} (generation ${gen})"; then
+      echo "   [PASS] (e) failed-units gate: systemctl --failed empty"
+    else
+      echo "   [FAIL] (e) failed-units gate: failed units present (see list above)"
+      cycle_ok=0
+    fi
   else
     # VM failed to boot; record placeholder values.
     CYCLE_STORE_MIB+=("?")
@@ -348,7 +363,8 @@ echo ""
 echo "================ RESULT ================"
 if [ "$FAIL_COUNT" = 0 ]; then
   echo "PASS — all ${N} cycles: boots newest generation, ESP UKI count == min(cycle+1, ${KEEP}),"
-  echo "       bootctl list correct, store growth bounded. lanzaboote keepGenerations ✔"
+  echo "       bootctl list correct, store growth bounded, zero failed units per cycle."
+  echo "       lanzaboote keepGenerations ✔"
   exit 0
 fi
 echo "FAIL — ${FAIL_COUNT} of ${N} cycles failed (see [FAIL] lines above)."

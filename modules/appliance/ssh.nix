@@ -1,9 +1,11 @@
 # nixnas — sshd for the RUNNING system (headless admin).
 #
-# The box has no console, so SSH is the only way in once it has booted. Key-only,
-# root login by key (the appliance has no other user). Keys come from
-# `nixnas.admin.authorizedKeys` — the same set used by the initrd remote-unlock
-# (modules/boot/remote-unlock.nix), so one keyset covers both boot phases.
+# SSH is the primary way in once the box has booted. Key-only, root login by key;
+# the optional `nixnas.auth.adminUser` (appliance/auth.nix) gets the same keys.
+# Keys come from `nixnas.admin.authorizedKeys` — the same set used by the initrd
+# remote-unlock (modules/boot/remote-unlock.nix), so one keyset covers both boot
+# phases. Console login (root/admin by the store passphrase) is auth.nix's job;
+# passwords are never accepted over SSH.
 { config, lib, ... }:
 let
   cfg = config.nixnas;

@@ -11,6 +11,28 @@ on:
   pull_request:
 
 jobs:
+  # Every test script must PARSE on every push/PR — a syntax error in test/*.sh once
+  # left three QEMU jobs silently dead. The heavy suites re-run this gate themselves
+  # before executing any script; this job catches it even when they are not triggered.
+  test-syntax:
+    name: bash -n all test scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check test scripts (bash -n)
+        run: |
+          rc=0
+          for f in test/*.sh; do
+            if bash -n "$f"; then
+              echo "ok: $f"
+            else
+              echo "::error file=$f::bash -n failed — syntax error in $f"
+              rc=1
+            fi
+          done
+          exit "$rc"
+
   eval:
     name: nix eval (demo host, all assertions)
     runs-on: ubuntu-latest

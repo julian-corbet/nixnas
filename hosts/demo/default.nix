@@ -65,9 +65,15 @@
     autoUpgrade.flake = "github:DEMO/nas-config#demo";
   };
 
-  # INCREMENT 1: let the demo image be logged into in the test VM (placeholder only;
-  # a real host authenticates via SSH keys / the unlock chain, not a root password).
-  users.users.root.initialPassword = "nixnas";
+  # Console login for the test VM, via the product auth model (modules/appliance/auth.nix):
+  # root's password is the PUBLIC demo passphrase "nixnas", as a store-path yescrypt hash —
+  # the same explicit, visible opt-in as the demo LUKS passphrase above (this overrides the
+  # module's mkDefault runtime path). A real host keeps the runtime file instead: the TUI
+  # injects the hash of the operator's store passphrase at build time, never the Nix store.
+  users.users.root.hashedPasswordFile = toString (
+    pkgs.writeText "nixnas-demo-root-hash"
+      "$y$j9T$8NCrqqcsinELEJMoMypD/1$6ZP7.dytN5dIPPXqX16PU4DmnhSfodZjJuIdWCgtKl8\n"
+  );
 
   # ZFS (the operator's data pools) requires a stable host id; a real host sets its own.
   networking.hostId = "deadbeef";

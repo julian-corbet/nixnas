@@ -469,8 +469,29 @@ in
         example = literalExpression ''[ "ssh-ed25519 AAAA… you@host" ]'';
         description = ''
           SSH public keys that may log in as root — for BOTH the running system (headless
-          admin once booted) and the initrd (remote store unlock). The box is headless and
-          key-only: password login is off, so at least one key is required for any access.
+          admin once booted) and the initrd (remote store unlock). SSH is key-only:
+          password login over SSH is off, so at least one key is required for remote
+          access. (CONSOLE login is separate: root — and `auth.adminUser`, if set — log
+          in at the console with the ONE store passphrase; see modules/appliance/auth.nix.)
+        '';
+      };
+    };
+
+    ## ── Product auth: console login with the ONE store passphrase ─────────
+    auth = {
+      adminUser = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "julian";
+        description = ''
+          Optional NORMAL admin user (wheel, default sudo-with-password). Its console
+          password is the SAME single secret as root's: the store passphrase, via the
+          runtime hash file the TUI injects at build time
+          (`/nix/nixnas/auth/passphrase.hash` — on the encrypted store, never in the Nix
+          store). Its SSH login uses `admin.authorizedKeys` (key-only, like root). Null
+          (the default) = no extra user; root is the only account. See
+          modules/appliance/auth.nix for the full access model and its fail-closed
+          behaviour when the hash file is absent.
         '';
       };
     };

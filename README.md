@@ -47,20 +47,23 @@ contributed to) by others, not just one machine.
 - **Evil-Maid hardened**: UEFI Secure Boot with *your own* keys (Microsoft keys not
   enrolled), signed Unified Kernel Images, and LUKS bound to TPM2 + PIN. *(Roadmap: a
   dm-verity/AEAD store hash sealed into the signed UKI.)*
-- **First boot just works on a monitor**: plug in a display + keyboard and the box asks for
-  the store passphrase **on screen** (`nixnas.boot.consolePrimary = "video"`, the default).
-  This matters because the very first unlock can never happen over initrd-SSH — the
-  TPM-sealed initrd host key is generated *on* that first boot, so remote unlock is
-  available from the second boot on. Serial/SOL stays fully supported and is one option
-  away (`= "serial"` for genuinely headless IPMI/BMC boxes); both consoles always carry
+- **First boot needs no monitor and no IPMI**: the TPM-sealed initrd host key is generated
+  *on* the first boot, so that very first unlock serves initrd-SSH with a loudly-flagged
+  **ephemeral** RAM-only host key instead — the pre-auth banner warns that the fingerprint
+  is a throwaway and will change once the sealed identity exists (verify it against
+  `/boot/loader/credentials/nixnas-initrd-hostkey.pub` from boot #2 on, and expect a
+  one-time known-hosts warning then). A monitor still works in parallel: plug in a display
+  + keyboard and the box asks for the store passphrase **on screen**
+  (`nixnas.boot.consolePrimary = "video"`, the default). Serial/SOL stays fully supported
+  and is one option away (`= "serial"` for IPMI/BMC boxes); both consoles always carry
   kernel logs, a login and the passphrase prompt either way — the option only picks which
   one is `/dev/console`.
 - **Headless**: ships sshd + Tailscale with a stable, stick-persisted identity (machine-id +
   pinned SSH host key — the channel you type the data passphrase into is authenticated), and
   unlocks remotely: the data set over the running system's SSH (`nixnas-unlock`), and — when
   the strict TPM2 PIN is on — the store's PIN prompt over SSH **in the initrd** (no console
-  needed, from the second boot on — the first unlock happens at the machine or over SOL;
-  see the first-boot bullet above).
+  needed on any boot — the very first boot uses a loudly-flagged ephemeral host key; see
+  the first-boot bullet above).
 - **Hands-off**: everything except the one boot passphrase is automated — build, sign,
   roll out, self-update (stage-only, never self-reboot), rollback. *If you have to think
   about it, something has gone wrong.*
@@ -96,6 +99,21 @@ prompt before anything is overwritten. A conventional **Build image** + **Flash 
 is there for reuse (the latter grows a minimal image to fill any larger stick). The finished
 stick carries plain, self-describing labels: partition **`boot`** (the ESP) and **`nixnas`**
 (the encrypted store).
+
+**Access model — one passphrase, keys for remote.** There is exactly ONE interactive
+secret: the store passphrase. It unlocks the LUKS store at boot (and is the TPM2 PIN),
+and it is also the **console login password** for `root` — and for the optional normal
+admin user (`nixnas.auth.adminUser`, wheel + sudo-with-password). No autologin, no second
+password to remember: the TUI derives a yescrypt hash from the passphrase at build time
+and places it as a *runtime* file on the **encrypted** store
+(`/nix/nixnas/auth/passphrase.hash` — never in the Nix store). **SSH is key-only** for
+both accounts (`nixnas.admin.authorizedKeys`); passwords are never accepted remotely. If
+the hash file is absent (e.g. a hot-mode main installed without it) the accounts simply
+stay locked for password login — fail-closed, boot unaffected. Known limitation: the
+**initrd emergency shell stays locked** (the hash is a runtime file on the still-locked
+store, so `boot.initrd.systemd.emergencyAccess` can't use it without going stale) —
+stage-1 rescue is the generation menu or a second stick. See
+[`modules/appliance/auth.nix`](modules/appliance/auth.nix).
 
 See [`docs/SCOPE.md`](docs/SCOPE.md) (what nixnas is / is not),
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (the decided design), and

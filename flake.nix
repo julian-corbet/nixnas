@@ -242,12 +242,21 @@
           # The TUI shells out. `nix`/`sops`/`ssh` intentionally come from the operator's
           # OWN PATH (their flake, their keys), so we PREFIX (not replace) with only the
           # small, always-required device tools it can't assume are installed: gptfdisk
-          # (sgdisk — the grow-to-fill partition extend) and util-linux (blockdev/lsblk —
-          # the exact byte-size read + device listing). Without this, grow-to-fill degrades
-          # to a non-fatal warning on hosts lacking sgdisk.
+          # (sgdisk — the grow-to-fill partition extend), util-linux (blockdev/lsblk —
+          # the exact byte-size read + device listing), cryptsetup + f2fs-tools (the
+          # workbench grow: open the LUKS store, offline resize.f2fs, close), and
+          # mkpasswd (the console-auth yescrypt hash the build injects). Without this,
+          # the workbench grow degrades to a non-fatal warning and the build's auth-hash
+          # step fails with an actionable message on hosts lacking the tools.
           postInstall = ''
             wrapProgram $out/bin/nixnas \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.gptfdisk pkgs.util-linux ]}
+              --prefix PATH : ${pkgs.lib.makeBinPath [
+                pkgs.gptfdisk
+                pkgs.util-linux
+                pkgs.cryptsetup
+                pkgs.f2fs-tools
+                pkgs.mkpasswd
+              ]}
           '';
           meta = {
             description = "nixnas — guided TUI to configure, build, and flash a nixnas USB stick.";

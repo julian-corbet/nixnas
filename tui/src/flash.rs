@@ -13,6 +13,13 @@
 //! the write pipes through `sudo dd of=<dev>`, the reads/sgdisk through `sudo -S …`. When
 //! already root, everything runs directly. The elevation is resolved (and the sudo
 //! password collected) by the UI before the worker spawns.
+//!
+//! WORKBENCH GROW (Pathway B, image < device): after the write + verify, the last GPT
+//! partition is extended to the device end, and — when the operator handed over the LUKS
+//! store passphrase (skippable) — the f2fs inside the store is grown OFFLINE right here:
+//! `cryptsetup open --key-file=-` → `resize.f2fs` on the unmounted mapper → close. This
+//! replaces the removed first-boot grow (resize.f2fs cannot resize a mounted filesystem).
+//! Every grow failure is a WARNING: the verified stick stays a success.
 
 use crate::config::config_dir;
 use anyhow::{bail, Context, Result};
@@ -197,13 +204,15 @@ pub enum FlashEvent {
 
 /// Spawn the flash worker: optional device backup, then image write + fsync +
 /// header verification. All gates (typed confirmation, size check) have already
-/// been passed by the UI at this point.
+/// been passed by the UI at this point. `store_pass` is the LUKS store passphrase
+/// for the workbench f2fs grow (None = the operator skipped it — partition-only grow).
 pub fn spawn_flash(
     image: PathBuf,
     dev: PathBuf,
     dev_size: Option<u64>,
     backup_to: Option<PathBuf>,
     grow: bool,
+    store_pass: Option<crate::sudo::Secret>,
     elev: crate::sudo::Elevation,
 ) -> Receiver<FlashEvent> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -214,6 +223,7 @@ pub fn spawn_flash(
             dev_size,
             backup_to.as_deref(),
             grow,
+            store_pass.as_ref(),
             &elev,
             &tx,
         );
@@ -222,12 +232,14 @@ pub fn spawn_flash(
     rx
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_flash(
     image: &Path,
     dev: &Path,
     dev_size: Option<u64>,
     backup_to: Option<&Path>,
     grow: bool,
+    store_pass: Option<&crate::sudo::Secret>,
     elev: &crate::sudo::Elevation,
     tx: &Sender<FlashEvent>,
 ) -> Result<String> {
@@ -272,19 +284,40 @@ fn run_flash(
     let mut summary = format!("{} is now a nixnas stick (header verified)", dev.display());
 
     // Grow-to-fill (Pathway B: a smaller/generic image on a bigger stick). Done AFTER the header
-    // verify so that check stays a byte-faithful proof of the write; only the safe, secret-free
-    // part happens here (extend the last GPT partition to the device end). The LUKS mapping needs
-    // no resize — its dynamic segment spans the grown partition on the box's fresh unlock — and the
-    // f2fs grows on first boot (boot.usb.growToFill). A grow failure never unmakes a verified
-    // stick: it stays valid, just not filling the whole device.
+    // verify so that check stays a byte-faithful proof of the write. This is the WORKBENCH GROW:
+    // first the safe, secret-free partition extend (last GPT partition to the device end), then —
+    // with the operator's store passphrase, if given — the f2fs grow INSIDE the LUKS store, done
+    // offline right here (cryptsetup open → resize.f2fs on the unmounted mapper → close). There is
+    // deliberately NO first-boot grow: resize.f2fs cannot resize a mounted filesystem, so growing
+    // is a flash-time job (see the note in modules/options.nix). The LUKS mapping itself needs no
+    // resize — its dynamic segment spans the grown partition on a fresh open. Any grow failure is
+    // a WARNING only: the verified stick stays valid, just not filling the whole device.
     if grow {
         let _ = tx.send(FlashEvent::Phase(
             "Growing the last partition to fill the device",
         ));
         match grow_last_partition(dev, elev) {
-            Ok(()) => summary.push_str(
-                " · partition grown to fill the device (the store resizes on first boot)",
-            ),
+            Ok(part_num) => match store_pass {
+                Some(secret) => {
+                    let _ = tx.send(FlashEvent::Phase(
+                        "Growing the f2fs store inside the LUKS partition",
+                    ));
+                    match grow_f2fs_in_luks(dev, part_num, secret, elev) {
+                        Ok(()) => summary.push_str(
+                            " · partition + f2fs store grown to fill the device (offline, at \
+                             the workbench)",
+                        ),
+                        Err(e) => summary.push_str(&format!(
+                            " · WARNING: partition grown, but the f2fs grow failed ({e:#}) — \
+                             the stick is valid; the store just doesn't use the extra space yet"
+                        )),
+                    }
+                }
+                None => summary.push_str(
+                    " · partition grown to fill the device; f2fs grow skipped (no store \
+                     passphrase) — the stick boots, the extra space stays unused",
+                ),
+            },
             Err(e) => summary.push_str(&format!(
                 " · WARNING: could not grow the partition ({e:#}) — the stick is valid but won't \
                  fill the whole device"
@@ -298,7 +331,8 @@ fn run_flash(
 /// exactly (start, type GUID, unique GUID, name). Two deterministic `sgdisk` steps: relocate the
 /// backup GPT header to the real device end (after a smaller image left it mid-disk), then
 /// delete+recreate the last partition at its original start with the largest possible end.
-fn grow_last_partition(dev: &Path, elev: &crate::sudo::Elevation) -> Result<()> {
+/// Returns the grown partition's number (the f2fs grow needs its /dev node).
+fn grow_last_partition(dev: &Path, elev: &crate::sudo::Elevation) -> Result<u32> {
     let n = last_partition_number(dev, elev)?;
     let info = partition_info(dev, n, elev)?;
     // 1. Move the backup GPT header (and the header's usable-area/alt-LBA) to the real device end,
@@ -315,7 +349,120 @@ fn grow_last_partition(dev: &Path, elev: &crate::sudo::Elevation) -> Result<()> 
             format!("--change-name={n}:{}", info.name),
         ],
         elev,
-    )
+    )?;
+    Ok(n)
+}
+
+/// The /dev node of partition `n` on `dev`: `/dev/sda` → `/dev/sda2`, but devices whose
+/// name ends in a digit get the kernel's `p` separator (`/dev/nvme0n1` → `/dev/nvme0n1p2`,
+/// same for mmcblk/loop).
+fn partition_path(dev: &Path, n: u32) -> PathBuf {
+    let s = dev.to_string_lossy();
+    if s.chars().last().is_some_and(|c| c.is_ascii_digit()) {
+        PathBuf::from(format!("{s}p{n}"))
+    } else {
+        PathBuf::from(format!("{s}{n}"))
+    }
+}
+
+/// Mapper name for the workbench grow's temporary LUKS mapping.
+const GROW_MAPPER: &str = "nixnas-flash-grow";
+
+/// The workbench f2fs grow: open the (just-extended) LUKS store partition with the operator's
+/// passphrase, run `resize.f2fs` OFFLINE on the unmounted mapper, close, sync. Verified against
+/// the real tools: `cryptsetup open --key-file=-` reads the passphrase from stdin VERBATIM (no
+/// newline — matching the keyslot disko created from the passphrase file), and `resize.f2fs`
+/// with no `-t` grows the filesystem to the full (mapper) device; a same-size run is a harmless
+/// "Nothing to resize" success. A wrong passphrase fails at `cryptsetup open` — cleanly, before
+/// anything is touched.
+fn grow_f2fs_in_luks(
+    dev: &Path,
+    part_num: u32,
+    secret: &crate::sudo::Secret,
+    elev: &crate::sudo::Elevation,
+) -> Result<()> {
+    let part = partition_path(dev, part_num);
+    // sgdisk asks the kernel to reread the table, but on a busy hub that can lag — nudge it
+    // (best-effort) and wait for the partition node to (re)appear.
+    let dev_str = dev.to_string_lossy().into_owned();
+    let _ = elev.run_captured(&["blockdev", "--rereadpt", &dev_str]);
+    let part_str = part.to_string_lossy().into_owned();
+    for _ in 0..50 {
+        if part.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if !part.exists() {
+        bail!("partition node {part_str} did not appear after the partition grow");
+    }
+    // The node EXISTING does not guarantee the kernel already reports the NEW size — on a
+    // busy machine the reread can lag, and opening too early would silently grow the f2fs
+    // to the OLD size (a no-op wearing a success face). Wait until the reported size is
+    // stable across two 200 ms samples before touching it.
+    let part_size = |elev: &crate::sudo::Elevation| -> u64 {
+        elev.run_captured(&["blockdev", "--getsize64", &part_str])
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })
+            .unwrap_or(0)
+    };
+    let mut last = 0u64;
+    for _ in 0..50 {
+        let sz = part_size(elev);
+        if sz > 0 && sz == last {
+            break;
+        }
+        last = sz;
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    // Open the store. The passphrase goes to cryptsetup's stdin as raw bytes (no newline);
+    // the process is `sudo -n` (data stdin can't also carry the sudo password — the timestamp
+    // is fresh from the sgdisk steps above).
+    let out = elev
+        .run_with_input(
+            &["cryptsetup", "open", "--key-file=-", &part_str, GROW_MAPPER],
+            secret.bytes(),
+        )
+        .context("running cryptsetup (is it installed?)")?;
+    if !out.status.success() {
+        bail!(
+            "cryptsetup open {part_str} failed (wrong passphrase?): {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+
+    // Offline grow on the unmounted mapper. No `-t` = grow to the full device.
+    let mapper_path = format!("/dev/mapper/{GROW_MAPPER}");
+    let resize = elev
+        .run_captured(&["resize.f2fs", &mapper_path])
+        .context("running resize.f2fs (are the f2fs-tools installed?)");
+
+    // ALWAYS close the mapping, even after a resize failure, then flush everything out.
+    let close = elev.run_captured(&["cryptsetup", "close", GROW_MAPPER]);
+    let _ = elev.run_captured(&["sync"]);
+
+    let resize_out = resize?;
+    if !resize_out.status.success() {
+        bail!(
+            "resize.f2fs {mapper_path} failed: {}",
+            String::from_utf8_lossy(&resize_out.stderr).trim()
+        );
+    }
+    let close_out = close?;
+    if !close_out.status.success() {
+        bail!(
+            "cryptsetup close {GROW_MAPPER} failed: {}",
+            String::from_utf8_lossy(&close_out.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 /// The details of one GPT partition we must preserve across a delete+recreate.
