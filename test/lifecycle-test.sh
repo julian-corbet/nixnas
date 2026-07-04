@@ -90,10 +90,19 @@ fi
 # ── SSH wrapper ───────────────────────────────────────────────────────────────
 KEY="$WORK/demo_key"
 install -m600 "$HERE/ssh/demo_key" "$KEY"
+# BatchMode=yes lives HERE, before the destination — every call site used to
+# append "-o BatchMode=yes <cmd>" AFTER "${SSH[@]}", but since the array already
+# ends in the destination (root@127.0.0.1), ssh treats anything appended after
+# it as (part of) the remote command, not as ssh options. That silently turned
+# every such check into running the literal remote command "-o BatchMode=yes
+# <cmd>" (which fails with "command not found"), so the SSH-up polling loops
+# always failed and spun for their full timeout even though sshd was reachable
+# within seconds of boot. Keep BatchMode=yes in the array; callers append ONLY
+# the remote command.
 SSH=(ssh -i "$KEY" -p "$PORT"
      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
      -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR
-     -o ConnectTimeout=4 root@127.0.0.1)
+     -o ConnectTimeout=4 -o BatchMode=yes root@127.0.0.1)
 
 # ── swtpm helper (same tpmstate dir across all boots; fresh PCRs each boot) ──
 mkdir -p "$WORK/tpm"
@@ -185,15 +194,28 @@ for _ in $(seq 1 150); do
     printf '%s\n' "$STICK_PASS" >&3
     fed1=$((fed1 + 1))
   fi
-  if "${SSH[@]}" -o BatchMode=yes true 2>/dev/null; then
+  if "${SSH[@]}" true 2>/dev/null; then
     ssh_up1=1; break
   fi
   sleep 4
 done
 
 if [ "$ssh_up1" != 1 ]; then
-  echo "!! boot #1: running-system SSH never came up. Serial tail:"
-  tail -50 "$LOG1"
+  echo "!! boot #1: running-system SSH never came up."
+  # Real diagnostics — the box reaches login on serial yet host→guest SSH fails.
+  # Prove WHERE it breaks instead of guessing: is the forward port even listening
+  # on the host, what does a verbose ssh handshake say, and what does the serial
+  # show about sshd + the network in the guest.
+  echo "-- host: is the QEMU forward port ${PORT} listening? --"
+  ss -ltnp 2>/dev/null | grep ":${PORT} " || echo "   (port ${PORT} NOT listening — QEMU hostfwd never bound)"
+  echo "-- verbose ssh handshake to the guest --"
+  ssh -vv -i "$KEY" -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=6 -o BatchMode=yes root@127.0.0.1 true 2>&1 \
+    | grep -iE 'connect|refused|timed out|banner|remote|permission|denied|reset|closed' | head -12
+  echo "-- guest serial: sshd + network --"
+  grep -aiE 'sshd|openssh|listen|dhcp|becomes ready|network' "$LOG1" | tail -15
+  echo "-- serial tail --"
+  tail -40 "$LOG1"
   exit 1
 fi
 echo "   boot #1 SSH up."
@@ -204,7 +226,7 @@ echo "   boot #1 SSH up."
 echo ">> waiting for lanzaboote PKI generation (sbctl create-keys on first boot) …"
 pki_ready=0
 for _ in $(seq 1 30); do
-  "${SSH[@]}" -o BatchMode=yes \
+  "${SSH[@]}" \
     'test -r /nix/lanzaboote/pki/keys/db/db.key' 2>/dev/null && { pki_ready=1; break; }
   sleep 4
 done
@@ -326,7 +348,7 @@ echo "   boot #2: MAIN reached login. ✔"
 echo ">> checking ESP: main UKI(s) + nixnas-rescue.efi must both be present …"
 ssh_up2=0
 for _ in $(seq 1 40); do
-  "${SSH[@]}" -o BatchMode=yes true 2>/dev/null && { ssh_up2=1; break; }
+  "${SSH[@]}" true 2>/dev/null && { ssh_up2=1; break; }
   kill -0 "$VM2" 2>/dev/null || break
   sleep 3
 done
@@ -337,12 +359,12 @@ fi
 
 # Verify the ESP. Both must exist; collect all failures before exiting.
 esp_fail=0
-if ! "${SSH[@]}" -o BatchMode=yes \
+if ! "${SSH[@]}" \
     'ls /boot/EFI/Linux/nixos-generation-*.efi >/dev/null 2>&1' 2>/dev/null; then
   echo "!! ESP missing: no nixos-generation-*.efi (main UKI not installed by lzbt)"
   esp_fail=1
 fi
-if ! "${SSH[@]}" -o BatchMode=yes \
+if ! "${SSH[@]}" \
     'test -f /boot/EFI/Linux/nixnas-rescue.efi' 2>/dev/null; then
   echo "!! ESP missing: nixnas-rescue.efi (not pre-placed by nixnas-install-hot step 5)"
   esp_fail=1
