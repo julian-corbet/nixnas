@@ -326,7 +326,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 /// Crate-visible: the two-pane build body (step checklist beside a scrolling log window).
-/// Reused by the "Build & flash a stick" pathway during its build phase. Clamps `scroll` to the
+/// Reused by the "Build & Flash" pathway during its build phase. Clamps `scroll` to the
 /// tail when `follow` is on.
 pub(crate) fn draw_build_body(
     f: &mut Frame,

@@ -66,7 +66,7 @@ const FIELDS: [FieldMeta; 5] = [
         optional: true,
         help: "The `nixosConfigurations.<name>` host to build (e.g. `nixnas-rescue`). Set \
                this to unlock the DEVICE-SIZED builds: the TUI re-evaluates the host with \
-               extendModules overriding the image size, so 'Build & flash a stick' fits the \
+               extendModules overriding the image size, so 'Build & Flash' fits the \
                image to the picked stick exactly and 'Build image' makes a minimal reusable \
                .raw. Empty = fixed-size builds from image_attr above.",
     },

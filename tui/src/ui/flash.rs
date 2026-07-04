@@ -421,7 +421,7 @@ fn draw_devices(f: &mut Frame, st: &mut FlashScreen, area: ratatui::layout::Rect
     );
 }
 
-/// Crate-visible: the "Build & flash a stick" pathway reuses this exact disk picker to choose
+/// Crate-visible: the "Build & Flash" pathway reuses this exact disk picker to choose
 /// the target device it will SIZE the image to (and later flash to).
 pub(crate) fn draw_disk_list(
     f: &mut Frame,
@@ -550,7 +550,7 @@ fn draw_summary(
     );
 }
 
-/// Crate-visible: the "Build & flash a stick" pathway reuses this typed-name confirmation modal.
+/// Crate-visible: the "Build & Flash" pathway reuses this typed-name confirmation modal.
 pub(crate) fn draw_confirm_modal(
     f: &mut Frame,
     disk: Option<&Disk>,
@@ -607,7 +607,7 @@ fn draw_progress(f: &mut Frame, st: &FlashScreen, area: ratatui::layout::Rect) {
 }
 
 /// Crate-visible: a titled panel with a phase line + byte-counter gauge. Reused by the
-/// "Build & flash a stick" pathway for its flash phase.
+/// "Build & Flash" pathway for its flash phase.
 pub(crate) fn draw_progress_body(
     f: &mut Frame,
     area: ratatui::layout::Rect,

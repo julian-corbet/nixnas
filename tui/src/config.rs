@@ -43,7 +43,7 @@ pub struct Config {
     /// disko bakes `disk.imageSize` into `qemu-img create` and exposes no runtime size flag,
     /// the TUI re-evaluates this config with `extendModules` overriding
     /// `nixnas.boot.usb.imageSizeGiB`, so the built `.raw` is sized to the target — exact-fit
-    /// to a picked stick ("Build & flash a stick"), or a minimal reusable size ("Build image").
+    /// to a picked stick ("Build & Flash"), or a minimal reusable size ("Build image").
     /// Its image script is `nixosConfigurations.<host_attr>.config.system.build.diskoImagesScript`.
     /// Distinct from `image_attr`, which names a flake OUTPUT. None (the default) → no sizing:
     /// every build falls back to the fixed-size `.#<image_attr>` output above.

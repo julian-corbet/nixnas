@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 
-/// Smallest stick "Build & flash a stick" (Pathway A) will size an image to. Below this a
+/// Smallest stick "Build & Flash" (Pathway A) will size an image to. Below this a
 /// device can't hold the ESP + a bootable closure + headroom. Not a rounding floor (Pathway A
 /// is byte-EXACT), just the too-small refusal gate.
 pub const MIN_IMAGE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -48,7 +48,7 @@ pub enum SizeOverride {
     Fixed,
     /// Minimal reusable image — override `imageSizeGiB` (whole GiB). Pathway B "Build image".
     Gib(u32),
-    /// Exact device fit — override `imageSize` (byte-precise). Pathway A "Build & flash a stick".
+    /// Exact device fit — override `imageSize` (byte-precise). Pathway A "Build & Flash".
     Bytes(u64),
 }
 

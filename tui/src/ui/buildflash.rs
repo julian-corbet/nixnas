@@ -537,7 +537,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Paragraph::new(st.message.clone().unwrap_or_default())
                     .style(Style::default().fg(WARN))
                     .wrap(Wrap { trim: true })
-                    .block(ui::panel("Build & flash a stick — unavailable")),
+                    .block(ui::panel("Build & Flash — unavailable")),
                 main_area,
             );
             ui::footer(f, footer_area, &[("Esc/Enter", "back to menu")]);
@@ -675,7 +675,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 /// The build body while the passphrase is still being entered: all steps pending, empty log.
 fn draw_pending_body(f: &mut Frame, area: Rect, dev_name: &str, st: &mut BuildFlowScreen) {
     let title = if dev_name.is_empty() {
-        "Build & flash a stick".to_string()
+        "Build & Flash".to_string()
     } else {
         format!("Build & flash — exact-fit image for /dev/{dev_name}")
     };

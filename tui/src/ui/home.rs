@@ -28,7 +28,7 @@ const MENU: [(&str, &str); 7] = [
         "edit nixnas.config (flake location, host_attr, Secure Boot PKI, build knobs)",
     ),
     (
-        "Build & flash a stick",
+        "Build & Flash",
         "the turnkey path: pick a stick, build an exact-fit image, flash it — one flow",
     ),
     (
