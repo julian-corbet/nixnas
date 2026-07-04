@@ -427,13 +427,13 @@ cmd_no_tpm() {
   exec 3> "$FIFO"   # hold the FIFO writer open so the serial stays live
 
   # Feed the passphrase ONCE when the LUKS prompt appears on serial.
-  # The demo LUKS partition is named disk-main-nixos (by-partlabel, set by disko).
+  # The demo LUKS partition is named nixnas-store (by-partlabel, set by disko).
   prompted=0
   for _ in $(seq 1 90); do
     kill -0 "$VM" 2>/dev/null || break
     if [ "$prompted" -lt 1 ] && \
        grep -qaiE \
-         'please enter|passphrase for|enter passphrase|disk-main-nixos|cryptsetup|unlocking' \
+         'please enter|passphrase for|enter passphrase|nixnas-store|cryptsetup|unlocking' \
          "$LOG" 2>/dev/null; then
       printf '%s\n' "$PASS" >&3
       prompted=$((prompted + 1))
@@ -473,7 +473,7 @@ cmd_no_tpm() {
   echo "       The store was unlocked without the expected passphrase fallback."
   echo "       This suggests a TPM or auto-unlock path fired despite no TPM device."
   echo "       serial extract:"
-  grep -aiE 'passphrase|cryptsetup|tpm|unlock|disk-main' "$LOG" | head -20
+  grep -aiE 'passphrase|cryptsetup|tpm|unlock|nixnas-store "$LOG" | head -20
   exit 1
 }
 

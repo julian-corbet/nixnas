@@ -60,6 +60,8 @@ in
           partitions = {
             ESP = {
               type = "EF00";
+              # Meaningful GPT partition label (else disko auto-names it `disk-main-ESP`).
+              label = "nixnas-esp";
               size = "${toString cfg.boot.usb.espSizeMiB}M";
               content = {
                 type = "filesystem";
@@ -72,6 +74,9 @@ in
               };
             };
             nixos = {
+              # The store partition's GPT label (else disko auto-names it `disk-main-nixos`).
+              # Load-bearing: crypto/{tpm2,recovery-escrow}.nix find the store by this partlabel.
+              label = "nixnas-store";
               size = "100%";
               content = {
                 type = "luks";

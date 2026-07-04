@@ -26,7 +26,7 @@ let
   cfg = config.nixnas;
   inherit (lib) mkIf mkMerge optionalString;
 
-  storeDev = "/dev/disk/by-partlabel/disk-main-nixos";
+  storeDev = "/dev/disk/by-partlabel/nixnas-store";
   recoveryEnabled = cfg.crypto.recovery.vaultwardenUrl != null;
 
   # ── The HUB tool. A per-config package (it bakes in the store partlabel, the Vaultwarden

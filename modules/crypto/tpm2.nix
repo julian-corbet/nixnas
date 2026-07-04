@@ -23,7 +23,7 @@ let
   inherit (lib) mkIf optional concatMapStringsSep optionalString;
 
   # The store's backing partition (disko names the mapper `cryptstore`).
-  storeDev = "/dev/disk/by-partlabel/disk-main-nixos";
+  storeDev = "/dev/disk/by-partlabel/nixnas-store";
   pcrList = concatMapStringsSep "+" toString cfg.crypto.tpm2.pcrs;
 
   # Operator-run, first-boot enrollment. Prompts for the existing passphrase (to authorise
