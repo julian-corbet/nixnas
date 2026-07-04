@@ -7,6 +7,7 @@
 
 use crate::build::StepState;
 use crate::flash::{self, Disk};
+use crate::sudo::{self, AuthOutcome, Elevation, Preflight};
 use crate::ui::{self, ACCENT, DIM, ERR, OK, WARN};
 use crate::verify::{VerifyEvent, STEP_NAMES_IMAGE, STEP_NAMES_INSTALL};
 use crate::{App, Screen};
@@ -31,6 +32,11 @@ enum Phase {
     /// Install only: picking the device to check. Read-only, so unlike FLASH
     /// there is no summary/typed-confirmation gate — Enter starts the checks.
     Devices,
+    /// Install only, non-root: the sudo password needed to READ the device.
+    SudoPass {
+        buf: String,
+        error: Option<String>,
+    },
     Running,
     Done {
         ok: bool,
@@ -55,6 +61,8 @@ pub struct VerifyScreen {
     disks: Vec<Disk>,
     selected: usize,
     list_error: Option<String>,
+    /// The device chosen to check, held across the sudo-password step (install, non-root).
+    pending_dev: Option<PathBuf>,
     gauge_title: &'static str,
     progress: (u64, u64),
     /// The final verdict line (PASS summary or issue list), shown in the panel.
@@ -85,6 +93,7 @@ impl VerifyScreen {
             disks: Vec::new(),
             selected: 0,
             list_error: None,
+            pending_dev: None,
             gauge_title: "",
             progress: (0, 0),
             message: None,
@@ -125,6 +134,21 @@ impl VerifyScreen {
 
     pub fn is_running(&self) -> bool {
         matches!(self.phase, Phase::Running)
+    }
+
+    /// Start the (read-only) install verification on `dev` with the resolved elevation.
+    fn arm_install(&mut self, dev: PathBuf, log: &mut crate::logging::SessionLog, elev: Elevation) {
+        // Fresh skip flag per run — a skip from a previous verification must not silently waive
+        // this one's fidelity compare.
+        self.skip = Arc::new(AtomicBool::new(false));
+        self.session_log = log.begin("verify-install");
+        self.rx = Some(crate::verify::spawn_verify_install(
+            dev,
+            self.image.as_ref().map(|(p, _)| p.clone()),
+            self.skip.clone(),
+            elev,
+        ));
+        self.phase = Phase::Running;
     }
 
     fn refresh_disks(&mut self) {
@@ -207,18 +231,55 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 let Some(dev) = st.disks.get(st.selected).map(Disk::dev_path) else {
                     return;
                 };
-                // Fresh skip flag per run — a skip from a previous verification
-                // must not silently waive this one's fidelity compare.
-                st.skip = Arc::new(AtomicBool::new(false));
-                // The action is real from here: open its session-log file.
-                st.session_log = app.log.begin("verify-install");
-                st.rx = Some(crate::verify::spawn_verify_install(
-                    dev,
-                    st.image.as_ref().map(|(p, _)| p.clone()),
-                    st.skip.clone(),
-                ));
-                st.phase = Phase::Running;
+                // Reading the raw device needs root. Root → go; non-root → sudo modal; no sudo →
+                // try a direct read anyway and let the EACCES verdict explain (the fallback panel).
+                match sudo::preflight() {
+                    Preflight::Root => st.arm_install(dev, &mut app.log, Elevation::Root),
+                    Preflight::NeedsSudo => {
+                        st.pending_dev = Some(dev);
+                        st.phase = Phase::SudoPass {
+                            buf: String::new(),
+                            error: None,
+                        };
+                    }
+                    Preflight::NoSudo => st.arm_install(dev, &mut app.log, Elevation::Root),
+                }
             }
+            _ => {}
+        },
+        Phase::SudoPass { buf, .. } => match key.code {
+            KeyCode::Esc => st.phase = Phase::Devices,
+            KeyCode::Enter => {
+                let entered = std::mem::take(buf);
+                let dev = st.pending_dev.clone();
+                match sudo::authenticate(entered) {
+                    AuthOutcome::Ok(elev) => {
+                        if let Some(dev) = dev {
+                            st.arm_install(dev, &mut app.log, elev);
+                        }
+                    }
+                    AuthOutcome::Wrong => {
+                        st.phase = Phase::SudoPass {
+                            buf: String::new(),
+                            error: Some("Wrong sudo password — try again".into()),
+                        }
+                    }
+                    // sudo vanished — fall back to a direct read (EACCES verdict explains).
+                    AuthOutcome::Missing => {
+                        if let Some(dev) = dev {
+                            st.arm_install(dev, &mut app.log, Elevation::Root);
+                        }
+                    }
+                    AuthOutcome::Error(e) => {
+                        st.message = Some(e);
+                        st.phase = Phase::Done { ok: false };
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                buf.pop();
+            }
+            KeyCode::Char(c) => buf.push(c),
             _ => {}
         },
         Phase::Running => match key.code {
@@ -274,7 +335,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     .areas(f.area());
 
     match &st.phase {
-        Phase::Devices => {
+        Phase::Devices | Phase::SudoPass { .. } => {
             draw_devices(f, st, main_area);
             draw_reference(f, st, aux_area);
             ui::footer(
@@ -287,6 +348,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     ("Esc", "back"),
                 ],
             );
+            if let Phase::SudoPass { buf, error } = &st.phase {
+                crate::ui::build::draw_pass_modal(
+                    f,
+                    "Administrator (sudo) password — needed to read the device",
+                    buf,
+                    error.as_deref(),
+                    false,
+                );
+            }
         }
         Phase::Running => {
             let log_path = st.session_log.as_ref().map(|p| p.display().to_string());

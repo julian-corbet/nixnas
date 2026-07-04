@@ -4,9 +4,15 @@
 //! The UI owns every safety gate: only whole disks are listed (removable/USB marked
 //! prominently, internal disks marked scary), the operator must TYPE the bare device
 //! name to arm the write, and the point of no return is ours — never buried in a
-//! subprocess. The write itself is a plain in-process copy loop (progress by byte
-//! counter), followed by an fsync and an independent header verification: the device
-//! must actually START with the image before we ever report success.
+//! subprocess. The write itself is a buffered copy loop (progress by byte counter),
+//! followed by an fsync and an independent header verification: the device must actually
+//! START with the image before we ever report success.
+//!
+//! Privilege: nixnas runs as the USER (the build needs the user's identity). The device
+//! ops here need root, so they are elevated in-process via [`crate::sudo::Elevation`] —
+//! the write pipes through `sudo dd of=<dev>`, the reads/sgdisk through `sudo -S …`. When
+//! already root, everything runs directly. The elevation is resolved (and the sudo
+//! password collected) by the UI before the worker spawns.
 
 use crate::config::config_dir;
 use anyhow::{bail, Context, Result};
@@ -198,10 +204,19 @@ pub fn spawn_flash(
     dev_size: Option<u64>,
     backup_to: Option<PathBuf>,
     grow: bool,
+    elev: crate::sudo::Elevation,
 ) -> Receiver<FlashEvent> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = run_flash(&image, &dev, dev_size, backup_to.as_deref(), grow, &tx);
+        let result = run_flash(
+            &image,
+            &dev,
+            dev_size,
+            backup_to.as_deref(),
+            grow,
+            &elev,
+            &tx,
+        );
         let _ = tx.send(FlashEvent::Done(result.map_err(|e| format!("{e:#}"))));
     });
     rx
@@ -213,46 +228,42 @@ fn run_flash(
     dev_size: Option<u64>,
     backup_to: Option<&Path>,
     grow: bool,
+    elev: &crate::sudo::Elevation,
     tx: &Sender<FlashEvent>,
 ) -> Result<String> {
     // Safety: back the current stick up first (the UI defaults this to ON), so a
-    // wrong-device mistake stays recoverable. Reading is the safe direction.
+    // wrong-device mistake stays recoverable. Reading is the safe direction (the device
+    // read is elevated via sudo when we are not root).
     if let Some(dest) = backup_to {
         let _ = tx.send(FlashEvent::Phase("Backing up current device contents"));
-        let src = std::fs::File::open(dev)
-            .with_context(|| format!("opening {} for backup (run as root?)", dev.display()))?;
-        let dst = std::fs::File::create(dest)
+        let src = elev
+            .open_reader(dev)
+            .with_context(|| format!("opening {} for backup", dev.display()))?;
+        let mut dst = std::fs::File::create(dest)
             .with_context(|| format!("creating backup image {}", dest.display()))?;
-        let dst = copy_with_progress(src, dst, dev_size.unwrap_or(0), tx)
+        copy_with_progress(src, &mut dst, dev_size.unwrap_or(0), tx)
             .context("backup failed — aborting before any write")?;
-        // The old flow used `dd conv=fsync`; keep the backup durable before the
-        // destructive write begins.
+        // Keep the backup durable before the destructive write begins.
         dst.sync_all().context("syncing the backup image")?;
     }
 
-    // The overwrite: plain buffered copy, fsync'd before we even think of verifying.
+    // The overwrite: a buffered copy through the (possibly sudo-piped) sink, fsync'd before we
+    // even think of verifying.
     let _ = tx.send(FlashEvent::Phase("Writing image to device"));
     let image_size = std::fs::metadata(image)
         .with_context(|| format!("stat {}", image.display()))?
         .len();
     let src = std::fs::File::open(image).with_context(|| format!("opening {}", image.display()))?;
-    let dst = std::fs::OpenOptions::new()
-        .write(true)
-        .open(dev)
-        .with_context(|| {
-            format!(
-                "opening {} for writing (run as root, or with write access to the device?)",
-                dev.display()
-            )
-        })?;
-    let dst = copy_with_progress(src, dst, image_size, tx).context("writing the image")?;
-    dst.sync_all()
-        .context("syncing the device after the write")?;
+    let mut sink = elev
+        .open_writer(dev)
+        .with_context(|| format!("opening {} for writing", dev.display()))?;
+    copy_with_progress(src, &mut sink, image_size, tx).context("writing the image")?;
+    sink.finish().context("finishing the device write")?;
 
     // Independent proof: the stick must now START with the image — never report
     // success on trust (a declined/failed write must not look like a flashed stick).
     let _ = tx.send(FlashEvent::Phase("Verifying device header"));
-    if !same_prefix(image, dev, VERIFY_PREFIX_LEN).context("verifying the written device")? {
+    if !same_prefix(image, dev, VERIFY_PREFIX_LEN, elev).context("verifying the written device")? {
         bail!(
             "{} does not carry the image header — the write failed",
             dev.display()
@@ -270,7 +281,7 @@ fn run_flash(
         let _ = tx.send(FlashEvent::Phase(
             "Growing the last partition to fill the device",
         ));
-        match grow_last_partition(dev) {
+        match grow_last_partition(dev, elev) {
             Ok(()) => summary.push_str(
                 " · partition grown to fill the device (the store resizes on first boot)",
             ),
@@ -287,12 +298,12 @@ fn run_flash(
 /// exactly (start, type GUID, unique GUID, name). Two deterministic `sgdisk` steps: relocate the
 /// backup GPT header to the real device end (after a smaller image left it mid-disk), then
 /// delete+recreate the last partition at its original start with the largest possible end.
-fn grow_last_partition(dev: &Path) -> Result<()> {
-    let n = last_partition_number(dev)?;
-    let info = partition_info(dev, n)?;
+fn grow_last_partition(dev: &Path, elev: &crate::sudo::Elevation) -> Result<()> {
+    let n = last_partition_number(dev, elev)?;
+    let info = partition_info(dev, n, elev)?;
     // 1. Move the backup GPT header (and the header's usable-area/alt-LBA) to the real device end,
     //    so step 2's "largest end" (0) computes against the whole device rather than the image.
-    run_sgdisk(dev, &["--move-second-header".to_string()])?;
+    run_sgdisk(dev, &["--move-second-header".to_string()], elev)?;
     // 2. Recreate #n at the same start, extended to the largest end, identity fully preserved.
     run_sgdisk(
         dev,
@@ -303,6 +314,7 @@ fn grow_last_partition(dev: &Path) -> Result<()> {
             format!("--partition-guid={n}:{}", info.unique_guid),
             format!("--change-name={n}:{}", info.name),
         ],
+        elev,
     )
 }
 
@@ -315,11 +327,13 @@ struct PartInfo {
 }
 
 /// Run `sgdisk` with the given args against `dev`, surfacing a helpful error if sgdisk is missing.
-fn run_sgdisk(dev: &Path, args: &[String]) -> Result<()> {
-    let out = Command::new("sgdisk")
-        .args(args)
-        .arg(dev)
-        .output()
+fn run_sgdisk(dev: &Path, args: &[String], elev: &crate::sudo::Elevation) -> Result<()> {
+    let dev = dev.to_string_lossy().into_owned();
+    let mut argv: Vec<&str> = vec!["sgdisk"];
+    argv.extend(args.iter().map(String::as_str));
+    argv.push(&dev);
+    let out = elev
+        .run_captured(&argv)
         .context("running sgdisk (is gptfdisk installed?)")?;
     if !out.status.success() {
         bail!(
@@ -332,11 +346,10 @@ fn run_sgdisk(dev: &Path, args: &[String]) -> Result<()> {
 }
 
 /// The highest partition number on `dev` — the LAST partition (the store), from `sgdisk -p`.
-fn last_partition_number(dev: &Path) -> Result<u32> {
-    let out = Command::new("sgdisk")
-        .arg("-p")
-        .arg(dev)
-        .output()
+fn last_partition_number(dev: &Path, elev: &crate::sudo::Elevation) -> Result<u32> {
+    let dev = dev.to_string_lossy().into_owned();
+    let out = elev
+        .run_captured(&["sgdisk", "-p", &dev])
         .context("running sgdisk -p (is gptfdisk installed?)")?;
     if !out.status.success() {
         bail!("sgdisk -p failed: {}", String::from_utf8_lossy(&out.stderr));
@@ -354,11 +367,11 @@ fn last_partition_number(dev: &Path) -> Result<u32> {
 }
 
 /// Parse `sgdisk --info=<n>` for the fields we preserve when recreating the partition.
-fn partition_info(dev: &Path, n: u32) -> Result<PartInfo> {
-    let out = Command::new("sgdisk")
-        .arg(format!("--info={n}"))
-        .arg(dev)
-        .output()
+fn partition_info(dev: &Path, n: u32, elev: &crate::sudo::Elevation) -> Result<PartInfo> {
+    let dev = dev.to_string_lossy().into_owned();
+    let info_flag = format!("--info={n}");
+    let out = elev
+        .run_captured(&["sgdisk", &info_flag, &dev])
         .context("running sgdisk --info (is gptfdisk installed?)")?;
     if !out.status.success() {
         bail!(
@@ -397,14 +410,15 @@ fn partition_info(dev: &Path, n: u32) -> Result<PartInfo> {
     })
 }
 
-/// Read `src` to EOF into `dst`, reporting a byte counter against `total` (0 =
-/// unknown, the gauge shows bytes only). Returns `dst` so the caller can fsync it.
-fn copy_with_progress(
-    mut src: std::fs::File,
-    mut dst: std::fs::File,
+/// Read `src` to EOF into `dst`, reporting a byte counter against `total` (0 = unknown, the gauge
+/// shows bytes only). Generic over the sink so the same loop drives a plain File and the sudo
+/// `dd`-pipe writer; the caller fsyncs/finishes `dst` afterwards.
+fn copy_with_progress<R: Read, W: Write>(
+    mut src: R,
+    dst: &mut W,
     total: u64,
     tx: &Sender<FlashEvent>,
-) -> Result<std::fs::File> {
+) -> Result<()> {
     let mut buf = vec![0u8; CHUNK];
     let mut done: u64 = 0;
     loop {
@@ -416,30 +430,38 @@ fn copy_with_progress(
         done += n as u64;
         let _ = tx.send(FlashEvent::Progress { done, total });
     }
-    Ok(dst)
+    Ok(())
 }
 
-/// Compare the first `len` bytes of two files. Used to prove the device actually
-/// carries the image after the write.
-fn same_prefix(a: &Path, b: &Path, len: usize) -> Result<bool> {
-    let read_prefix = |p: &Path| -> Result<Vec<u8>> {
-        let mut f = std::fs::File::open(p).with_context(|| format!("opening {}", p.display()))?;
-        let mut buf = vec![0u8; len];
-        let mut got = 0;
-        while got < len {
-            let n = f
-                .read(&mut buf[got..])
-                .with_context(|| format!("reading {}", p.display()))?;
-            if n == 0 {
-                break;
-            }
-            got += n;
+/// Read the first `len` bytes of a generic reader.
+fn read_prefix<R: Read>(mut r: R, len: usize) -> Result<Vec<u8>> {
+    let mut buf = vec![0u8; len];
+    let mut got = 0;
+    while got < len {
+        let n = r.read(&mut buf[got..]).context("reading prefix")?;
+        if n == 0 {
+            break;
         }
-        buf.truncate(got);
-        Ok(buf)
-    };
-    let pa = read_prefix(a)?;
-    let pb = read_prefix(b)?;
+        got += n;
+    }
+    buf.truncate(got);
+    Ok(buf)
+}
+
+/// Compare the first `len` bytes of the image file and the device. Proves the device actually
+/// carries the image after the write; the device read is elevated via sudo when not root.
+fn same_prefix(
+    image: &Path,
+    dev: &Path,
+    len: usize,
+    elev: &crate::sudo::Elevation,
+) -> Result<bool> {
+    let img = std::fs::File::open(image).with_context(|| format!("opening {}", image.display()))?;
+    let pa = read_prefix(img, len)?;
+    let device = elev
+        .open_reader(dev)
+        .with_context(|| format!("opening {} for verification", dev.display()))?;
+    let pb = read_prefix(device, len)?;
     Ok(!pa.is_empty() && pa.len() == pb.len().min(pa.len()) && pb[..pa.len()] == pa[..])
 }
 

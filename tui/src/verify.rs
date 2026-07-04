@@ -19,6 +19,7 @@
 //! without the worker ever touching the terminal (same pattern as build/flash).
 
 use crate::build::StepState;
+use crate::sudo::{DevReader, Elevation};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -65,11 +66,12 @@ pub enum VerifyEvent {
     Done(Result<String, String>),
 }
 
-/// Spawn the image verification on a worker thread.
+/// Spawn the image verification on a worker thread. The built `.raw` is a user file, so this
+/// never needs elevation ([`Elevation::Root`] = direct reads).
 pub fn spawn_verify_image(image: PathBuf) -> Receiver<VerifyEvent> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = run_verify(&image, false, None, None, &tx);
+        let result = run_verify(&image, false, None, None, &Elevation::Root, &tx);
         // Render the anyhow chain here — the UI side only displays strings.
         let _ = tx.send(VerifyEvent::Done(result.map_err(|e| format!("{e:#}"))));
     });
@@ -78,15 +80,17 @@ pub fn spawn_verify_image(image: PathBuf) -> Receiver<VerifyEvent> {
 
 /// Spawn the device verification. `image` (when built) is the flash-fidelity
 /// reference; `skip` is the UI's live "waive the fidelity compare" flag ('s') —
-/// the worker polls it between chunks, never blocking on the UI.
+/// the worker polls it between chunks, never blocking on the UI. `elev` elevates the
+/// (read-only) device access via sudo when the tool is not root.
 pub fn spawn_verify_install(
     dev: PathBuf,
     image: Option<PathBuf>,
     skip: Arc<AtomicBool>,
+    elev: Elevation,
 ) -> Receiver<VerifyEvent> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = run_verify(&dev, true, image.as_deref(), Some(&skip), &tx);
+        let result = run_verify(&dev, true, image.as_deref(), Some(&skip), &elev, &tx);
         let _ = tx.send(VerifyEvent::Done(result.map_err(|e| format!("{e:#}"))));
     });
     rx
@@ -100,6 +104,7 @@ fn run_verify(
     is_device: bool,
     fidelity_image: Option<&Path>,
     skip: Option<&AtomicBool>,
+    elev: &Elevation,
     tx: &Sender<VerifyEvent>,
 ) -> Result<String> {
     let step = |i: usize, s: StepState| {
@@ -110,19 +115,12 @@ fn run_verify(
     };
     let mut issues: Vec<String> = Vec::new();
 
-    // One read-only handle up front: on a device this is where a missing
-    // permission surfaces — say what to do about it instead of a bare errno.
-    let mut file = match File::open(target) {
-        Ok(f) => f,
-        Err(e) if is_device && e.kind() == std::io::ErrorKind::PermissionDenied => bail!(
-            "no permission to read {} — run nixnas with sudo, or add yourself to the \
-             `disk` group. This check only READS the device.",
-            target.display()
-        ),
-        Err(e) => {
-            return Err(e).with_context(|| format!("opening {}", target.display()));
-        }
-    };
+    // One read-only handle up front (a plain File for the image; a sudo-elevated, seekable
+    // reader for a device when we are not root). A missing device permission surfaces here with
+    // an actionable message instead of a bare errno.
+    let mut file = elev
+        .open_reader(target)
+        .with_context(|| format!("opening {}", target.display()))?;
     // Block devices stat as 0 bytes — measure by seeking to the end instead.
     let target_len = file
         .seek(SeekFrom::End(0))
@@ -401,14 +399,14 @@ fn run_verify(
 /// file offset never matters. `Write` is demanded by fatfs's storage trait but
 /// must never happen on a verify: it fails closed with `Unsupported`.
 struct SliceCursor {
-    file: File,
+    file: DevReader,
     start: u64,
     len: u64,
     pos: u64,
 }
 
 impl SliceCursor {
-    fn new(file: File, start: u64, len: u64) -> Self {
+    fn new(file: DevReader, start: u64, len: u64) -> Self {
         SliceCursor {
             file,
             start,
@@ -484,7 +482,7 @@ fn fat_file_len<T: Read + Write + Seek>(
 /// Stream the first `len` bytes of `f` through SHA-256, reporting progress.
 /// Polls `skip` between chunks; a skip request aborts the pass and returns None.
 fn sha256_range(
-    f: &mut File,
+    f: &mut DevReader,
     len: u64,
     skip: Option<&AtomicBool>,
     tx: &Sender<VerifyEvent>,

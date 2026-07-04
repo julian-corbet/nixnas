@@ -16,6 +16,7 @@ mod build;
 mod config;
 mod flash;
 mod logging;
+mod sudo;
 mod ui;
 mod verify;
 

@@ -3,6 +3,7 @@
 //! the header-verification verdict. Every gate lives HERE; flash.rs only executes.
 
 use crate::flash::{self, Disk, FlashEvent};
+use crate::sudo::{self, AuthOutcome, Elevation, Preflight};
 use crate::ui::{self, ACCENT, DIM, ERR, OK, WARN};
 use crate::{App, Screen};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -19,6 +20,12 @@ enum Phase {
     Summary,
     Confirm {
         typed: String,
+        error: Option<String>,
+    },
+    /// Non-root only: the sudo password needed to WRITE the device, collected once right before
+    /// the privileged ops start (distinct from the LUKS store passphrase).
+    SudoPass {
+        buf: String,
         error: Option<String>,
     },
     Running,
@@ -145,6 +152,25 @@ impl FlashScreen {
             (Some((_, img)), Some(dev)) if *img < dev
         )
     }
+
+    /// Start the flash worker with the resolved privilege elevation. The typed-name gate has
+    /// already passed; this opens the session log and spawns.
+    fn arm(
+        &mut self,
+        config_path: &std::path::Path,
+        log: &mut crate::logging::SessionLog,
+        elev: Elevation,
+    ) {
+        let Some((dev, size)) = self.selected_disk().map(|d| (d.dev_path(), d.size)) else {
+            return;
+        };
+        let (image, _) = self.image.clone().expect("armed without an image");
+        let backup_to = self.backup.then(|| flash::backup_path(config_path));
+        let grow = self.grows_to_fill();
+        self.session_log = log.begin("flash");
+        self.rx = Some(flash::spawn_flash(image, dev, size, backup_to, grow, elev));
+        self.phase = Phase::Running;
+    }
 }
 
 pub fn on_key(app: &mut App, key: KeyEvent) {
@@ -193,14 +219,26 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                     return;
                 };
                 // The point of no return: the BARE device name, typed exactly.
+                let _ = (dev, size); // facts are recomputed in `arm` after elevation is resolved
                 if typed.trim() == name {
-                    let (image, _) = st.image.clone().expect("confirmed without an image");
-                    let backup_to = st.backup.then(|| flash::backup_path(&config_path));
-                    let grow = st.grows_to_fill();
-                    // The action is real from here: open its session-log file.
-                    st.session_log = app.log.begin("flash");
-                    st.rx = Some(flash::spawn_flash(image, dev, size, backup_to, grow));
-                    st.phase = Phase::Running;
+                    // Writing the device needs root. Elevate from inside the tool: root → go; a
+                    // non-root user gets the sudo-password modal; no sudo → say so plainly.
+                    match sudo::preflight() {
+                        Preflight::Root => st.arm(&config_path, &mut app.log, Elevation::Root),
+                        Preflight::NeedsSudo => {
+                            st.phase = Phase::SudoPass {
+                                buf: String::new(),
+                                error: None,
+                            }
+                        }
+                        Preflight::NoSudo => {
+                            st.message = Some(
+                                "sudo is not installed — run nixnas as root to flash the device."
+                                    .into(),
+                            );
+                            st.phase = Phase::Done { ok: false };
+                        }
+                    }
                 } else {
                     st.phase = Phase::Confirm {
                         typed: String::new(),
@@ -211,6 +249,34 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                     };
                 }
             }
+            _ => {}
+        },
+        Phase::SudoPass { buf, .. } => match key.code {
+            KeyCode::Esc => st.phase = Phase::Summary,
+            KeyCode::Enter => {
+                let entered = std::mem::take(buf);
+                match sudo::authenticate(entered) {
+                    AuthOutcome::Ok(elev) => st.arm(&config_path, &mut app.log, elev),
+                    AuthOutcome::Wrong => {
+                        st.phase = Phase::SudoPass {
+                            buf: String::new(),
+                            error: Some("Wrong sudo password — try again".into()),
+                        }
+                    }
+                    AuthOutcome::Missing => {
+                        st.message = Some("sudo is not installed — run nixnas as root.".into());
+                        st.phase = Phase::Done { ok: false };
+                    }
+                    AuthOutcome::Error(e) => {
+                        st.message = Some(e);
+                        st.phase = Phase::Done { ok: false };
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                buf.pop();
+            }
+            KeyCode::Char(c) => buf.push(c),
             _ => {}
         },
         // Esc is deliberately inert mid-write: there is no safe way to back out
@@ -246,7 +312,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 ],
             );
         }
-        Phase::Summary | Phase::Confirm { .. } => {
+        Phase::Summary | Phase::Confirm { .. } | Phase::SudoPass { .. } => {
             draw_summary(f, st, &config_path, main_area);
             if matches!(st.phase, Phase::Summary) {
                 ui::footer(
@@ -261,8 +327,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             } else {
                 ui::footer(f, footer_area, &[("Enter", "confirm"), ("Esc", "back")]);
             }
-            if let Phase::Confirm { typed, error } = &st.phase {
-                draw_confirm_modal(f, st.selected_disk(), typed, error.as_deref());
+            match &st.phase {
+                Phase::Confirm { typed, error } => {
+                    draw_confirm_modal(f, st.selected_disk(), typed, error.as_deref());
+                }
+                Phase::SudoPass { buf, error } => {
+                    crate::ui::build::draw_pass_modal(
+                        f,
+                        "Administrator (sudo) password — needed to write the device",
+                        buf,
+                        error.as_deref(),
+                        false,
+                    );
+                }
+                _ => {}
             }
         }
         Phase::Running => {

@@ -15,6 +15,7 @@ use crate::build::{
 };
 use crate::config::Config;
 use crate::flash::{self, Disk, FlashEvent};
+use crate::sudo::{self, AuthOutcome, Elevation, Preflight};
 use crate::ui::{self, ACCENT, DIM, ERR, OK, WARN};
 use crate::{App, Screen};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -48,6 +49,12 @@ enum Stage {
     FlashReview,
     FlashConfirm {
         typed: String,
+        error: Option<String>,
+    },
+    /// Non-root only: the sudo password needed to WRITE the device (distinct from the LUKS
+    /// passphrase collected earlier for the build).
+    FlashSudo {
+        buf: String,
         error: Option<String>,
     },
     Flashing,
@@ -257,6 +264,35 @@ impl BuildFlowScreen {
     fn image_fits(&self) -> bool {
         !matches!(self.exact_fit_note(), Some(Err(_)))
     }
+
+    /// Start the flash worker on the picked device with the resolved elevation. The typed-name
+    /// gate has already passed. Exact-fit image ⇒ no grow-to-fill (that is Pathway B's job).
+    fn arm_flash(
+        &mut self,
+        config_path: &std::path::Path,
+        log: &mut crate::logging::SessionLog,
+        elev: Elevation,
+    ) {
+        let Some((name, bytes)) = self.picked.clone() else {
+            return;
+        };
+        let Some((image, _)) = self.built.clone() else {
+            return;
+        };
+        let dev = PathBuf::from(format!("/dev/{name}"));
+        let backup_to = self.backup.then(|| flash::backup_path(config_path));
+        self.session_log = log.begin("flash");
+        self.progress = (0, 0);
+        self.stage = Stage::Flashing;
+        self.flash_rx = Some(flash::spawn_flash(
+            image,
+            dev,
+            Some(bytes),
+            backup_to,
+            false,
+            elev,
+        ));
+    }
 }
 
 pub fn on_key(app: &mut App, key: KeyEvent) {
@@ -402,26 +438,29 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
             KeyCode::Char(c) => typed.push(c),
             KeyCode::Enter => {
                 let typed = std::mem::take(typed);
-                let Some((name, bytes)) = st.picked.clone() else {
+                let Some((name, _bytes)) = st.picked.clone() else {
                     return;
                 };
                 if typed.trim() == name {
-                    let Some((image, _)) = st.built.clone() else {
-                        return;
-                    };
-                    let dev = PathBuf::from(format!("/dev/{name}"));
-                    let backup_to = st.backup.then(|| flash::backup_path(&config_path));
-                    // Exact-fit image ⇒ no grow-to-fill (that is Pathway B's job).
-                    st.session_log = app.log.begin("flash");
-                    st.progress = (0, 0);
-                    st.stage = Stage::Flashing;
-                    st.flash_rx = Some(flash::spawn_flash(
-                        image,
-                        dev,
-                        Some(bytes),
-                        backup_to,
-                        false,
-                    ));
+                    // Writing the device needs root — elevate from inside the tool.
+                    match sudo::preflight() {
+                        Preflight::Root => {
+                            st.arm_flash(&config_path, &mut app.log, Elevation::Root)
+                        }
+                        Preflight::NeedsSudo => {
+                            st.stage = Stage::FlashSudo {
+                                buf: String::new(),
+                                error: None,
+                            }
+                        }
+                        Preflight::NoSudo => {
+                            st.message = Some(
+                                "sudo is not installed — run nixnas as root to flash the device."
+                                    .into(),
+                            );
+                            st.stage = Stage::Done { ok: false };
+                        }
+                    }
                 } else {
                     st.stage = Stage::FlashConfirm {
                         typed: String::new(),
@@ -432,6 +471,34 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                     };
                 }
             }
+            _ => {}
+        },
+        Stage::FlashSudo { buf, .. } => match key.code {
+            KeyCode::Esc => st.stage = Stage::FlashReview,
+            KeyCode::Enter => {
+                let entered = std::mem::take(buf);
+                match sudo::authenticate(entered) {
+                    AuthOutcome::Ok(elev) => st.arm_flash(&config_path, &mut app.log, elev),
+                    AuthOutcome::Wrong => {
+                        st.stage = Stage::FlashSudo {
+                            buf: String::new(),
+                            error: Some("Wrong sudo password — try again".into()),
+                        }
+                    }
+                    AuthOutcome::Missing => {
+                        st.message = Some("sudo is not installed — run nixnas as root.".into());
+                        st.stage = Stage::Done { ok: false };
+                    }
+                    AuthOutcome::Error(e) => {
+                        st.message = Some(e);
+                        st.stage = Stage::Done { ok: false };
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                buf.pop();
+            }
+            KeyCode::Char(c) => buf.push(c),
             _ => {}
         },
         // Esc is inert mid-write.
@@ -544,7 +611,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
             ui::footer(f, footer_area, &hints);
         }
-        Stage::FlashReview | Stage::FlashConfirm { .. } => {
+        Stage::FlashReview | Stage::FlashConfirm { .. } | Stage::FlashSudo { .. } => {
             draw_flash_review(f, main_area, st);
             if matches!(st.stage, Stage::FlashReview) {
                 ui::footer(
@@ -559,13 +626,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             } else {
                 ui::footer(f, footer_area, &[("Enter", "confirm"), ("Esc", "back")]);
             }
-            if let Stage::FlashConfirm { typed, error } = &st.stage {
-                crate::ui::flash::draw_confirm_modal(
-                    f,
-                    st.selected_disk(),
-                    typed,
-                    error.as_deref(),
-                );
+            match &st.stage {
+                Stage::FlashConfirm { typed, error } => {
+                    crate::ui::flash::draw_confirm_modal(
+                        f,
+                        st.selected_disk(),
+                        typed,
+                        error.as_deref(),
+                    );
+                }
+                Stage::FlashSudo { buf, error } => {
+                    crate::ui::build::draw_pass_modal(
+                        f,
+                        "Administrator (sudo) password — needed to write the device",
+                        buf,
+                        error.as_deref(),
+                        false,
+                    );
+                }
+                _ => {}
             }
         }
         Stage::Flashing => {
