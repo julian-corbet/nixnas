@@ -141,8 +141,11 @@ in
             the ESP. On first boot the key is generated and sealed to this box's TPM; every
             boot the initrd unseals it before sshd — a tampered boot chain (PCR mismatch)
             can't recover it, so a stolen stick can't impersonate the box's unlock prompt.
-            PCR 7 (Secure Boot state) is update-stable (no reseal on kernel updates). Requires
-            `crypto.tpm2.enable`. Set false to fall back to the plaintext `hostKeyPath`.
+            PCR 7 (Secure Boot state) is stable across kernel/UKI updates (no reseal), but the
+            one-time Secure Boot key ENROLLMENT at provisioning DOES change it — the seal is
+            self-healing and re-seals on the next boot (the initrd host-key fingerprint changes
+            once, expect a single known-hosts warning). Requires `crypto.tpm2.enable`. Set false
+            to fall back to the plaintext `hostKeyPath`.
           '';
         };
         hostKeyPath = mkOption {
@@ -298,7 +301,11 @@ in
           description = ''
             TPM2 PCRs the unlock policy is bound to. PCR 7 (Secure Boot state) is the
             baseline: it is stable across UKI/generation updates, so a normal update
-            needs no reseal. Signed PCR 11 (the measured UKI) is added as phase-2 hardening.
+            needs no reseal. NOTE: the one-time Secure Boot key ENROLLMENT at provisioning
+            DOES change PCR 7 — after it, re-run `nixnas-enroll-tpm2` (idempotent via
+            `--wipe-slot=tpm2`) to re-bind the store keyslot to the new value; the store
+            still opens via the passphrase keyslot until then. Signed PCR 11 (the measured
+            UKI) is added as phase-2 hardening.
           '';
         };
       };

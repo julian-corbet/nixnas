@@ -36,7 +36,15 @@
 #   from a genuine first boot and DOES yield an ephemeral prompt — an inherent residual of
 #   the first-boot fallback. The protection there is client-side: your known-hosts pin turns
 #   the swapped fingerprint into a LOUD mismatch, never a silent accept.
-#   PCR 7 (Secure Boot state) is update-stable; kernel/UKI updates need no reseal.
+#   PCR 7 (Secure Boot state) is stable across kernel/UKI UPDATES — those need no reseal — but
+#   the ONE-TIME Secure Boot key ENROLLMENT done at provisioning (`nixnas-enroll-sb`, a manual
+#   operator step run AFTER this first seal) DOES change PCR 7, so a seal made BEFORE enrollment
+#   can no longer be TPM-decrypted afterwards. `nixnas-seal-hostkey` is therefore SELF-HEALING:
+#   it runs every boot and RE-SEALS whenever the .cred is MISSING or no longer DECRYPTS against
+#   the current PCR 7 (a real decrypt self-test — not mere file existence). A one-time PCR 7
+#   change thus heals on the NEXT boot, changing the initrd host-key fingerprint ONCE — expect a
+#   single known-hosts warning, exactly like the ephemeral→sealed first-boot transition; the
+#   client-side known-hosts pin turns any UNEXPECTED change into a loud mismatch.
 #
 # PATH B: sealHostKey = false (or crypto.tpm2.enable = false)
 #   The host key is a BUILD-MACHINE path (`hostKeyPath`), embedded in the initrd at
@@ -188,6 +196,19 @@ in
       #     the preStart below generates the ephemeral key + warning banner.
       boot.initrd.systemd.services.sshd.serviceConfig.LoadCredentialEncrypted = [ credName ];
 
+      # BOUND THE FAILED-UNSEAL HAMMER (the DA-lockout defense). nixpkgs defaults this initrd
+      # sshd to `Restart=on-failure`. On the ONE post-SB-enrollment boot the delivered .cred no
+      # longer decrypts against the new PCR 7, so credential setup hard-fails — and with
+      # on-failure systemd retries the whole activation, EACH retry firing another TPM2 unseal.
+      # Those repeated failed unseals are exactly what drove the fTPM into dictionary-attack
+      # lockout (TPM_RC_LOCKOUT) in the field, which then defeats the stage-2 self-heal too (its
+      # `systemd-creds encrypt` also needs the TPM). Force NO restart: a stale cred costs exactly
+      # ONE failed unseal, sshd stays down for that single boot (the console prompt is still
+      # there — SB enrollment is a physically-present step anyway), and the seal service
+      # RE-SEALS in stage-2 so the NEXT boot's initrd-SSH comes up clean. The intentional
+      # anti-downgrade semantics are UNCHANGED: still no ephemeral fallback for a delivered cred.
+      boot.initrd.systemd.services.sshd.serviceConfig.Restart = lib.mkForce "no";
+
       # make-initrd-ng copies listed objects + ELF library deps only — it does NOT chase
       # store references inside script text, so the ssh-keygen the preStart calls must be
       # listed explicitly (same pattern as the nixpkgs module's sshd binaries).
@@ -227,17 +248,25 @@ in
         echo "nixnas: FIRST BOOT - initrd sshd is serving an EPHEMERAL host key: $fp"
       '';
 
-      # ── Stage-2 seal service (first boot only) ────────────────────────────────────────
+      # ── Stage-2 seal service (SELF-HEALING) ───────────────────────────────────────────
       # Generates the ed25519 key and TPM2-seals it into the ESP's loader/credentials/ dir with
       # `--with-key=auto-initrd` (TPM2-only key derivation — the /var credential secret is not
-      # available in the initrd) bound to PCR 7 (Secure Boot state, update-stable). /boot is the
-      # ESP, already mounted in stage-2, so this is a plain file write. The .cred file is its own
-      # idempotency lock. From here on lanzaboote's stub auto-delivers it to every initrd.
+      # available in the initrd) bound to PCR 7. /boot is the ESP, already mounted in stage-2, so
+      # this is a plain file write. From here on lanzaboote's stub auto-delivers it to every initrd.
+      #
+      # It runs on EVERY boot (`wantedBy = multi-user.target`, no ConditionPathExists gate) and
+      # decides idempotency IN THE SCRIPT with a real DECRYPT self-test: if the .cred exists AND
+      # still decrypts against the LIVE TPM/PCR 7, it does nothing (fingerprint unchanged); if the
+      # .cred is MISSING or FAILS to decrypt, it (re)generates + (re)seals. This is what makes the
+      # one-time PCR 7 change from Secure Boot key enrollment SELF-HEAL on the next boot instead of
+      # leaving a permanently-undecryptable .cred (the field incident: a pre-enrollment seal + the
+      # old existence-only gate → the initrd-SSH host key was never re-sealed). Correctness: firmware
+      # extends PCR 7 before the bootloader and does NOT re-extend it between stage-1 and stage-2, so
+      # a stage-2 decrypt success here GUARANTEES the stage-1 initrd-sshd unseal succeeds next boot.
       systemd.services.nixnas-seal-hostkey = {
-        description = "Generate + TPM2-seal the initrd SSH host key credential (first boot only)";
+        description = "Generate + TPM2-seal the initrd SSH host key credential (self-healing across PCR 7 changes)";
         wantedBy = [ "multi-user.target" ];
         after = [ "local-fs.target" "sysinit.target" ];
-        unitConfig.ConditionPathExists = "!${credEspPath}";
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
@@ -247,7 +276,32 @@ in
         path = [ pkgs.systemd pkgs.openssh pkgs.coreutils ];
         script = ''
           echo "=== NIXNAS-SEAL-START ==="
-          # Temp DIRECTORY so the key file does not pre-exist (ssh-keygen -f would prompt).
+
+          # ── Self-healing idempotency (replaces the old first-boot-only ConditionPathExists
+          # gate). Gate the reseal on a REAL decrypt self-test against the live TPM/PCR 7 — NOT
+          # on the .cred merely existing. Firmware extends PCR 7 before the bootloader and does
+          # not re-extend it between stage-1 and stage-2, so a decrypt success HERE (stage-2)
+          # guarantees the stage-1 initrd-sshd unseal succeeds on the NEXT boot. `-` writes the
+          # decrypted plaintext to stdout, discarded to /dev/null so the key never hits the
+          # journal. A successful unseal does NOT touch the TPM dictionary-attack counter, so
+          # this per-boot self-test is free; a STALE cred costs exactly one failed unseal (one
+          # DA increment) and then heals below — never a retry loop.
+          if [ -f "${credEspPath}" ]; then
+            if systemd-creds decrypt --tpm2-device=auto --name=${credName} "${credEspPath}" - >/dev/null 2>&1; then
+              echo "nixnas: sealed initrd SSH host key still decrypts against the current PCR 7 — no reseal."
+              ssh-keygen -lf "${pubEspPath}" 2>/dev/null || true
+              echo "=== NIXNAS-SEAL-END ==="
+              exit 0
+            fi
+            echo "!! nixnas: the sealed initrd SSH host key credential no longer decrypts against the"
+            echo "!! current TPM / PCR 7 state. EXPECTED exactly once — right after Secure Boot key"
+            echo "!! enrollment (nixnas-enroll-sb) changed PCR 7. RE-SEALING now; the initrd host-key"
+            echo "!! FINGERPRINT WILL CHANGE this once — re-pin it on your next initrd-SSH connect."
+          fi
+
+          # (Re)generate + (re)seal. Temp DIRECTORY so the key file does not pre-exist
+          # (ssh-keygen -f would prompt). A stale .cred/.pub from a pre-enrollment seal is
+          # OVERWRITTEN below.
           tmpdir="$(mktemp -d -t nixnas-initrd-hostkey-XXXXXX)"
           tmpkey="$tmpdir/key"
           cleanup() { find "$tmpdir" -type f -exec shred -u {} \; 2>/dev/null || true; rm -rf "$tmpdir"; }
@@ -256,20 +310,29 @@ in
           mkdir -p "$(dirname "${credEspPath}")"
           # --with-key=auto-initrd: seal to the TPM2 only (no /var secret), so the initrd can
           # decrypt it; --name must match the sshd LoadCredentialEncrypted= name; PCR 7 anchor.
-          systemd-creds encrypt \
-            --with-key=auto-initrd \
-            --tpm2-device=auto \
-            --tpm2-pcrs=7 \
-            --name=${credName} \
-            "$tmpkey" \
-            "${credEspPath}"
+          # Remove any stale blob first — systemd-creds encrypt refuses to clobber an existing
+          # output file, and on the self-heal path the old .cred is still present.
+          rm -f "${credEspPath}"
+          if ! systemd-creds encrypt \
+              --with-key=auto-initrd \
+              --tpm2-device=auto \
+              --tpm2-pcrs=7 \
+              --name=${credName} \
+              "$tmpkey" \
+              "${credEspPath}"; then
+            echo "!! nixnas: FAILED to TPM2-seal the initrd SSH host key. If the TPM is in"
+            echo "!! dictionary-attack lockout (TPM_RC_LOCKOUT), clear it and re-run this service:"
+            echo "!!   tpm2_dictionarylockout --clear-lockout && systemctl start nixnas-seal-hostkey"
+            echo "=== NIXNAS-SEAL-END ==="
+            exit 1
+          fi
           chmod 600 "${credEspPath}"
           # Surface the PUBLIC half (it is public — plaintext ESP is fine) so the operator can
-          # VERIFY the first initrd-SSH connection instead of TOFU-accepting it: the .pub next
-          # to the .cred, plus the fingerprint on journal+console. Without this the fingerprint
-          # would be destroyed with the tmpdir and the unlock channel starts unverifiable.
+          # VERIFY the initrd-SSH connection instead of TOFU-accepting it: the .pub next to the
+          # .cred, plus the fingerprint on journal+console. Overwrites any stale .pub. Without
+          # this the fingerprint would be destroyed with the tmpdir and the channel unverifiable.
           install -m 0644 "$tmpkey.pub" "${pubEspPath}"
-          echo "nixnas: initrd SSH host key fingerprint (verify this on your first initrd-SSH connect):"
+          echo "nixnas: initrd SSH host key fingerprint (verify this on your next initrd-SSH connect):"
           ssh-keygen -lf "$tmpkey.pub"
           echo "nixnas: initrd SSH host key sealed to ${credEspPath} (public key beside it)"
           echo "=== NIXNAS-SEAL-END ==="

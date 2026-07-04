@@ -168,7 +168,14 @@ let
         1. reboot;
         2. verify:  bootctl status   must report  "Secure Boot: enabled (user)";
         3. set the firmware ADMIN PASSWORD — without it, an evil maid can simply
-           re-enter Setup Mode and swap the keys, undoing all of this.
+           re-enter Setup Mode and swap the keys, undoing all of this;
+        4. PCR 7 CHANGED. Enrollment rewrote the Secure Boot state, so anything TPM-sealed
+           to PCR 7 before now is stale:
+             * the initrd-SSH host key RE-SEALS ITSELF on this next boot (nixnas-seal-hostkey
+               self-heals) — expect a ONE-TIME ssh known-hosts fingerprint change, re-pin it;
+             * if you enrolled a TPM2 store keyslot (nixnas-enroll-tpm2), RE-RUN it after the
+               reboot to re-bind it to the new PCR 7 — until then the store opens via the
+               passphrase/recovery keyslot every boot.
       EOF
     '';
   };

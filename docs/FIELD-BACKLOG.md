@@ -55,6 +55,48 @@ orphaned inherited fd — deleting the file gives stc a fresh inode). auto-upgra
 rescue-maintain already run inside systemd units, i.e. detached by construction; the
 README now says "never run activation through a droppable session".
 
+## 6. TPM seal must survive SB key enrollment (self-heal) — LANDED
+**Evidence (2026-07-04, first real deployment):** the initrd-SSH host key is sealed on first
+boot with `systemd-creds encrypt --tpm2-pcrs=7`, but Secure Boot key enrollment
+(`nixnas-enroll-sb`, a deliberate MANUAL step) runs AFTER that seal and **changes PCR 7**. On
+the next boot the sealed `.cred` no longer decrypts. Two things then compounded into a hard
+brick:
+  1. the seal service's only idempotency gate was `ConditionPathExists=!…/nixnas-initrd-hostkey.cred`
+     — it keyed off the file merely EXISTING, so a stale, undecryptable `.cred` permanently
+     blocked the one code path that could re-bind the key to the new PCR 7. It **never re-sealed**;
+  2. the initrd sshd (`Restart=on-failure` by nixpkgs default) retried its failed credential
+     setup, each retry firing another TPM2 unseal; together with the store keyslot's own failed
+     PCR-7 unseal this hammered the AMD fTPM into **dictionary-attack lockout** (`inLockout=1` →
+     `TPM_RC_LOCKOUT`/0x921), which then failed `systemd-tpm2-setup`'s SRK provisioning.
+  Manual field remedy was: `tpm2_dictionarylockout --clear-lockout`, `rm` the stale `.cred`, and
+  `systemctl start nixnas-seal-hostkey` to re-seal against the new PCR 7.
+**Fix (LANDED):** `nixnas-seal-hostkey` is now **self-healing** — it runs every boot with no
+`ConditionPathExists` gate and decides in-script via a real **decrypt self-test**
+(`systemd-creds decrypt … "$cred" - >/dev/null`): valid → do nothing (fingerprint unchanged);
+missing OR undecryptable → (re)generate + (re)seal, overwriting `.cred`/`.pub` and printing the
+new fingerprint loudly (operator re-pins, one expected known-hosts warning). Correctness:
+firmware extends PCR 7 before the bootloader and does not re-extend it between stage-1 and
+stage-2, so a stage-2 decrypt success guarantees the stage-1 initrd-sshd unseal succeeds next
+boot; a stale cred costs exactly ONE failed unseal, then heals. To stop the lockout hammer
+(which would otherwise also defeat the self-heal — its `systemd-creds encrypt` needs the TPM
+too), the initrd sshd is pinned to `Restart = mkForce "no"`: a delivered-but-undecryptable cred
+fails once, sshd stays down for that single physically-present enrollment boot (console prompt
+still there), and stage-2 re-seals for the next boot. Anti-downgrade semantics unchanged (still
+no ephemeral fallback for a delivered cred). The misleading "PCR 7 is update-stable; no reseal"
+comment (remote-unlock.nix, options.nix ×2, ARCHITECTURE §6) is corrected to name SB enrollment
+as the one PCR 7 delta. `modules/boot/remote-unlock.nix`; covered by the existing
+`test/seal-2boot-test.sh` (boot #2 re-runs the seal: valid cred self-tests OK → skip → stable
+fingerprint) and `test/verify-sealed-hostkey.nix`.
+**Follow-up (store keyslot parity):** the STORE LUKS keyslot (`modules/crypto/tpm2.nix`,
+`tpm2-device=auto`, PCR 7) has the identical staleness — after SB enrollment its TPM2 unseal
+also fails (store still opens via the passphrase slot, but it feeds the same DA counter each
+boot). `nixnas-enroll-tpm2` is already idempotent (`--wipe-slot=tpm2`), so the fix is to RE-RUN
+it after enrollment + reboot; this is now documented in `options.nix` and the `nixnas-enroll-sb`
+success message. A box-side read-only warning unit (analogous to `nixnas-recovery-status`) that
+flags a store keyslot that no longer unseals is the remaining not-yet-landed piece — untestable
+in the keyless demo (no TPM2 store slot is enrolled there), so it is tracked here rather than
+shipped blind.
+
 ## 5. Rescue firmware posture (document, not change)
 **Evidence:** the rescue boots a discrete GPU host with `amdgpu … Fatal error during
 GPU init` (no firmware on the stick). Correct for the rescue (closure budget; BMC

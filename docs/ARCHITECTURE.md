@@ -165,7 +165,17 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
     is created later that boot — so remote unlock works on boot #1 too, monitor-less and
     IPMI-less. A credential that was *delivered* but fails to decrypt (tampered chain / PCR
     mismatch) still hard-fails sshd with **no** ephemeral fallback — the downgrade path stays
-    closed. The console prompt remains available in parallel on every boot
+    closed (and the initrd sshd is `Restart=no`, so a delivered-but-undecryptable cred costs
+    exactly **one** failed unseal, never a retry loop that could hammer the fTPM into
+    dictionary-attack lockout). ***Self-healing seal:*** PCR 7 is stable across kernel/UKI updates,
+    but the **one-time Secure Boot key enrollment** (`nixnas-enroll-sb`, the manual provisioning
+    step) **changes PCR 7**, so a pre-enrollment seal no longer decrypts. `nixnas-seal-hostkey`
+    runs every boot and re-seals whenever the `.cred` is missing **or fails a live decrypt
+    self-test** — so a PCR 7 change self-heals on the next boot, changing the initrd host-key
+    fingerprint **once** (a single expected known-hosts warning, like the ephemeral→sealed
+    transition). (The store LUKS keyslot shares this PCR 7 dependency: after SB enrollment,
+    re-run `nixnas-enroll-tpm2` to re-bind it; the store opens via the passphrase slot until then.)
+    The console prompt remains available in parallel on every boot
     (`boot.consolePrimary = "video"`, the default: tty0 is `/dev/console`; `= "serial"` keeps
     ttyS0 primary for IPMI-SOL/BMC boxes and the CI VMs — both consoles always carry the
     prompt). Fallback for no-TPM boxes: `boot.remoteUnlock.sealHostKey =
@@ -213,7 +223,9 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
      not verity, closes the "image an old store and wait for a CVE" replay maid. (Replay
      is a wash vs verity: neither model is safe without the counter.)
   4. IOMMU on, unused DMA ports off, no plaintext hibernation swap.
-- **TPM2 + PIN**, PCR 7 baseline (stable across updates), recovery keyslot mandatory (AMD
+- **TPM2 + PIN**, PCR 7 baseline (stable across kernel/UKI updates; the one-time SB key
+  enrollment changes it — the host-key seal self-heals, the store keyslot is re-enrolled via
+  `nixnas-enroll-tpm2`), recovery keyslot mandatory (AMD
   fTPM is wiped by a BIOS/NVRAM clear), SHA-256 bank. Non-fatal pool import (`Wants`-only,
   off `local-fs.target`, `boot.zfs.devNodes=/dev/disk/by-id`). nixnas **imports +
   unlocks** operator-built pools; it never creates/formats/destroys.
