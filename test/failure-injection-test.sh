@@ -177,6 +177,22 @@ cmd_power_cut_mid_write() {
   exec 3>&-       # release the FIFO writer
   rm -f "$FIFO1"
 
+  # ── wait for boot-#1 port to drain, then pick a fresh port for boot #2 ───────────────
+  # After kill -9 the kernel may retain the listen socket (or TIME_WAIT from the boot-#1
+  # SSH probes) for a moment.  Drain it with the same pattern as seal-2boot-test.sh's
+  # cleanup.  Then bump to PORT+1 so a stale connection from boot #1 can never produce a
+  # false-positive hit in the boot-#2 SSH probe — the SSH array is rebuilt to target only
+  # the new VM's port.
+  for _ in $(seq 1 30); do ss -ltn 2>/dev/null | grep -q ":${PORT} " || break; sleep 0.3; done
+  PORT=$((PORT + 1))
+  SSH=(ssh -i "$KEY" -p "$PORT"
+       -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+       -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR
+       -o ConnectTimeout=4 root@127.0.0.1)
+  if ss -ltn 2>/dev/null | grep -q ":${PORT} "; then
+    echo "!! port ${PORT} (boot-#2 SSH-forward) is already in use — cannot start boot #2" >&2; exit 1
+  fi
+
   # ── BOOT #2: same swtpm state dir, fresh swtpm instance → PCR 7 re-extends identically ─
   # The initrd unseals the host key → initrd-SSH comes up → we hand the passphrase via SSH.
   # If f2fs failed to journal-recover, /nix will NOT mount and the initrd never switch-roots

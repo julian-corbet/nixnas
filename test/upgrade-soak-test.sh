@@ -249,6 +249,7 @@ for cycle in $(seq 1 "$N"); do
   # Wait for running-system SSH.
   cycle_ok=1
   wait_running "$VM_C" "cycle ${cycle}" || { cycle_ok=0; tail -30 "$LOG_C"; }
+  vm_booted="$cycle_ok"   # track boot success independently from assertion outcomes
 
   if [ "$cycle_ok" = 1 ]; then
     # (a) boots newest: /etc/nixnas-soak-gen == expected generation number.
@@ -270,8 +271,10 @@ for cycle in $(seq 1 "$N"); do
     fi
 
     # (c) bootctl list entry count matches expected UKI count.
-    # bootctl list emits one "type:" line per boot entry; count those.
-    bootctl_count=$("${SSH[@]}" "bootctl list 2>/dev/null | grep -c 'type:'" 2>/dev/null || echo "0")
+    # bootctl list emits one "type:" line per boot entry; count only the BLS/UKI entries
+    # (type: Boot Loader Specification ...) and exclude the automatic "Reboot Into Firmware
+    # Interface" entry whose line reads "type: Automatic".
+    bootctl_count=$("${SSH[@]}" "bootctl list 2>/dev/null | grep -c 'type: Boot Loader Specification'" 2>/dev/null || echo "0")
     if [ "$bootctl_count" = "$expected_ukis" ]; then
       echo "   [PASS] (c) bootctl entries: ${bootctl_count} == ${expected_ukis}"
     else
@@ -306,7 +309,10 @@ for cycle in $(seq 1 "$N"); do
   [ "$cycle_ok" = 1 ] || FAIL_COUNT=$((FAIL_COUNT + 1))
 
   # Stage the next cycle's generation (if not the last cycle).
-  if [ "$cycle" -lt "$N" ] && [ "$cycle_ok" = 1 ]; then
+  # Conditional on vm_booted (VM was accessible), not cycle_ok (all assertions passed),
+  # so that an assertion failure in one cycle does not cascade and block staging for the
+  # subsequent cycle — each cycle must be independently observable.
+  if [ "$cycle" -lt "$N" ] && [ "$vm_booted" = 1 ]; then
     next_idx="$cycle"                          # GEN_TOPS[next_idx] = soak-gen-(cycle+2)
     next_gen=$((cycle + 2))
     echo "   staging soak-gen-${next_gen} (generation $((cycle + 2))) for next cycle reboot ..."
