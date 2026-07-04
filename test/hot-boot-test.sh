@@ -48,16 +48,16 @@ TOP="$(nix build --no-link --print-out-paths \
 echo "   toplevel: $TOP"
 
 # ── 2. assemble the disk: a labelled ESP (for the /boot mount) + the LUKS+ext4 /nix ──
-# demo-hot mounts /boot by-label NIXNAS-ESP (it shares the stick ESP in reality); without it
+# demo-hot mounts /boot by-label ESP (it shares the stick ESP in reality); without it
 # the boot drops to emergency mode. This is direct-kernel-boot, so the ESP need only exist +
 # carry the label — no bootloader is installed on it.
-echo ">> assembling the disk (ESP NIXNAS-ESP + LUKS+ext4 /nix + a 2nd bare LUKS member) …"
+echo ">> assembling the disk (ESP ESP + LUKS+ext4 /nix + a 2nd bare LUKS member) …"
 truncate -s 6G "$DISK"
 sgdisk -n1:0:+64M -t1:EF00 -c1:esp \
        -n2:0:+5G  -t2:8300 -c2:nixstore-demo \
        -n3:0:0    -t3:8300 -c3:nixstore-demo2 "$DISK" >/dev/null
 LOOP="$(losetup --find --show --partscan "$DISK")"
-mkfs.vfat -n NIXNAS-ESP "${LOOP}p1" >/dev/null
+mkfs.vfat -n ESP "${LOOP}p1" >/dev/null
 part="${LOOP}p2"
 [ -b "$part" ] || { echo "!! loop partition $part not present" >&2; exit 1; }
 # Fast KDF (pbkdf2, low iters) — this is a throwaway CI volume, not a real secret.

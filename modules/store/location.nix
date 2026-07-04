@@ -58,7 +58,7 @@ in
       # main's UKIs; rescue-maintain drops EFI/Linux/nixnas-rescue.efi). Mount it by the label
       # disk.nix stamps on the stick ESP, so it's found regardless of device path.
       fileSystems."/boot" = {
-        device = "/dev/disk/by-label/NIXNAS-ESP";
+        device = "/dev/disk/by-label/ESP";
         fsType = "vfat";
         options = [ "umask=0077" "noatime" ];
       };

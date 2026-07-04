@@ -13,7 +13,7 @@
 # mappers, one pool: that is the assertion.
 #
 # Disk layout: GPT, three partitions —
-#   p1  64 MiB  FAT32   label NIXNAS-ESP   (the shared ESP the MAIN requires; no bootloader)
+#   p1  64 MiB  FAT32   label ESP   (the shared ESP the MAIN requires; no bootloader)
 #   p2  ~3.8 GiB LUKS2  label qapool-luks0 (ZFS vdev 0; /dev/mapper/qapool-luks0 after open)
 #   p3  rest     LUKS2  label qapool-luks1 (ZFS vdev 1; /dev/mapper/qapool-luks1 after open)
 # ZFS pool 'qapool' is a stripe over both mappers; dataset qapool/system/nix carries the
@@ -75,13 +75,13 @@ echo "   toplevel: $TOP"
 # ── 2. assemble the disk: ESP + two LUKS members for zpool 'qapool' ─────────────────────
 # Total 9 GiB: p1=64 MiB ESP, p2=~3.8 GiB luks0, p3=rest luks1.
 # Stripe capacity ≈ 7.8 GiB — comfortably holds the system closure (typically 3–5 GiB).
-echo ">> assembling disk (ESP NIXNAS-ESP + LUKS luks0 + LUKS luks1 for zpool qapool) …"
+echo ">> assembling disk (ESP ESP + LUKS luks0 + LUKS luks1 for zpool qapool) …"
 truncate -s 9G "$DISK"
 sgdisk -n1:0:+64M   -t1:EF00 -c1:esp \
        -n2:0:+3900M  -t2:8300 -c2:qapool-luks0 \
        -n3:0:0       -t3:8300 -c3:qapool-luks1 "$DISK" >/dev/null
 LOOP="$(losetup --find --show --partscan "$DISK")"
-mkfs.vfat -n NIXNAS-ESP "${LOOP}p1" >/dev/null
+mkfs.vfat -n ESP "${LOOP}p1" >/dev/null
 
 # Fast KDF (pbkdf2, low iters) — throwaway CI volumes, not real secrets.
 # Same passphrase on both members: the initrd enters it ONCE for luks0; the kernel keyring
