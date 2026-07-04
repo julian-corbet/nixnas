@@ -7,9 +7,24 @@
 { config, lib, pkgs, ... }:
 let
   cfg = config.nixnas;
+  releaseCblocks = import ../lib/f2fs-release-cblocks.nix { inherit pkgs; };
 in
 {
   config = lib.mkIf cfg.enable {
+    # ── f2fs compression release pass, ongoing case (modules/lib/f2fs-release-cblocks.nix):
+    #    LOCAL builds (auto-upgrade's `nixos-rebuild`) run on this box's OWN nix-daemon, so
+    #    Nix's post-build-hook fires per new output — no full-store rescan needed here, unlike
+    #    the image-build (disk.nix) and rescue-maintain (foreign-store `nix copy`) call sites,
+    #    which this hook can never see. usb-mode only: a hot-mode MAIN's /nix is never f2fs.
+    nix.extraOptions = lib.mkIf (cfg.store.location == "usb") ''
+      post-build-hook = ${pkgs.writeShellScript "nixnas-release-post-build-hook" ''
+        #!/bin/sh
+        # shellcheck disable=SC2086
+        # $OUT_PATHS is Nix's own space-separated list (store paths never contain spaces) —
+        # unquoted expansion is the documented, intentional way to consume it.
+        exec ${releaseCblocks}/bin/nixnas-f2fs-release-cblocks $OUT_PATHS
+      ''}
+    '';
     # ── Kill avoidable stick writes (only /nix + ESP persist; root is tmpfs) ──
     # Logs → RAM by default. `store.persistLogs` (temporary debug) instead keeps the journal
     # on the stick's store so it survives a reboot/crash — writes the stick, hence off by default.

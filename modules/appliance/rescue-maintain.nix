@@ -40,11 +40,12 @@ let
   pkiDb = "${config.boot.lanzaboote.pkiBundle}/keys/db";
   f2fsOpts = lib.concatStringsSep "," (import ../lib/f2fs-store-mount-opts.nix);
   sdCryptsetup = "${pkgs.systemd}/lib/systemd/systemd-cryptsetup";
+  releaseCblocks = import ../lib/f2fs-release-cblocks.nix { inherit pkgs; };
 
   maintain = pkgs.writeShellApplication {
     name = "nixnas-rescue-maintain";
     runtimeInputs = with pkgs; [
-      nix coreutils util-linux cryptsetup systemd sbsigntool gnugrep gawk
+      nix coreutils util-linux cryptsetup systemd sbsigntool gnugrep gawk releaseCblocks
     ];
     text = ''
       # ── inputs ─────────────────────────────────────────────────────────────
@@ -136,6 +137,11 @@ let
       fi
       ln -sfn "$rescueTop" "$roots/rescue-current"
       nix store gc --store "$mnt" || echo "rescue-maintain: stick GC failed (non-fatal)" >&2
+      # `nix copy --to $mnt` writes into a FOREIGN store from the MAIN's own daemon — no local
+      # post-build-hook ever sees these paths, so without this the stick fills as if
+      # compression were off (see modules/lib/f2fs-release-cblocks.nix). After GC so we only
+      # spend the pass on what current+prev actually kept.
+      nixnas-f2fs-release-cblocks "$mnt/nix/store" || echo "rescue-maintain: release pass failed (non-fatal)" >&2
       sync
       umount "$mnt/nix"
       ${sdCryptsetup} detach nixnas-rescue-store
