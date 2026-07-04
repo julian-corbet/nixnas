@@ -24,7 +24,7 @@
     path = [ pkgs.systemd pkgs.cryptsetup pkgs.gnugrep pkgs.coreutils ];
     script = ''
       echo "=== NIXNAS-TPM2-START ==="
-      dev="/dev/disk/by-partlabel/nixnas-store"
+      dev="/dev/disk/by-partlabel/nixnas"
       echo "[dev] $dev"; echo -n "[tpm nodes] "; ls /dev/tpm* 2>&1 | tr '\n' ' '; echo
       if systemd-cryptenroll \
            --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7 --tpm2-with-pin=yes "$dev"; then

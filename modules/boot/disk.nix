@@ -61,7 +61,7 @@ in
             ESP = {
               type = "EF00";
               # Meaningful GPT partition label (else disko auto-names it `disk-main-ESP`).
-              label = "nixnas-esp";
+              label = "boot";
               size = "${toString cfg.boot.usb.espSizeMiB}M";
               content = {
                 type = "filesystem";
@@ -75,8 +75,10 @@ in
             };
             nixos = {
               # The store partition's GPT label (else disko auto-names it `disk-main-nixos`).
-              # Load-bearing: crypto/{tpm2,recovery-escrow}.nix find the store by this partlabel.
-              label = "nixnas-store";
+              # Load-bearing: crypto/{tpm2,recovery-escrow}.nix find the store by this partlabel,
+              # and disko wires the initrd LUKS unlock by-partlabel too — so a stick's label must
+              # match the image it was built from (rename ⇒ rebuild+reflash, never in place).
+              label = "nixnas";
               size = "100%";
               content = {
                 type = "luks";
