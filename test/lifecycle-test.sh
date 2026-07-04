@@ -232,7 +232,15 @@ for _ in $(seq 1 30); do
 done
 if [ "$pki_ready" != 1 ]; then
   echo "!! lanzaboote PKI not present at /nix/lanzaboote/pki/keys/db/db.key after timeout."
-  echo "   (boot #1 running-system is up — check the lanzaboote-generate-keys service)"
+  echo "   (boot #1 running-system is up — check the generate-sb-keys service)"
+  # Real diagnostics — dump the unit's status + full journal so a future failure
+  # self-explains instead of just re-timing-out silently.
+  echo "-- systemctl status generate-sb-keys --"
+  "${SSH[@]}" 'systemctl status --no-pager generate-sb-keys' 2>&1
+  echo "-- journalctl -u generate-sb-keys (full) --"
+  "${SSH[@]}" 'journalctl --no-pager -u generate-sb-keys' 2>&1
+  echo "-- ls -la /nix/lanzaboote (recursive, if it exists at all) --"
+  "${SSH[@]}" 'ls -laR /nix/lanzaboote 2>&1 || echo "   (/nix/lanzaboote does not exist)"' 2>&1
   exit 1
 fi
 echo "   PKI ready."

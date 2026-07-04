@@ -29,7 +29,23 @@
 #   UKIs — which boot fine with Secure Boot disabled (the test-VM case). Signed UKIs appear
 #   after the first real boot. Convenient, but the keys are NOT a stable identity — real hosts
 #   supply `keysSops`.
-{ config, lib, ... }:
+#
+# generate-sb-keys.service landlock trap — CONFIRMED by direct reproduction (not just
+# pattern-matched): lanzaboote's `generate-sb-keys.service` runs plain `sbctl create-keys`
+# with its landlock sandbox left on. `sbctl create-keys` adds a Landlock RWDirs rule for the
+# *grandparent* of `keydir` (i.e. `dirname(pkiBundle)` = `/nix/lanzaboote`) WITHOUT
+# `IgnoreIfMissing()` (unlike the analogous rule sbctl builds from its own config, which does
+# chain it). On a genuine first boot `/nix/lanzaboote` does not exist yet — nothing pre-creates
+# it — so Landlock's `open(O_PATH)` on that path fails with ENOENT and `sbctl create-keys`
+# exits 1 *before* creating any directory or writing any key. The service fails silently and
+# `/nix/lanzaboote/pki/keys/db/db.key` never appears. `sbctl --disable-landlock create-keys`
+# skips the landlock setup entirely and succeeds (verified: reproduced the exact
+# "populating ruleset for ... open: no such file or directory" failure with plain
+# `sbctl create-keys` against a not-yet-existing keydir tree, and confirmed
+# `--disable-landlock` creates PK/KEK/db cleanly in the same tree). This is a genuine
+# keyless-first-boot bug, not a test artifact — hence the ExecStart override below rather
+# than a test-side workaround.
+{ config, lib, pkgs, ... }:
 let
   cfg = config.nixnas;
   # Persistent location for the PKI bundle (PK / KEK / db).  Must be under /nix
@@ -49,6 +65,13 @@ in
     # build machine, so lzbt signs from day one and the box's SB identity is stable across
     # reflashes/updates. `allowUnsigned` follows autogenerate (needed for the keyless build).
     boot.lanzaboote.autoGenerateKeys.enable = !provideStableKeys;
+
+    # Work around the landlock/ENOENT trap documented above: only relevant when
+    # autogenerate is actually active (the unit only exists in that case anyway,
+    # since upstream gates it on `cfg.autoGenerateKeys.enable`).
+    systemd.services.generate-sb-keys = lib.mkIf (!provideStableKeys) {
+      serviceConfig.ExecStart = lib.mkForce "${pkgs.sbctl}/bin/sbctl create-keys --disable-landlock";
+    };
 
     # lanzaboote uses the external boot-loader hook mechanism; systemd-boot's own
     # installer must not also run or the two will fight over the ESP.

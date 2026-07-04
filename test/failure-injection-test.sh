@@ -116,8 +116,20 @@ cmd_power_cut_mid_write() {
 
   # QEMU function — both boots use the same scratch disk + persistent OVMF vars.
   # Called in background: run_qemu > logfile 2>&1 &
+  #
+  # NOTE: this MUST `exec` into qemu-system-x86_64, not merely invoke it as the function's
+  # last statement.  Without `exec`, bash forks a subshell to run the backgrounded function
+  # call, and then forks AGAIN to run qemu-system-x86_64 as a child of that subshell — so
+  # `$!` (captured as VM1/VM2) is the subshell's PID, not qemu's.  `kill -9 "$VM1"` then
+  # kills only the (already-idle) subshell wrapper, leaving the real qemu-system-x86_64
+  # process alive and orphaned — it keeps the SSH hostfwd port AND the exclusive write lock
+  # on $SCRATCH held indefinitely.  That produced BOTH observed failures: boot #2's
+  # "Could not set up host forwarding rule" (port still held by the orphan) and, after the
+  # port was made unique, boot #2's "Failed to get \"write\" lock" on disk.raw (the orphan
+  # still had it open).  `exec` replaces the subshell's process image with qemu itself, so
+  # `$!` is qemu's real PID and `kill -9` actually terminates it.
   run_qemu() {
-    qemu-system-x86_64 \
+    exec qemu-system-x86_64 \
       -machine q35,smm=on,accel=kvm -cpu host -smp 2 -m 2048 \
       -global ICH9-LPC.disable_s3=1 \
       -global driver=cfi.pflash01,property=secure,value=on \
