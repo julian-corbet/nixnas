@@ -18,6 +18,8 @@ use std::sync::mpsc::Receiver;
 enum Phase {
     Devices,
     Summary,
+    /// Explicit yes/no: back up the current device contents before overwriting?
+    BackupAsk,
     Confirm {
         typed: String,
         error: Option<String>,
@@ -192,9 +194,21 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
         },
         Phase::Summary => match key.code {
             KeyCode::Esc => st.phase = Phase::Devices,
-            KeyCode::Char('b') => st.backup = !st.backup,
             // The one hard block: an image that cannot physically fit is never armed.
-            KeyCode::Enter if st.image_fits() => {
+            KeyCode::Enter if st.image_fits() => st.phase = Phase::BackupAsk,
+            _ => {}
+        },
+        Phase::BackupAsk => match key.code {
+            KeyCode::Esc => st.phase = Phase::Summary,
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                st.backup = true;
+                st.phase = Phase::Confirm {
+                    typed: String::new(),
+                    error: None,
+                };
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                st.backup = false;
                 st.phase = Phase::Confirm {
                     typed: String::new(),
                     error: None,
@@ -312,22 +326,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 ],
             );
         }
-        Phase::Summary | Phase::Confirm { .. } | Phase::SudoPass { .. } => {
+        Phase::Summary | Phase::BackupAsk | Phase::Confirm { .. } | Phase::SudoPass { .. } => {
             draw_summary(f, st, &config_path, main_area);
-            if matches!(st.phase, Phase::Summary) {
-                ui::footer(
-                    f,
-                    footer_area,
-                    &[
-                        ("b", "toggle backup"),
-                        ("Enter", "continue"),
-                        ("Esc", "back"),
-                    ],
-                );
-            } else {
-                ui::footer(f, footer_area, &[("Enter", "confirm"), ("Esc", "back")]);
+            match &st.phase {
+                Phase::Summary => {
+                    ui::footer(f, footer_area, &[("Enter", "continue"), ("Esc", "back")])
+                }
+                Phase::BackupAsk => {
+                    ui::footer(f, footer_area, &[("y/n", "answer"), ("Esc", "back")])
+                }
+                _ => ui::footer(f, footer_area, &[("Enter", "confirm"), ("Esc", "back")]),
             }
             match &st.phase {
+                Phase::BackupAsk => draw_backup_ask(f, st.selected_disk(), &config_path),
                 Phase::Confirm { typed, error } => {
                     draw_confirm_modal(f, st.selected_disk(), typed, error.as_deref());
                 }
@@ -523,30 +534,66 @@ fn draw_summary(
             Style::default().fg(OK),
         )));
     }
-    lines.push(Line::from(vec![
-        Span::styled(
-            if st.backup { "  [x] " } else { "  [ ] " },
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                "Back the current contents of /dev/{} up to {} first",
-                disk.name,
-                flash::backup_path(config_path).display()
-            ),
-            Style::default().fg(Color::White),
-        ),
-    ]));
+    let _ = config_path;
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         format!("  Every byte on /dev/{} will be destroyed.", disk.name),
         Style::default().fg(WARN),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  You'll be asked whether to back it up first.",
+        Style::default().fg(Color::DarkGray),
     )));
     f.render_widget(
         Paragraph::new(lines)
             .block(ui::panel("Flash stick — summary"))
             .wrap(Wrap { trim: false }),
         area,
+    );
+}
+
+/// The explicit yes/no backup question (crate-visible: the "Build & Flash" pathway reuses it).
+pub(crate) fn draw_backup_ask(f: &mut Frame, disk: Option<&Disk>, config_path: &std::path::Path) {
+    let Some(disk) = disk else { return };
+    let area = ui::centered_rect(f.area(), 66, 8);
+    let inner = ui::modal(f, area, "Back up first?");
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                format!(
+                    "Back up the current contents of /dev/{} before overwriting?",
+                    disk.name
+                ),
+                Style::default().fg(Color::White),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "A full image is written to {} first.",
+                    flash::backup_path(config_path).display()
+                ),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::default(),
+            Line::from(vec![
+                Span::styled(
+                    "  [Y] ",
+                    Style::default().fg(OK).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "yes, back it up (recommended)",
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "  [N] ",
+                    Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("no, just flash", Style::default().fg(Color::White)),
+            ]),
+        ])
+        .wrap(Wrap { trim: false }),
+        inner,
     );
 }
 

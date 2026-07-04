@@ -45,8 +45,10 @@ enum Stage {
         buf: String,
     },
     Building,
-    /// Build succeeded — review the flash (backup toggle, exact-fit check) before arming.
+    /// Build succeeded — review the flash (exact-fit check) before arming.
     FlashReview,
+    /// Explicit yes/no: back up the current device contents before overwriting?
+    FlashBackupAsk,
     FlashConfirm {
         typed: String,
         error: Option<String>,
@@ -421,8 +423,20 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 app.buildflash = None;
                 app.screen = Screen::Home;
             }
-            KeyCode::Char('b') => st.backup = !st.backup,
-            KeyCode::Enter if st.image_fits() => {
+            KeyCode::Enter if st.image_fits() => st.stage = Stage::FlashBackupAsk,
+            _ => {}
+        },
+        Stage::FlashBackupAsk => match key.code {
+            KeyCode::Esc => st.stage = Stage::FlashReview,
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                st.backup = true;
+                st.stage = Stage::FlashConfirm {
+                    typed: String::new(),
+                    error: None,
+                };
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                st.backup = false;
                 st.stage = Stage::FlashConfirm {
                     typed: String::new(),
                     error: None,
@@ -513,6 +527,7 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let config_path = app.config_path.clone();
     let Some(st) = app.buildflash.as_mut() else {
         return;
     };
@@ -611,22 +626,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
             ui::footer(f, footer_area, &hints);
         }
-        Stage::FlashReview | Stage::FlashConfirm { .. } | Stage::FlashSudo { .. } => {
+        Stage::FlashReview
+        | Stage::FlashBackupAsk
+        | Stage::FlashConfirm { .. }
+        | Stage::FlashSudo { .. } => {
             draw_flash_review(f, main_area, st);
-            if matches!(st.stage, Stage::FlashReview) {
-                ui::footer(
+            match &st.stage {
+                Stage::FlashReview => ui::footer(
                     f,
                     footer_area,
                     &[
-                        ("b", "toggle backup"),
                         ("Enter", "flash to this stick"),
                         ("Esc", "back to menu (keep image)"),
                     ],
-                );
-            } else {
-                ui::footer(f, footer_area, &[("Enter", "confirm"), ("Esc", "back")]);
+                ),
+                Stage::FlashBackupAsk => {
+                    ui::footer(f, footer_area, &[("y/n", "answer"), ("Esc", "back")])
+                }
+                _ => ui::footer(f, footer_area, &[("Enter", "confirm"), ("Esc", "back")]),
             }
             match &st.stage {
+                Stage::FlashBackupAsk => {
+                    crate::ui::flash::draw_backup_ask(f, st.selected_disk(), &config_path)
+                }
                 Stage::FlashConfirm { typed, error } => {
                     crate::ui::flash::draw_confirm_modal(
                         f,
@@ -732,20 +754,14 @@ fn draw_flash_review(f: &mut Frame, area: Rect, st: &BuildFlowScreen) {
         ))),
         None => {}
     }
-    lines.push(Line::from(vec![
-        Span::styled(
-            if st.backup { "  [x] " } else { "  [ ] " },
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("Back the current contents of /dev/{name} up first"),
-            Style::default().fg(Color::White),
-        ),
-    ]));
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         format!("  Every byte on /dev/{name} will be destroyed.",),
         Style::default().fg(WARN),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  You'll be asked whether to back it up first.",
+        Style::default().fg(Color::DarkGray),
     )));
     f.render_widget(
         Paragraph::new(lines)
