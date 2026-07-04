@@ -22,7 +22,8 @@
 #        the credential during sshd activation and drops the plaintext key in the unit's
 #        $CREDENTIALS_DIRECTORY; sshd_config `HostKey` points there.
 #   BOOTSTRAP CAVEAT: first boot has no credential yet → LoadCredentialEncrypted fails → sshd
-#   does NOT start → operator uses serial console or IPMI-SOL for that one unlock. From the
+#   does NOT start → that one unlock happens at the machine: on the attached monitor
+#   (consolePrimary = "video", the default) or over serial/IPMI-SOL ("serial"). From the
 #   second boot on, initrd-SSH is available. A tampered boot chain (PCR 7 mismatch) makes the
 #   TPM refuse to release the key, so a stolen stick cannot impersonate the box's unlock prompt.
 #   PCR 7 (Secure Boot state) is update-stable; kernel/UKI updates need no reseal.
@@ -72,7 +73,9 @@ in
             Either:
               • Set crypto.tpm2.enable = true (keeps sealHostKey = true, the secure default):
                 the key is generated + sealed to this box's TPM on first boot; from the 2nd
-                boot the initrd unseals it. First boot needs serial/IPMI-SOL console access.
+                boot the initrd unseals it. First boot is unlocked at the machine — on the
+                attached monitor (consolePrimary = "video", the default) or over
+                serial/IPMI-SOL.
               • Or set boot.remoteUnlock.sealHostKey = false and supply a plaintext key via
                 boot.remoteUnlock.hostKeyPath (key is embedded in the initrd at build time,
                 lands on the plaintext ESP — LAN/tailnet-only).
@@ -143,8 +146,9 @@ in
 
       # sshd inherits the stub-provided credential by name and TPM2-decrypts it (auto-initrd key).
       # On FIRST boot the credential does not exist yet ⇒ LoadCredentialEncrypted fails ⇒ sshd
-      # does not start ⇒ the operator uses serial/IPMI-SOL for that one bootstrap unlock. From the
-      # second boot the sealed .cred is on the ESP, the stub packs it in, and sshd comes up.
+      # does not start ⇒ the operator does that one bootstrap unlock at the machine (monitor +
+      # keyboard with the "video" console default, or serial/IPMI-SOL). From the second boot
+      # the sealed .cred is on the ESP, the stub packs it in, and sshd comes up.
       boot.initrd.systemd.services.sshd.serviceConfig.LoadCredentialEncrypted = [ credName ];
 
       # ── Stage-2 seal service (first boot only) ────────────────────────────────────────

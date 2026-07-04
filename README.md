@@ -47,11 +47,20 @@ contributed to) by others, not just one machine.
 - **Evil-Maid hardened**: UEFI Secure Boot with *your own* keys (Microsoft keys not
   enrolled), signed Unified Kernel Images, and LUKS bound to TPM2 + PIN. *(Roadmap: a
   dm-verity/AEAD store hash sealed into the signed UKI.)*
+- **First boot just works on a monitor**: plug in a display + keyboard and the box asks for
+  the store passphrase **on screen** (`nixnas.boot.consolePrimary = "video"`, the default).
+  This matters because the very first unlock can never happen over initrd-SSH — the
+  TPM-sealed initrd host key is generated *on* that first boot, so remote unlock is
+  available from the second boot on. Serial/SOL stays fully supported and is one option
+  away (`= "serial"` for genuinely headless IPMI/BMC boxes); both consoles always carry
+  kernel logs, a login and the passphrase prompt either way — the option only picks which
+  one is `/dev/console`.
 - **Headless**: ships sshd + Tailscale with a stable, stick-persisted identity (machine-id +
   pinned SSH host key — the channel you type the data passphrase into is authenticated), and
   unlocks remotely: the data set over the running system's SSH (`nixnas-unlock`), and — when
   the strict TPM2 PIN is on — the store's PIN prompt over SSH **in the initrd** (no console
-  needed).
+  needed, from the second boot on — the first unlock happens at the machine or over SOL;
+  see the first-boot bullet above).
 - **Hands-off**: everything except the one boot passphrase is automated — build, sign,
   roll out, self-update (stage-only, never self-reboot), rollback. *If you have to think
   about it, something has gone wrong.*

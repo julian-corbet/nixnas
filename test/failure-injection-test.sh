@@ -473,7 +473,7 @@ cmd_no_tpm() {
   echo "       The store was unlocked without the expected passphrase fallback."
   echo "       This suggests a TPM or auto-unlock path fired despite no TPM device."
   echo "       serial extract:"
-  grep -aiE 'passphrase|cryptsetup|tpm|unlock|nixnas "$LOG" | head -20
+  grep -aiE 'passphrase|cryptsetup|tpm|unlock|nixnas' "$LOG" | head -20
   exit 1
 }
 

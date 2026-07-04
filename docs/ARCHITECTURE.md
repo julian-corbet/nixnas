@@ -159,7 +159,10 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
     mismatch) makes the TPM refuse the key, so a stolen stick can't impersonate the unlock prompt —
     closing the one evil-maid wart of generic initrd-SSH, and reusing systemd's own credential
     plumbing rather than a hand-rolled mount/decrypt service. *Bootstrap:* the very first boot has
-    no credential yet, so sshd doesn't start and that one unlock uses serial/IPMI-SOL; from boot #2
+    no credential yet, so sshd doesn't start and that one unlock happens **at the machine** — the
+    passphrase prompt appears on the attached monitor (`boot.consolePrimary = "video"`, the
+    default: tty0 is `/dev/console`; `= "serial"` keeps ttyS0 primary for IPMI-SOL/BMC boxes and
+    the CI VMs — both consoles always carry the prompt) — or over serial/IPMI-SOL; from boot #2
     onward initrd-SSH is available. Fallback for no-TPM boxes: `boot.remoteUnlock.sealHostKey =
     false` + a plaintext `hostKeyPath` (embedded in the initrd, lands on the ESP → LAN/tailnet-only).
     `modules/boot/remote-unlock.nix`; verified by `test/verify-sealed-hostkey.nix` (stage-2 seal +

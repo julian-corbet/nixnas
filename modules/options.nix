@@ -48,6 +48,32 @@ in
           for deeper history. (Measured Boot, a later increment, caps this at 8.)
         '';
       };
+      consolePrimary = mkOption {
+        type = types.enum [ "video" "serial" ];
+        default = "video";
+        description = ''
+          Which console becomes `/dev/console` — i.e. which one is the LAST `console=`
+          kernel parameter:
+
+            "video" (default): tty0 last → the attached DISPLAY is `/dev/console`.
+              The first-boot LUKS passphrase prompt, systemd's boot status messages,
+              and the emergency shell all appear on the monitor — the right default
+              for a human standing at the machine with a monitor + keyboard and no
+              IPMI. (First boot cannot use initrd-SSH: the TPM-sealed host key does
+              not exist yet, so the very first unlock happens at the machine.)
+
+            "serial": ttyS0 last → the SERIAL port is `/dev/console`. For genuinely
+              headless boxes administered over IPMI-SOL/BMC serial — and for the
+              QEMU CI suite, which observes the VM only through the serial port.
+
+          BOTH consoles always stay on the kernel command line
+          (`console=ttyS0,115200` + `console=tty0`) regardless of this setting, so
+          kernel logs reach both, a getty runs on both, and systemd's password agent
+          prompts for (and accepts) the passphrase on BOTH. This option only decides
+          which one is `/dev/console`: where systemd's boot status stream and the
+          emergency shell land.
+        '';
+      };
       secureBoot = {
         enable = mkEnableOption "UEFI Secure Boot with the operator's OWN keys via lanzaboote (Microsoft keys not enrolled)";
         keysSops = mkOption {
@@ -127,21 +153,13 @@ in
           default = 1024;
           description = "FAT ESP size: lanzaboote-signed systemd-boot + one signed UKI per kept generation (~8 per GiB).";
         };
-        growToFill = mkOption {
-          type = types.bool;
-          default = true;
-          description = ''
-            First-boot completion of a "grow-to-fill" flash (usb mode only). When the TUI flashes a
-            smaller/generic `.raw` onto a bigger stick it extends the LAST GPT partition (the LUKS
-            store) to the true device end at flash time — the secret-free part — but leaves the f2fs
-            filesystem at its image size, because growing it needs the store passphrase. With this on
-            (the default), a first-boot oneshot (modules/boot/grow-store.nix) resizes the f2fs ONLINE
-            to fill the now-larger partition, so a single minimal image reflashes onto any stick and
-            uses all of it. Idempotent: a no-op on an exact-fit image or on later boots. The LUKS
-            mapping needs no resize — its dynamic segment spans the grown partition on the fresh
-            stage-1 open. Turn off only to keep the store deliberately at the image size.
-          '';
-        };
+        # NOTE: there is deliberately NO first-boot grow option. Growing a flashed image to
+        # fill a bigger stick is a FLASH-TIME job (the TUI's "workbench grow": partition extend
+        # + `cryptsetup open` + offline `resize.f2fs` + close, with the operator's passphrase) —
+        # done where the operator sits, with logs and retries. A first-boot self-modification
+        # was shipped once and REMOVED: `resize.f2fs` cannot resize a mounted filesystem (it
+        # hangs unkillably and wedges /nix), and first boot on a slow stick / headless box is
+        # the worst possible place to discover any of that.
         luksPassphraseFile = mkOption {
           type = types.nullOr types.str;
           default = null;

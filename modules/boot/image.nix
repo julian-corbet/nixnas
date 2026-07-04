@@ -15,19 +15,39 @@ in
     boot.loader.efi.canTouchEfiVariables = false;
     boot.loader.grub.enable = false;
 
-    # Short menu timeout: fast boot, but the generation menu (the guaranteed manual
-    # rollback) stays reachable with a keypress.
-    boot.loader.timeout = lib.mkDefault 1;
+    # Menu timeout: long enough for a HUMAN to react and reach the generation menu (the
+    # guaranteed manual rollback). A 1 s flash is unusable — might as well not show it.
+    boot.loader.timeout = lib.mkDefault 5;
 
     # systemd in the initrd — the supported path for the TPM2-LUKS unlock + lanzaboote.
     boot.initrd.systemd.enable = true;
 
-    # Serial console: headless boxes expose SOL/BMC serial on ttyS0, and it lets the
-    # test VM be observed headlessly. ttyS0 is LAST so it becomes /dev/console.
-    boot.kernelParams = [
-      "console=tty0"
-      "console=ttyS0,115200"
-    ];
+    # Console policy: BOTH consoles are ALWAYS on the command line — kernel messages
+    # reach the attached display AND ttyS0, a getty runs on both, and systemd's
+    # password agent prompts (and reads input) on both. `nixnas.boot.consolePrimary`
+    # only decides which one is LAST — i.e. /dev/console, where systemd's boot status
+    # stream and the emergency shell land.
+    #
+    #   "video" (the default): tty0 last. First boot asks for the store passphrase ON
+    #     THE MONITOR — the right default for a human at the machine with a monitor +
+    #     keyboard. (The old serial-primary default effectively demanded IPMI/SOL for
+    #     the first boot — the prompt was easy to miss on the attached display; a
+    #     real-world trap, since first boot can never use initrd-SSH: the TPM-sealed
+    #     host key does not exist yet.)
+    #   "serial": ttyS0 last. For genuinely headless SOL/BMC-administered boxes, and
+    #     for the QEMU CI suite, which observes the VM only through the serial port.
+    #
+    # INVARIANT: reorder, never drop. Removing console=ttyS0 would silence the serial
+    # LUKS prompt and the serial getty everywhere — headless boxes and the entire CI
+    # suite at once. Keep 115200 (the SOL/BMC and QEMU default rate).
+    boot.kernelParams =
+      if cfg.boot.consolePrimary == "serial" then [
+        "console=tty0"
+        "console=ttyS0,115200"
+      ] else [
+        "console=ttyS0,115200"
+        "console=tty0"
+      ];
 
     # The boot device + data-pool controllers the initrd must drive. A generic image
     # auto-detects none, so without these the USB stick (and the f2fs store) are invisible

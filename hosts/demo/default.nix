@@ -20,8 +20,9 @@
     admin.authorizedKeys = [ (lib.fileContents ../../test/ssh/demo_key.pub) ];
     # sealHostKey = true (default) + crypto.tpm2.enable = true → the initrd-SSH host key is
     # generated and TPM2-sealed on first boot; no plaintext key needed here. A real host gets
-    # the same behaviour automatically. The bootstrap caveat (first boot needs serial/IPMI-SOL)
-    # is documented in modules/boot/remote-unlock.nix.
+    # the same behaviour automatically. The bootstrap caveat (the FIRST unlock happens at the
+    # machine — monitor with the "video" console default, or serial/IPMI-SOL) is documented
+    # in modules/boot/remote-unlock.nix.
 
     # Reference-box kernel tuning (a generic adopter would leave march at the x86_64-v1
     # default; we build for a known x86-64-v3 CPU). variant=latest, lto=thin, eevdf are defaults.
@@ -29,6 +30,15 @@
 
     boot.secureBoot.enable = true;
     crypto.tpm2.enable = true;
+
+    # CI/QEMU: the test suites observe (and drive) the VM ONLY through the serial
+    # port, so ttyS0 must stay /dev/console here — systemd status lines, the
+    # verify-* marker blocks, and the emergency shell must land in the captured
+    # serial log. Every test nixosConfiguration (demo-hot, demo-hot-zfs,
+    # demo-upgrade-soak, matrix-*) layers on top of this host, so this single pin
+    # covers the whole CI board. A REAL host keeps the "video" default: first boot
+    # asks for the store passphrase on the attached monitor.
+    boot.consolePrimary = "serial";
 
     # The 8 GiB-stick guard (see modules/store/budget.nix): fail the build if the host
     # closure exceeds this. The demo is a minimal appliance (no k3s/docker); 4 GiB is a

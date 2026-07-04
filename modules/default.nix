@@ -11,7 +11,6 @@
     ./boot/disk.nix          # disko on-stick layout: ESP + f2fs-zstd store
     ./boot/image.nix         # UEFI boot chain glue (systemd-boot, serial, initrd modules)
     ./boot/impermanence.nix  # tmpfs root; only /nix + ESP persist
-    ./boot/grow-store.nix    # first-boot: grow the f2fs store to fill its partition (grow-to-fill flash)
     ./boot/kernel.nix        # the tuned CachyOS kernel (nixnas.kernel.*)
     ./boot/secureboot.nix    # UEFI Secure Boot via lanzaboote (operator-owned keys)
     ./boot/remote-unlock.nix # headless store unlock: initrd-SSH (NIC up in initrd)
