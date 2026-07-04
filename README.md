@@ -78,6 +78,16 @@ nothing secret enters the Nix store, and the image is personalised *and* self-si
 cannot be built generically or remotely. (The break-glass recovery escrow is a separate
 hub-side tool — `nixnas-escrow-recovery`.)
 
+The TUI runs as your **normal user** — the build uses your own Nix and keys — and elevates
+*only* the raw-device write with an in-tool sudo prompt (no `sudo nixnas`, no env wrappers).
+Its turnkey path, **Build & Flash**, takes one stick end to end: pick the device and the
+image is sized to its **exact byte count** — no gigabyte rounding, no wasted space — then
+built, flashed, and verified in a single guided flow, with an explicit *back-up-first?*
+prompt before anything is overwritten. A conventional **Build image** + **Flash stick** pair
+is there for reuse (the latter grows a minimal image to fill any larger stick). The finished
+stick carries plain, self-describing labels: partition **`boot`** (the ESP) and **`nixnas`**
+(the encrypted store).
+
 See [`docs/SCOPE.md`](docs/SCOPE.md) (what nixnas is / is not),
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (the decided design), and
 [`docs/REPO-LAYOUT.md`](docs/REPO-LAYOUT.md).
