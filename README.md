@@ -67,6 +67,14 @@ contributed to) by others, not just one machine.
 - **Hands-off**: everything except the one boot passphrase is automated — build, sign,
   roll out, self-update (stage-only, never self-reboot), rollback. *If you have to think
   about it, something has gone wrong.*
+- **Activation is drop-proof**: `nixnas-switch [switch|boot|test]` is the shipped way to
+  activate a configuration on a running box — the real `switch-to-configuration` runs
+  **detached** in a transient systemd unit, so a dropped SSH session can never
+  half-activate the system, while the wrapper follows the journal and reports the unit's
+  real `Result=`. It refuses to overlap a running switch and clears a stale activation
+  lock only when no switch process is alive. Never run activation through a droppable
+  session (field-proven: a connection-carried switch died mid-flight and left a system
+  that rejected every login).
 
 ## What nixnas is — and is not
 

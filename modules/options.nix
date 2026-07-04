@@ -81,6 +81,44 @@ in
           default = null;
           description = "Path (provided by sops, build-machine only) to the Secure Boot `db` signing key. Never on the node.";
         };
+        opromPolicy = mkOption {
+          type = types.enum [ "tpm-eventlog" "microsoft" "none" ];
+          default = "tpm-eventlog";
+          description = ''
+            How `nixnas-enroll-sb` (the operator-run firmware key enrollment, see
+            modules/boot/secureboot.nix) treats Option ROMs.
+
+            OpROMs are firmware blobs that PCI(e) peripherals carry on board — GPU
+            VBIOS/GOP drivers, NIC PXE ROMs, storage-HBA ROMs — and that the UEFI
+            firmware EXECUTES during POST. Once Secure Boot enforces, the firmware
+            verifies OpROM signatures against the enrolled `db`. Vendors sign them
+            (if at all) with Microsoft's 3rd-party UEFI CA — never with YOUR keys —
+            so enrolling ONLY operator keys on a board with signed OpROMs can brick
+            the boot chain: the firmware refuses its own peripherals' ROMs at POST
+            (dead GPU output at best, no POST at worst).
+
+              "tpm-eventlog" (default): operator keys AND the CHECKSUMS of the
+                OpROMs the firmware actually loaded this boot, as recorded in the
+                TPM event log (`sbctl enroll-keys --tpm-eventlog`). This is the
+                no-Microsoft mandate without bricking the boot chain: no vendor CA
+                enters `db`, but exactly the observed OpROM images stay bootable.
+                Caveat: a peripheral firmware update changes the checksum — re-run
+                `nixnas-enroll-sb` (in firmware Setup Mode) after such updates.
+
+              "microsoft": also enroll Microsoft's vendor certificates
+                (`sbctl enroll-keys --microsoft`) — the pragmatic fallback for
+                boards whose OpROMs demand the Microsoft 3rd-party CA. WEAKENS the
+                evil-maid story: anything Microsoft ever signed (shims, older
+                Windows boot managers) boots on this box again.
+
+              "none": operator keys ONLY, strictest posture. `nixnas-enroll-sb`
+                runs a plain `sbctl enroll-keys`, which itself REFUSES when it
+                detects OpROMs in the TPM event log. On such a board the operator
+                must consciously bypass it by hand (`sbctl enroll-keys
+                --yes-this-might-brick-my-machine`) — nixnas never wraps the brick
+                flag. Safe on OpROM-free boards (typical headless/VM boxes).
+          '';
+        };
       };
       remoteUnlock = {
         enable = mkOption {
@@ -206,6 +244,36 @@ in
       # (No cpusched option: the pre-built cachyosKernels variants bake eevdf in; a
       # scheduler knob here would be a silent no-op. Pick via `variant` if the flake
       # ever exposes scheduler variants.)
+    };
+
+    ## ── Network: ONE stack — systemd-networkd from initrd through stage 2 ──
+    network = {
+      dhcp = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          DHCP on every PHYSICAL ethernet link in stage 2, via a networkd catch-all
+          (`99-nixnas-ethernet-dhcp` — the same match shape as nixpkgs' translation of
+          `networking.useDHCP`: Type=ether, Kind=!*, so veths/bridges/bond members from
+          k3s/containers are never grabbed). nixnas runs systemd-networkd as the ONE
+          network stack from initrd to stage 2 (see appliance/base.nix): the initrd
+          already uses networkd for the remote-unlock NIC, and the first real deployment
+          (2026-07-04) showed what the stock dhcpcd stage 2 does instead — two DHCP
+          stacks on one interface, stage-2 dhcpcd failing its first start while the
+          initrd lease kept answering. The catch-all is numbered 99-, so any
+          more-specific `.network` the host declares (lower lexical name) wins
+          per-interface; static-IP or bonded hosts just declare theirs. Set false to
+          declare ALL stage-2 networking yourself.
+
+          MULTI-NIC boxes (field-proven the same day): two DHCP'd NICs on ONE LAN is a
+          lease/ARP war — the DHCP server juggles the host across two MACs between
+          boots, and the kernel answers ARP for either port (SSH froze mid-command).
+          Either BOND the ports (`systemd.network.netdevs` Kind=bond; active-backup
+          needs no switch support) or keep the spare port down (a lower-numbered
+          `.network` matching it with `linkConfig.ActivationPolicy = "down"`), or leave
+          it unplugged. Never leave two DHCP'd ports on the same broadcast domain.
+        '';
+      };
     };
 
     ## ── Crypto: single passphrase = TPM2 PIN (only the stick binds to the TPM) ──

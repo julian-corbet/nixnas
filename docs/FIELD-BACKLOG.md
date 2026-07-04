@@ -34,7 +34,7 @@ On a rescue system this is exactly when an operator needs the box responsive.
 **Fix:** run the preload unit with `IOSchedulingClass=idle` (+ lowest CPU weight);
 warming is a background optimization and must never compete with the operator.
 
-## 4. Activation must survive connection loss (detached switch)
+## 4. Activation must survive connection loss (detached switch) — LANDED (commit pending)
 **Evidence:** a `switch-to-configuration switch` carried over a plain SSH session was
 killed mid-flight when the network flapped — getty had already restarted but user
 activation had not run yet: a HALF-activated system (login rejects everyone). The fix
@@ -42,6 +42,18 @@ in the field was re-running the switch under `systemd-run` (detached, session-im
 **Fix:** ship `nixnas-switch` (a thin wrapper: `systemd-run --unit=… switch-to-
 configuration <mode>` + result reporting) and use it in docs/auto-upgrade/
 rescue-maintain paths; document "never run activation through a droppable session".
+**Landed:** `modules/appliance/switch.nix` ships
+`nixnas-switch [switch|boot|test] [--generation <store-path>]` on both usb and hot
+systems: detached activation via `systemd-run --no-block --collect` (PID-1-owned —
+`--no-block` because a plain oneshot start blocks the client until completion),
+journal follow + honest `Result=` reporting (an ExecStopPost hook persists
+`$SERVICE_RESULT`/`$EXIT_STATUS` — after `--collect` GC, `systemctl show` falsely
+reports success even for a failed run), refusal while any nixnas-switch unit is
+loaded, and stale `/run/nixos/switch-to-configuration.lock` cleanup ONLY when the
+lock is flock'd but no switch process is alive (the exit-11 retry blocker: an
+orphaned inherited fd — deleting the file gives stc a fresh inode). auto-upgrade and
+rescue-maintain already run inside systemd units, i.e. detached by construction; the
+README now says "never run activation through a droppable session".
 
 ## 5. Rescue firmware posture (document, not change)
 **Evidence:** the rescue boots a discrete GPU host with `amdgpu … Fatal error during

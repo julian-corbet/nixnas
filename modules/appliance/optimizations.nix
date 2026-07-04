@@ -33,15 +33,24 @@ in
     };
 
     # ── store.preload: warm the booted closure into the (compress-)cache, so runtime
-    #    reads come from RAM and the slow stick is untouched — copytoram done right. ──
+    #    reads come from RAM and the slow stick is untouched — copytoram done right.
+    #    Field-proven (first real deployment, 2026-07-04): right after boot/switch on a
+    #    ~5 MB/s stick, this closure read starved interactive use — SSH accepted
+    #    connections but shells took >30 s to exec, exactly when an operator needs the
+    #    box responsive. Warming is a background optimization and must NEVER compete
+    #    with the operator: idle IO class + idle CPU policy + Nice=19 (the nice value
+    #    is belt-and-braces — it only matters if the policy ever falls back to
+    #    SCHED_OTHER; under SCHED_IDLE it is moot). ──
     systemd.services.nixnas-store-preload = lib.mkIf cfg.store.preload {
       description = "Warm the booted closure into RAM (compress-)cache";
       wantedBy = [ "multi-user.target" ];
       after = [ "multi-user.target" ];
       serviceConfig = {
         Type = "oneshot";
+        # Strictly-background scheduling: only use disk/CPU when nobody else wants them.
         Nice = 19;
         IOSchedulingClass = "idle";
+        CPUSchedulingPolicy = "idle";
         ExecStart = pkgs.writeShellScript "nixnas-store-preload" ''
           ${pkgs.nix}/bin/nix-store -qR /run/current-system \
             | ${pkgs.findutils}/bin/xargs -r ${pkgs.vmtouch}/bin/vmtouch -t -q

@@ -37,6 +37,47 @@ in
     # a reason to demand more host RAM. (`--build-memory` / build_memory_mib still override.)
     disko.memSize = lib.mkDefault 2048;
 
+    # ── FIELD-BACKLOG #2: the store-unlock wait must be INFINITE ─────────────────────────
+    # Field-proven lockout (first real deployment, 2026-07-04): a slow-POST server (~15
+    # min) plus an unanswered LUKS prompt → after ~90 s the boot fell into emergency mode,
+    # and on a fresh image the emergency shell is LOCKED (no root credential yet) — total
+    # lockout, recovered only via the "press Enter → jobs retry → fresh prompt" trick.
+    #
+    # The REAL mechanism (verified by RUNNING systemd's own generators against these exact
+    # crypttab/fstab shapes, not from docs alone):
+    #   * systemd-cryptsetup@cryptstore.service itself NEVER times out — the crypttab
+    #     generator emits `TimeoutSec=infinity` into the service, and the crypttab
+    #     `timeout=` option (the password-query timeout) already defaults to "wait
+    #     forever". Neither is the knob, neither is the problem.
+    #   * The 90 s killers are DEVICE JOBS. Per systemd.unit(5), a device unit's
+    #     JobRunningTimeoutSec falls back to DefaultDeviceTimeoutSec (90 s) INDEPENDENTLY
+    #     of JobTimeoutSec — so although the cryptsetup generator pins
+    #     `JobTimeoutSec=infinity` onto dev-mapper-cryptstore.device, the RUNNING job
+    #     still dies at 90 s. Two victims:
+    #       1. sysroot-nix.mount waits on dev-mapper-cryptstore.device, which only appears
+    #          once the passphrase is entered. Prompt unanswered > 90 s → device job
+    #          cancelled → mount failed → initrd-fs.target → emergency. (THE field lockout.)
+    #       2. systemd-cryptsetup@cryptstore.service waits on the BACKING partition device
+    #          (by-partlabel) — slow USB enumeration / slow controller init > 90 s kills
+    #          it the same way before any prompt exists.
+    #   * The knob that actually works is `x-systemd.device-timeout=0`:
+    #       - on the /nix MOUNT options, the fstab generator turns it into a
+    #         dev-mapper-cryptstore.device drop-in `JobRunningTimeoutSec=0` (infinite),
+    #         fixing 1 (proven: 50-device-timeout.conf appears in the generator output);
+    #       - on the CRYPTTAB entry, the cryptsetup generator emits the same drop-in for
+    #         the backing device unit, fixing 2.
+    #     Both flow into stage 1 verbatim: crypttabExtraOpts → the initrd /etc/crypttab
+    #     (nixpkgs luksroot.nix), fileSystems options → the initrd sysroot fstab
+    #     (nixpkgs filesystems.nix marks neededForBoot mounts x-initrd.mount and hands
+    #     the real fstab-generator SYSTEMD_SYSROOT_FSTAB).
+    #
+    # Waiting IS the correct behavior: without /nix the box is useless, and a human
+    # arriving minutes later must find the prompt, not a locked emergency shell. (A global
+    # initrd DefaultDeviceTimeoutSec=infinity was considered and rejected — it would also
+    # mask genuinely broken device dependencies everywhere, not just the unlock path.)
+    boot.initrd.luks.devices.cryptstore.crypttabExtraOpts = [ "x-systemd.device-timeout=0" ];
+    fileSystems."/nix".options = [ "x-systemd.device-timeout=0" ];
+
     disko.devices = {
       # Impermanence: root is tmpfs. As a disko `nodev` device it is mounted at the
       # install rootMountPoint (so the installer has a "/") and becomes fileSystems."/".

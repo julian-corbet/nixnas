@@ -67,17 +67,40 @@ in
       # For zfs the dataset MUST be `mountpoint=legacy` (the initrd mounts it with mount(8);
       # a property-managed mountpoint would need `zfsutil` and fights the boot ordering —
       # legacy is the root-on-ZFS convention and the shape nixnas supports).
+      #
+      # FIELD-BACKLOG #2 (see boot/disk.nix for the full proven mechanism): the operator-
+      # key wait must be INFINITE — an unanswered prompt must never 90s-timeout into a
+      # locked emergency shell. For a DEVICE-backed /nix (ext4/btrfs/f2fs on /dev/mapper/…)
+      # the killer is the mount's device job: JobRunningTimeoutSec falls back to
+      # DefaultDeviceTimeoutSec (90 s) while the mapper only appears after the passphrase.
+      # `x-systemd.device-timeout=0` makes the fstab generator pin that job infinite.
+      # A ZFS /nix has NO device unit (the source is a dataset name, not a /dev path) —
+      # there the wait is already owned by the zfs-import service ordered after
+      # cryptsetup.target below, so the option would be an inert no-op and is skipped.
       fileSystems."/nix" = {
         device = hot.device;
         fsType = hot.fsType;
         neededForBoot = true;
+      }
+      # null-guard FIRST: forcing hot.device here would preempt the module's curated
+      # "requires nixnas.store.hot.device" assertion with a raw coercion error.
+      // lib.optionalAttrs (hot.device != null && lib.hasPrefix "/dev/" hot.device) {
+        options = [ "x-systemd.device-timeout=0" ];
       };
 
       # Open the hot store's LUKS members in the INITRD with the operator's passphrase —
       # interactive, no TPM enrollment here. systemd-initrd + initrd-SSH surface the prompt;
       # the operator hands the key to the password agent. Each opens at /dev/mapper/<name>.
+      # x-systemd.device-timeout=0: the OTHER 90 s trap (boot/disk.nix) — each
+      # systemd-cryptsetup@<name>.service waits on its BACKING device unit, whose job dies
+      # at DefaultDeviceTimeoutSec (90 s) on slow-POST controllers / slow disk spin-up.
+      # The crypttab option pins that backing-device job infinite (the passphrase QUERY
+      # itself never times out — the generated service carries TimeoutSec=infinity).
       boot.initrd.luks.devices = lib.mapAttrs
-        (_: dev: { device = dev; })
+        (_: dev: {
+          device = dev;
+          crypttabExtraOpts = [ "x-systemd.device-timeout=0" ];
+        })
         hot.unlock;
 
       # Serialise the member unlocks (same pattern as storage/connect.nix stage-2): the
