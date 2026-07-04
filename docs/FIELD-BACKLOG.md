@@ -104,3 +104,24 @@ graphics is the console) but it LOOKS alarming on the console and cost triage ti
 **Fix:** docs (HOT-MODE/README): the rescue is deliberately firmware-lean; GPU errors
 on its console are expected on dGPU hosts; the MAIN host config carries
 `hardware.enableRedistributableFirmware`.
+
+## 6. install-hot needs nix-command enabled (field-hit 2026-07-04)
+**Evidence:** `nixnas-install-hot` runs `nix copy --to "$target"` (a nix-command call), but the
+rescue's nix.conf did not have `experimental-features = nix-command` — so the install aborted
+`error: experimental Nix feature 'nix-command' is disabled`. Worked around with
+`NIX_CONFIG='experimental-features = nix-command flakes' nixnas-install-hot …`.
+**Fix:** either the rescue (usb-mode) nix config enables `nix-command` by default (it ships
+`nixnas-install-hot`, which requires it), or install-hot invokes `nix copy` with
+`--extra-experimental-features nix-command` itself. The latter is more robust (self-contained).
+
+## 7. install-hot must place the console auth hash on the hot store (field-hit 2026-07-04)
+**Evidence:** the MAIN's install warned `password file '/nix/nixnas/auth/passphrase.hash' does
+not exist` — the auth module points root/admin at that runtime file (modules/appliance/auth.nix),
+but only the TUI image build writes it (usb images); install-hot never seeds it onto the hot
+store, so the MAIN's CONSOLE login is fail-closed locked (SSH-key still works). Worked around by
+writing the yescrypt hash to `hot/system/nix` `…/nixnas/auth/passphrase.hash` (0600) by hand
+before the reboot.
+**Fix:** install-hot should seed the auth hash onto the hot store the same way it seeds the SB
+PKI (step 3) — either copy the operator-provided hash, or (cleaner) let the MAIN config carry an
+inline `hashedPassword` for the hot mode where the TUI file mechanism doesn't apply. Reconcile
+the auth module (hashedPasswordFile) vs an inline hashedPassword so hot systems aren't locked.
