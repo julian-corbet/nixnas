@@ -107,12 +107,40 @@ in
         imageSizeGiB = mkOption {
           type = types.ints.positive;
           default = 8;
-          description = "Total image/stick size in GiB. The ESP takes `espSizeMiB`; the f2fs store takes the rest.";
+          description = "Total image/stick size in GiB. The ESP takes `espSizeMiB`; the f2fs store takes the rest. Overridden byte-precisely by `imageSize` when that is set.";
+        };
+        imageSize = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "8053063680";
+          description = ''
+            BYTE-PRECISE total image size, overriding the whole-GiB `imageSizeGiB` when set. A raw
+            byte count (or any qemu-img size string) handed to disko's `disk.main.imageSize`, so the
+            `.raw` is EXACTLY this many bytes and its f2fs `100%` store fills to the last usable
+            sector. The TUI's "Build & flash a stick" path sets this to the target stick's exact
+            `blockdev --getsize64`, so the image fits the device to the byte (no whole-GiB stranding,
+            no grow-to-fill needed). Null (the default) = size from `imageSizeGiB`.
+          '';
         };
         espSizeMiB = mkOption {
           type = types.ints.positive;
           default = 1024;
           description = "FAT ESP size: lanzaboote-signed systemd-boot + one signed UKI per kept generation (~8 per GiB).";
+        };
+        growToFill = mkOption {
+          type = types.bool;
+          default = true;
+          description = ''
+            First-boot completion of a "grow-to-fill" flash (usb mode only). When the TUI flashes a
+            smaller/generic `.raw` onto a bigger stick it extends the LAST GPT partition (the LUKS
+            store) to the true device end at flash time — the secret-free part — but leaves the f2fs
+            filesystem at its image size, because growing it needs the store passphrase. With this on
+            (the default), a first-boot oneshot (modules/boot/grow-store.nix) resizes the f2fs ONLINE
+            to fill the now-larger partition, so a single minimal image reflashes onto any stick and
+            uses all of it. Idempotent: a no-op on an exact-fit image or on later boots. The LUKS
+            mapping needs no resize — its dynamic segment spans the grown partition on the fresh
+            stage-1 open. Turn off only to keep the store deliberately at the image size.
+          '';
         };
         luksPassphraseFile = mkOption {
           type = types.nullOr types.str;

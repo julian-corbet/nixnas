@@ -32,8 +32,23 @@ pub struct Config {
     /// (docs/HOT-MODE.md) flashes its RESCUE system's image instead: either keep the
     /// flake's `imageScript` pointing at the rescue host, or expose a second attribute
     /// (e.g. `rescueImageScript`) and name it here. The hot MAIN is never flashed.
+    ///
+    /// This is the FIXED-SIZE fallback path: it builds whatever `imageSizeGiB` the host
+    /// bakes in. Set `host_attr` (below) to unlock the SIZED build paths instead.
     #[serde(default = "default_image_attr")]
     pub image_attr: String,
+
+    /// The `nixosConfigurations.<name>` attribute of the host whose stick image to build
+    /// (e.g. "nixnas-rescue"). Setting this enables the DEVICE-SIZED build paths: because
+    /// disko bakes `disk.imageSize` into `qemu-img create` and exposes no runtime size flag,
+    /// the TUI re-evaluates this config with `extendModules` overriding
+    /// `nixnas.boot.usb.imageSizeGiB`, so the built `.raw` is sized to the target — exact-fit
+    /// to a picked stick ("Build & flash a stick"), or a minimal reusable size ("Build image").
+    /// Its image script is `nixosConfigurations.<host_attr>.config.system.build.diskoImagesScript`.
+    /// Distinct from `image_attr`, which names a flake OUTPUT. None (the default) → no sizing:
+    /// every build falls back to the fixed-size `.#<image_attr>` output above.
+    #[serde(default)]
+    pub host_attr: Option<String>,
 }
 
 fn default_flake_dir() -> String {
@@ -51,6 +66,7 @@ impl Default for Config {
             sb_keys_sops: None,
             build_memory_mib: None,
             image_attr: default_image_attr(),
+            host_attr: None,
         }
     }
 }
@@ -95,7 +111,7 @@ impl Config {
             .unwrap_or_default();
         // `None` options serialise to NO key at all — remove them explicitly, or the
         // stale on-disk value would silently survive a "clear this field" edit.
-        for key in ["sb_keys_sops", "build_memory_mib"] {
+        for key in ["sb_keys_sops", "build_memory_mib", "host_attr"] {
             if !own.contains_key(key) {
                 table.remove(key);
             }

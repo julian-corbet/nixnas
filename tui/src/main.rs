@@ -37,6 +37,8 @@ use std::time::Duration;
 pub enum Screen {
     Home,
     Configure,
+    /// Pathway A — the turnkey chained build+flash sized to one stick.
+    BuildFlash,
     Build,
     Flash,
     /// Both HOME verify entries (image / install) — the mode lives on the state.
@@ -50,6 +52,8 @@ pub struct App {
     pub home: ui::home::HomeState,
     /// Present only while the CONFIGURE screen is open (fresh copy of the config).
     pub configure: Option<ui::configure::ConfigureState>,
+    /// Present from entering the BUILD & FLASH pathway until it is backed out of (Pathway A).
+    pub buildflash: Option<ui::buildflash::BuildFlowScreen>,
     /// Present from entering BUILD until it is backed out of after completion.
     pub build: Option<ui::build::BuildScreen>,
     /// Present from entering FLASH until it is backed out of after completion.
@@ -74,6 +78,7 @@ impl App {
             screen: Screen::Home,
             home: ui::home::HomeState::default(),
             configure: None,
+            buildflash: None,
             build: None,
             flash: None,
             verify: None,
@@ -87,7 +92,8 @@ impl App {
     /// refuse Esc mid-run (backing out of a half-written stick helps nobody);
     /// Ctrl+C stays available as the emergency exit.
     pub fn op_running(&self) -> bool {
-        self.build.as_ref().is_some_and(|b| b.is_running())
+        self.buildflash.as_ref().is_some_and(|b| b.is_running())
+            || self.build.as_ref().is_some_and(|b| b.is_running())
             || self.flash.as_ref().is_some_and(|f| f.is_running())
             || self.verify.as_ref().is_some_and(|v| v.is_running())
     }
@@ -142,6 +148,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, mut app: App)
         // Pull worker events first so every frame reflects the newest progress.
         // This drain is also the ONE tee point into the session log — the
         // workers stay terminal- and file-agnostic (see logging.rs).
+        if let Some(bf) = app.buildflash.as_mut() {
+            bf.drain_events(&mut app.log);
+        }
         if let Some(b) = app.build.as_mut() {
             b.drain_events(&mut app.log);
         }
@@ -235,6 +244,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     match app.screen {
         Screen::Home => ui::home::on_key(app, key),
         Screen::Configure => ui::configure::on_key(app, key),
+        Screen::BuildFlash => ui::buildflash::on_key(app, key),
         Screen::Build => ui::build::on_key(app, key),
         Screen::Flash => ui::flash::on_key(app, key),
         Screen::Verify => ui::verify::on_key(app, key),

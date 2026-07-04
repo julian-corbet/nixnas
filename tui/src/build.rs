@@ -27,6 +27,74 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 
+/// Smallest stick "Build & flash a stick" (Pathway A) will size an image to. Below this a
+/// device can't hold the ESP + a bootable closure + headroom. Not a rounding floor (Pathway A
+/// is byte-EXACT), just the too-small refusal gate.
+pub const MIN_IMAGE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Size of the MINIMAL reusable image ("Build image", Pathway B): the smallest that comfortably
+/// holds the ESP (≤2 GiB) + a lean appliance closure (~2 GiB compressed) across ~2 kept
+/// generations. Built ONCE and reflashed to any stick — grow-to-fill (`boot.usb.growToFill`)
+/// then expands the store to the real device. A documented safe constant rather than a closure
+/// eval (the TUI can't cheaply read the host's closure/`espSizeMiB`).
+pub const MINIMAL_IMAGE_GIB: u32 = 6;
+
+/// How the build sizes the disko image. disko bakes `disk.imageSize` into `qemu-img create` and
+/// has no runtime size flag, so a non-`Fixed` size is applied by re-evaluating the host
+/// (`host_attr`) with `extendModules` overriding the matching `nixnas.boot.usb.*` option.
+#[derive(Debug, Clone, Copy)]
+pub enum SizeOverride {
+    /// No sizing: the fixed `.#<image_attr>` flake output (used when `host_attr` is None).
+    Fixed,
+    /// Minimal reusable image — override `imageSizeGiB` (whole GiB). Pathway B "Build image".
+    Gib(u32),
+    /// Exact device fit — override `imageSize` (byte-precise). Pathway A "Build & flash a stick".
+    Bytes(u64),
+}
+
+/// The target device's EXACT byte size: `blockdev --getsize64` (authoritative for block
+/// devices), falling back to `lsblk -b` when blockdev is unavailable. Used to size a Pathway-A
+/// image to the byte and to assert the built `.raw` matches the device exactly.
+pub fn device_bytes(name: &str) -> Option<u64> {
+    let dev = format!("/dev/{name}");
+    let via_blockdev = Command::new("blockdev")
+        .args(["--getsize64", &dev])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        });
+    via_blockdev.or_else(|| {
+        Command::new("lsblk")
+            .args(["-b", "-dno", "SIZE", &dev])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })
+    })
+}
+
+/// Refuse a target that is simply too small to hold a bootable nixnas (Pathway A gate).
+pub fn check_target_bytes(dev_bytes: u64) -> Result<(), String> {
+    if dev_bytes < MIN_IMAGE_BYTES {
+        return Err(format!(
+            "stick too small: needs ≥ {}, this device is only {}",
+            crate::flash::human_size(MIN_IMAGE_BYTES),
+            crate::flash::human_size(dev_bytes)
+        ));
+    }
+    Ok(())
+}
+
 /// The step checklist as the UI presents it. Indices are the protocol between the
 /// pipeline and the BUILD screen — keep them in sync with `run_pipeline`.
 pub const STEP_NAMES: [&str; 5] = [
@@ -153,10 +221,15 @@ fn run_streamed(
 
 /// Spawn the build pipeline on a worker thread. The passphrase is collected by the
 /// UI (masked modal, entered twice) BEFORE spawning, so the worker never prompts.
-pub fn spawn_build(config_path: PathBuf, cfg: Config, passphrase: String) -> Receiver<BuildEvent> {
+pub fn spawn_build(
+    config_path: PathBuf,
+    cfg: Config,
+    passphrase: String,
+    size: SizeOverride,
+) -> Receiver<BuildEvent> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = run_pipeline(&config_path, &cfg, passphrase, &tx);
+        let result = run_pipeline(&config_path, &cfg, passphrase, size, &tx);
         // Render the anyhow chain here — the UI side only displays strings.
         let _ = tx.send(BuildEvent::Done(result.map_err(|e| format!("{e:#}"))));
     });
@@ -169,6 +242,7 @@ fn run_pipeline(
     config_path: &Path,
     cfg: &Config,
     passphrase: String,
+    size: SizeOverride,
     tx: &Sender<BuildEvent>,
 ) -> Result<PathBuf> {
     let base = config_dir(config_path);
@@ -182,26 +256,70 @@ fn run_pipeline(
         let _ = tx.send(BuildEvent::Log(s));
     };
 
-    // 1. Build the disko image script (pure eval — no secrets involved). WHICH image is
-    //    operator-chosen (`image_attr` in nixnas.config): the usb appliance by default,
-    //    the RESCUE image for a hot-mode setup (the hot MAIN is never flashed — HOT-MODE.md).
-    let image_ref = format!(".#{}", cfg.image_attr);
+    // 1. Build the disko image script (pure eval — no secrets involved). Two shapes:
+    //    * SIZED (host_attr set): disko bakes `disk.imageSize` into `qemu-img create` and has no
+    //      runtime size flag, so re-evaluate the host with `extendModules` overriding the relevant
+    //      `nixnas.boot.usb.*` size option. `lib.mkForce` so the override wins even when the host
+    //      pins the size itself (e.g. the matrix `stick-*` examples). Needs `--impure` for the
+    //      local `builtins.getFlake`.
+    //    * FIXED (no host_attr, or SizeOverride::Fixed): the operator-chosen `.#<image_attr>`
+    //      output (usb appliance by default, or a hot-mode RESCUE image — the hot MAIN is never
+    //      flashed, HOT-MODE.md). Backward compatible.
     step(0, StepState::Running);
-    log(format!(">> building the stick image from {image_ref}"));
     let mut nix = Command::new("nix");
-    nix.args([
-        "build",
-        "--print-build-logs",
-        "--accept-flake-config",
-        &image_ref,
-        "--out-link",
-    ])
-    .arg(&script_link)
-    .current_dir(&flake_dir);
+    // A sizing override only applies when we have a host attribute to extend; otherwise fall back
+    // to the fixed output regardless of what was requested (the UI won't ask, but be safe).
+    let override_expr = match (size, cfg.host_attr.as_deref()) {
+        (SizeOverride::Gib(n), Some(host)) => Some((
+            host.to_string(),
+            format!("nixnas.boot.usb.imageSizeGiB = lib.mkForce {n};"),
+            format!("minimal reusable image: {n} GiB"),
+        )),
+        (SizeOverride::Bytes(b), Some(host)) => Some((
+            host.to_string(),
+            format!("nixnas.boot.usb.imageSize = lib.mkForce \"{b}\";"),
+            format!("exact-fit image: {b} bytes"),
+        )),
+        _ => None,
+    };
+    if let Some((host, assign, what)) = override_expr {
+        // The override module is a FUNCTION so `lib` is in scope for mkForce.
+        let expr = format!(
+            "let f = builtins.getFlake (toString ./.); in \
+             (f.nixosConfigurations.{host}.extendModules {{ modules = [ ({{ lib, ... }}: {{ {assign} }}) ]; }})\
+             .config.system.build.diskoImagesScript"
+        );
+        log(format!(
+            ">> building the {what} (host {host}, size-overridden via extendModules)"
+        ));
+        nix.args([
+            "build",
+            "--impure",
+            "--print-build-logs",
+            "--accept-flake-config",
+            "--out-link",
+        ])
+        .arg(&script_link)
+        .arg("--expr")
+        .arg(&expr)
+        .current_dir(&flake_dir);
+    } else {
+        let image_ref = format!(".#{}", cfg.image_attr);
+        log(format!(">> building the stick image from {image_ref}"));
+        nix.args([
+            "build",
+            "--print-build-logs",
+            "--accept-flake-config",
+            &image_ref,
+            "--out-link",
+        ])
+        .arg(&script_link)
+        .current_dir(&flake_dir);
+    }
     let status = run_streamed(nix, tx, "`nix build` (is Nix installed locally?)")?;
     if !status.success() {
         step(0, StepState::Fail);
-        bail!("nix build {image_ref} failed");
+        bail!("the image build (nix build) failed");
     }
     step(0, StepState::Ok);
 

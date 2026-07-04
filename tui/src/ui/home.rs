@@ -22,18 +22,22 @@ const BANNER: [&str; 6] = [
     "╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝",
 ];
 
-const MENU: [(&str, &str); 6] = [
+const MENU: [(&str, &str); 7] = [
     (
         "Configure",
-        "edit nixnas.config (flake location, Secure Boot PKI, build knobs)",
+        "edit nixnas.config (flake location, host_attr, Secure Boot PKI, build knobs)",
+    ),
+    (
+        "Build & flash a stick",
+        "the turnkey path: pick a stick, build an exact-fit image, flash it — one flow",
     ),
     (
         "Build image",
-        "build the personalised .raw locally via Nix + disko",
+        "build a minimal reusable .raw (reflash to any stick with grow-to-fill)",
     ),
     (
         "Flash stick",
-        "write the built image to a USB stick (typed confirmation)",
+        "write an existing .raw to a stick, growing it to fill (typed confirmation)",
     ),
     (
         "Verify image",
@@ -96,14 +100,21 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 app.screen = Screen::Configure;
             }
             1 => {
+                // Pathway A. Re-entering while it runs must show THAT flow, not restart it.
+                if app.buildflash.as_ref().is_none_or(|b| !b.is_running()) {
+                    app.buildflash = Some(ui::buildflash::BuildFlowScreen::new(&app.cfg));
+                }
+                app.screen = Screen::BuildFlash;
+            }
+            2 => {
                 // Re-entering while a build runs must show THAT build, not start
                 // a second one; a finished screen is replaced by a fresh prompt.
                 if app.build.as_ref().is_none_or(|b| !b.is_running()) {
-                    app.build = Some(ui::build::BuildScreen::new());
+                    app.build = Some(ui::build::BuildScreen::new(&app.cfg));
                 }
                 app.screen = Screen::Build;
             }
-            2 => {
+            3 => {
                 if app.flash.as_ref().is_none_or(|f| !f.is_running()) {
                     app.flash = Some(ui::flash::FlashScreen::new(&app.config_path));
                 }
@@ -112,7 +123,7 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
             // Both verify entries share one screen slot: a RUNNING verification
             // is shown as-is whichever entry was chosen (never orphan a worker);
             // a finished one is replaced by the freshly requested mode.
-            3 => {
+            4 => {
                 if app.verify.as_ref().is_none_or(|v| !v.is_running()) {
                     let mut screen = ui::verify::VerifyScreen::new_image(&app.config_path);
                     // The image verify spawns its worker in the constructor —
@@ -125,7 +136,7 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 }
                 app.screen = Screen::Verify;
             }
-            4 => {
+            5 => {
                 if app.verify.as_ref().is_none_or(|v| !v.is_running()) {
                     app.verify = Some(ui::verify::VerifyScreen::new_install(&app.config_path));
                 }
@@ -271,10 +282,24 @@ fn status_lines(app: &App) -> Vec<Line<'static>> {
         ),
     ]));
 
-    lines.push(Line::from(vec![
-        label("Image attr"),
-        value(format!(".#{}", app.cfg.image_attr)),
-    ]));
+    match &app.cfg.host_attr {
+        Some(h) => lines.push(Line::from(vec![
+            label("Build sizing"),
+            value(format!(
+                "host {h} — device-sized builds (exact-fit / minimal)"
+            )),
+        ])),
+        None => lines.push(Line::from(vec![
+            label("Build sizing"),
+            Span::styled(
+                format!(
+                    "fixed .#{} — set host_attr for sized builds",
+                    app.cfg.image_attr
+                ),
+                Style::default().fg(DIM),
+            ),
+        ])),
+    }
 
     match &app.cfg.sb_keys_sops {
         Some(p) => {

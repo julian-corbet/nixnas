@@ -3,7 +3,8 @@
 //! entered twice) so the operator can walk away during the long nix build; the
 //! checklist still shows the passphrase step at its true position in the pipeline.
 
-use crate::build::{BuildEvent, StepState, STEP_NAMES};
+use crate::build::{BuildEvent, SizeOverride, StepState, MINIMAL_IMAGE_GIB, STEP_NAMES};
+use crate::config::Config;
 use crate::ui::{self, ACCENT, DIM, ERR, OK, WARN};
 use crate::{App, Screen};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -49,10 +50,31 @@ pub struct BuildScreen {
     /// THIS build's session-log file (set when the pipeline starts), so the
     /// panel/footer never show a stale path from an earlier action.
     session_log: Option<PathBuf>,
+    /// How this build sizes the image (Pathway B: minimal-reusable when `host_attr` is set,
+    /// else the fixed `.#<image_attr>` output). Handed to the worker at spawn.
+    size: SizeOverride,
+    /// The steps-panel title — states which build this is (minimal N GiB / fixed).
+    title: String,
 }
 
 impl BuildScreen {
-    pub fn new() -> Self {
+    /// Pathway B "Build image": a standalone build kept at the stable image path. With `host_attr`
+    /// set it builds a MINIMAL reusable image (reflash to any stick, grow-to-fill expands it);
+    /// otherwise the fixed-size `.#<image_attr>` output (backward compatible).
+    pub fn new(cfg: &Config) -> Self {
+        let (size, title) = if cfg.host_attr.is_some() {
+            (
+                SizeOverride::Gib(MINIMAL_IMAGE_GIB),
+                format!(
+                    "Build image — minimal reusable {MINIMAL_IMAGE_GIB} GiB (flash to any stick, grows to fill)"
+                ),
+            )
+        } else {
+            (
+                SizeOverride::Fixed,
+                format!("Build image — fixed .#{}", cfg.image_attr),
+            )
+        };
         BuildScreen {
             phase: Phase::PassFirst {
                 buf: String::new(),
@@ -65,6 +87,8 @@ impl BuildScreen {
             rx: None,
             message: None,
             session_log: None,
+            size,
+            title,
         }
     }
 
@@ -168,6 +192,7 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                         app.config_path.clone(),
                         app.cfg.clone(),
                         first,
+                        st.size,
                     ));
                 } else {
                     st.phase = Phase::PassFirst {
@@ -229,52 +254,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Constraint::Length(1),
     ])
     .areas(f.area());
-    let [steps_area, log_area] =
-        Layout::horizontal([Constraint::Length(44), Constraint::Min(20)]).areas(main_area);
-
-    // Step checklist.
-    let items: Vec<ListItem> = STEP_NAMES
-        .iter()
-        .zip(st.steps.iter())
-        .map(|(name, state)| {
-            let (mark, style) = match state {
-                StepState::Pending => ("  ○ ", Style::default().fg(DIM)),
-                StepState::Running => (
-                    "  ▶ ",
-                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                ),
-                StepState::Ok => ("  ✓ ", Style::default().fg(OK)),
-                StepState::Skipped => ("  ‒ ", Style::default().fg(DIM)),
-                StepState::Fail => (
-                    "  ✗ ",
-                    Style::default().fg(ERR).add_modifier(Modifier::BOLD),
-                ),
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(mark, style),
-                Span::styled(*name, style),
-            ]))
-        })
-        .collect();
-    f.render_widget(List::new(items).block(ui::panel("Build image")), steps_area);
-
-    // Log pane: render only the visible window (the log can be 10k lines).
-    let log_block = ui::panel(if st.follow { "Log (following)" } else { "Log" });
-    let visible_height = log_block.inner(log_area).height as usize;
-    let max_scroll = st.log.len().saturating_sub(visible_height);
-    if st.follow {
-        st.scroll = max_scroll;
-    } else {
-        st.scroll = st.scroll.min(max_scroll);
-    }
-    let window: Vec<Line> = st
-        .log
-        .iter()
-        .skip(st.scroll)
-        .take(visible_height)
-        .map(|l| Line::from(l.as_str()))
-        .collect();
-    f.render_widget(Paragraph::new(window).block(log_block), log_area);
+    draw_build_body(
+        f,
+        main_area,
+        &st.title,
+        &st.steps,
+        &st.log,
+        &mut st.scroll,
+        st.follow,
+    );
 
     if let Some(msg) = &st.message {
         let ok = matches!(st.phase, Phase::Done { ok: true });
@@ -337,7 +325,72 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_pass_modal(f: &mut Frame, title: &str, buf: &str, error: Option<&str>, confirming: bool) {
+/// Crate-visible: the two-pane build body (step checklist beside a scrolling log window).
+/// Reused by the "Build & flash a stick" pathway during its build phase. Clamps `scroll` to the
+/// tail when `follow` is on.
+pub(crate) fn draw_build_body(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    steps_title: &str,
+    steps: &[StepState],
+    log: &[String],
+    scroll: &mut usize,
+    follow: bool,
+) {
+    let [steps_area, log_area] =
+        Layout::horizontal([Constraint::Length(44), Constraint::Min(20)]).areas(area);
+
+    // Step checklist.
+    let items: Vec<ListItem> = STEP_NAMES
+        .iter()
+        .zip(steps.iter())
+        .map(|(name, state)| {
+            let (mark, style) = match state {
+                StepState::Pending => ("  ○ ", Style::default().fg(DIM)),
+                StepState::Running => (
+                    "  ▶ ",
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                StepState::Ok => ("  ✓ ", Style::default().fg(OK)),
+                StepState::Skipped => ("  ‒ ", Style::default().fg(DIM)),
+                StepState::Fail => (
+                    "  ✗ ",
+                    Style::default().fg(ERR).add_modifier(Modifier::BOLD),
+                ),
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(mark, style),
+                Span::styled(*name, style),
+            ]))
+        })
+        .collect();
+    f.render_widget(List::new(items).block(ui::panel(steps_title)), steps_area);
+
+    // Log pane: render only the visible window (the log can be 10k lines).
+    let log_block = ui::panel(if follow { "Log (following)" } else { "Log" });
+    let visible_height = log_block.inner(log_area).height as usize;
+    let max_scroll = log.len().saturating_sub(visible_height);
+    if follow {
+        *scroll = max_scroll;
+    } else {
+        *scroll = (*scroll).min(max_scroll);
+    }
+    let window: Vec<Line> = log
+        .iter()
+        .skip(*scroll)
+        .take(visible_height)
+        .map(|l| Line::from(l.as_str()))
+        .collect();
+    f.render_widget(Paragraph::new(window).block(log_block), log_area);
+}
+
+pub(crate) fn draw_pass_modal(
+    f: &mut Frame,
+    title: &str,
+    buf: &str,
+    error: Option<&str>,
+    confirming: bool,
+) {
     let area = ui::centered_rect(f.area(), 62, 7);
     let inner = ui::modal(f, area, title);
     let [text_area, input_area, error_area] = Layout::vertical([

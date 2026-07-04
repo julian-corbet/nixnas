@@ -49,7 +49,12 @@ in
         type = "disk";
         device = cfg.boot.usb.device;
         imageName = "nixnas";
-        imageSize = "${toString cfg.boot.usb.imageSizeGiB}G";
+        # Byte-precise `imageSize` (from the TUI's exact-fit build) wins over the whole-GiB value;
+        # a raw byte count is what qemu-img create wants for an exactly device-sized `.raw`.
+        imageSize =
+          if cfg.boot.usb.imageSize != null
+          then cfg.boot.usb.imageSize
+          else "${toString cfg.boot.usb.imageSizeGiB}G";
         content = {
           type = "gpt";
           partitions = {

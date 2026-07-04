@@ -3,6 +3,7 @@
 //! cyan-accented frame so the tool reads as ONE appliance, not four dialogs.
 
 pub mod build;
+pub mod buildflash;
 pub mod configure;
 pub mod flash;
 pub mod home;
@@ -26,6 +27,7 @@ pub fn draw(f: &mut Frame, app: &mut crate::App) {
     match app.screen {
         crate::Screen::Home => home::draw(f, app),
         crate::Screen::Configure => configure::draw(f, app),
+        crate::Screen::BuildFlash => buildflash::draw(f, app),
         crate::Screen::Build => build::draw(f, app),
         crate::Screen::Flash => flash::draw(f, app),
         crate::Screen::Verify => verify::draw(f, app),

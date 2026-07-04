@@ -34,7 +34,7 @@ struct FieldMeta {
     help: &'static str,
 }
 
-const FIELDS: [FieldMeta; 4] = [
+const FIELDS: [FieldMeta; 5] = [
     FieldMeta {
         label: "flake_dir",
         kind: FieldKind::DirPath,
@@ -57,8 +57,18 @@ const FIELDS: [FieldMeta; 4] = [
         kind: FieldKind::Text,
         optional: false,
         help: "The flake attribute that builds the STICK image script (`nix build \
-               .#<attr>`). Default `imageScript`. A hot-mode setup names its RESCUE \
-               image attribute here — the hot MAIN is never flashed.",
+               .#<attr>`) — the FIXED-SIZE fallback. Default `imageScript`. A hot-mode \
+               setup names its RESCUE image attribute here — the hot MAIN is never flashed.",
+    },
+    FieldMeta {
+        label: "host_attr",
+        kind: FieldKind::Text,
+        optional: true,
+        help: "The `nixosConfigurations.<name>` host to build (e.g. `nixnas-rescue`). Set \
+               this to unlock the DEVICE-SIZED builds: the TUI re-evaluates the host with \
+               extendModules overriding the image size, so 'Build & flash a stick' fits the \
+               image to the picked stick exactly and 'Build image' makes a minimal reusable \
+               .raw. Empty = fixed-size builds from image_attr above.",
     },
     FieldMeta {
         label: "build_memory_mib",
@@ -70,7 +80,7 @@ const FIELDS: [FieldMeta; 4] = [
 
 pub struct ConfigureState {
     /// Field values as edit buffers; empty string = None for optional fields.
-    values: [String; 4],
+    values: [String; 5],
     selected: usize,
     edit: Option<EditState>,
     browser: Option<Browser>,
@@ -92,6 +102,7 @@ impl ConfigureState {
                 cfg.flake_dir.clone(),
                 cfg.sb_keys_sops.clone().unwrap_or_default(),
                 cfg.image_attr.clone(),
+                cfg.host_attr.clone().unwrap_or_default(),
                 cfg.build_memory_mib
                     .map(|m| m.to_string())
                     .unwrap_or_default(),
@@ -107,7 +118,7 @@ impl ConfigureState {
 
     /// Validate the buffers into a Config, or say what is wrong.
     fn to_config(&self) -> Result<Config, String> {
-        let mem = self.values[3].trim();
+        let mem = self.values[4].trim();
         let build_memory_mib =
             if mem.is_empty() {
                 None
@@ -118,6 +129,7 @@ impl ConfigureState {
             };
         let flake_dir = self.values[0].trim();
         let image_attr = self.values[2].trim();
+        let host_attr = self.values[3].trim();
         Ok(Config {
             // Empty inputs fall back to the documented defaults rather than
             // serialising unusable empty strings.
@@ -138,6 +150,11 @@ impl ConfigureState {
                 "imageScript".to_string()
             } else {
                 image_attr.to_string()
+            },
+            host_attr: if host_attr.is_empty() {
+                None
+            } else {
+                Some(host_attr.to_string())
             },
             build_memory_mib,
         })

@@ -197,10 +197,11 @@ pub fn spawn_flash(
     dev: PathBuf,
     dev_size: Option<u64>,
     backup_to: Option<PathBuf>,
+    grow: bool,
 ) -> Receiver<FlashEvent> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = run_flash(&image, &dev, dev_size, backup_to.as_deref(), &tx);
+        let result = run_flash(&image, &dev, dev_size, backup_to.as_deref(), grow, &tx);
         let _ = tx.send(FlashEvent::Done(result.map_err(|e| format!("{e:#}"))));
     });
     rx
@@ -211,6 +212,7 @@ fn run_flash(
     dev: &Path,
     dev_size: Option<u64>,
     backup_to: Option<&Path>,
+    grow: bool,
     tx: &Sender<FlashEvent>,
 ) -> Result<String> {
     // Safety: back the current stick up first (the UI defaults this to ON), so a
@@ -256,10 +258,143 @@ fn run_flash(
             dev.display()
         );
     }
-    Ok(format!(
-        "{} is now a nixnas stick (header verified)",
-        dev.display()
-    ))
+    let mut summary = format!("{} is now a nixnas stick (header verified)", dev.display());
+
+    // Grow-to-fill (Pathway B: a smaller/generic image on a bigger stick). Done AFTER the header
+    // verify so that check stays a byte-faithful proof of the write; only the safe, secret-free
+    // part happens here (extend the last GPT partition to the device end). The LUKS mapping needs
+    // no resize — its dynamic segment spans the grown partition on the box's fresh unlock — and the
+    // f2fs grows on first boot (boot.usb.growToFill). A grow failure never unmakes a verified
+    // stick: it stays valid, just not filling the whole device.
+    if grow {
+        let _ = tx.send(FlashEvent::Phase(
+            "Growing the last partition to fill the device",
+        ));
+        match grow_last_partition(dev) {
+            Ok(()) => summary.push_str(
+                " · partition grown to fill the device (the store resizes on first boot)",
+            ),
+            Err(e) => summary.push_str(&format!(
+                " · WARNING: could not grow the partition ({e:#}) — the stick is valid but won't \
+                 fill the whole device"
+            )),
+        }
+    }
+    Ok(summary)
+}
+
+/// Extend the LAST GPT partition (the LUKS store) to the true device end, preserving its identity
+/// exactly (start, type GUID, unique GUID, name). Two deterministic `sgdisk` steps: relocate the
+/// backup GPT header to the real device end (after a smaller image left it mid-disk), then
+/// delete+recreate the last partition at its original start with the largest possible end.
+fn grow_last_partition(dev: &Path) -> Result<()> {
+    let n = last_partition_number(dev)?;
+    let info = partition_info(dev, n)?;
+    // 1. Move the backup GPT header (and the header's usable-area/alt-LBA) to the real device end,
+    //    so step 2's "largest end" (0) computes against the whole device rather than the image.
+    run_sgdisk(dev, &["--move-second-header".to_string()])?;
+    // 2. Recreate #n at the same start, extended to the largest end, identity fully preserved.
+    run_sgdisk(
+        dev,
+        &[
+            format!("--delete={n}"),
+            format!("--new={n}:{}:0", info.first_sector),
+            format!("--typecode={n}:{}", info.type_guid),
+            format!("--partition-guid={n}:{}", info.unique_guid),
+            format!("--change-name={n}:{}", info.name),
+        ],
+    )
+}
+
+/// The details of one GPT partition we must preserve across a delete+recreate.
+struct PartInfo {
+    first_sector: u64,
+    type_guid: String,
+    unique_guid: String,
+    name: String,
+}
+
+/// Run `sgdisk` with the given args against `dev`, surfacing a helpful error if sgdisk is missing.
+fn run_sgdisk(dev: &Path, args: &[String]) -> Result<()> {
+    let out = Command::new("sgdisk")
+        .args(args)
+        .arg(dev)
+        .output()
+        .context("running sgdisk (is gptfdisk installed?)")?;
+    if !out.status.success() {
+        bail!(
+            "sgdisk {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// The highest partition number on `dev` — the LAST partition (the store), from `sgdisk -p`.
+fn last_partition_number(dev: &Path) -> Result<u32> {
+    let out = Command::new("sgdisk")
+        .arg("-p")
+        .arg(dev)
+        .output()
+        .context("running sgdisk -p (is gptfdisk installed?)")?;
+    if !out.status.success() {
+        bail!("sgdisk -p failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    // The partition table rows are those whose first token parses as a number; the largest wins.
+    text.lines()
+        .filter_map(|l| {
+            l.split_whitespace()
+                .next()
+                .and_then(|t| t.parse::<u32>().ok())
+        })
+        .max()
+        .context("sgdisk -p listed no partitions")
+}
+
+/// Parse `sgdisk --info=<n>` for the fields we preserve when recreating the partition.
+fn partition_info(dev: &Path, n: u32) -> Result<PartInfo> {
+    let out = Command::new("sgdisk")
+        .arg(format!("--info={n}"))
+        .arg(dev)
+        .output()
+        .context("running sgdisk --info (is gptfdisk installed?)")?;
+    if !out.status.success() {
+        bail!(
+            "sgdisk --info={n} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let after = |label: &str| -> Option<String> {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix(label).map(|r| r.trim().to_string()))
+    };
+    // "Partition GUID code: <TYPE-GUID> (Linux LUKS)" — the type GUID is the first token.
+    let type_guid = after("Partition GUID code:")
+        .and_then(|s| s.split_whitespace().next().map(str::to_string))
+        .context("sgdisk -i: no partition type GUID")?;
+    let unique_guid =
+        after("Partition unique GUID:").context("sgdisk -i: no partition unique GUID")?;
+    // "First sector: <N> (at ...)" — the sector is the first token.
+    let first_sector = after("First sector:")
+        .and_then(|s| {
+            s.split_whitespace()
+                .next()
+                .and_then(|t| t.parse::<u64>().ok())
+        })
+        .context("sgdisk -i: no first sector")?;
+    // "Partition name: 'nixos'" — strip the surrounding single quotes.
+    let name = after("Partition name:")
+        .map(|s| s.trim_matches('\'').to_string())
+        .unwrap_or_default();
+    Ok(PartInfo {
+        first_sector,
+        type_guid,
+        unique_guid,
+        name,
+    })
 }
 
 /// Read `src` to EOF into `dst`, reporting a byte counter against `total` (0 =

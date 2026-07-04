@@ -238,6 +238,17 @@
           version = (pkgs.lib.importTOML ./tui/Cargo.toml).package.version;
           src = ./tui;
           cargoLock.lockFile = ./tui/Cargo.lock;
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          # The TUI shells out. `nix`/`sops`/`ssh` intentionally come from the operator's
+          # OWN PATH (their flake, their keys), so we PREFIX (not replace) with only the
+          # small, always-required device tools it can't assume are installed: gptfdisk
+          # (sgdisk — the grow-to-fill partition extend) and util-linux (blockdev/lsblk —
+          # the exact byte-size read + device listing). Without this, grow-to-fill degrades
+          # to a non-fatal warning on hosts lacking sgdisk.
+          postInstall = ''
+            wrapProgram $out/bin/nixnas \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.gptfdisk pkgs.util-linux ]}
+          '';
           meta = {
             description = "nixnas — guided TUI to configure, build, and flash a nixnas USB stick.";
             license = pkgs.lib.licenses.asl20;

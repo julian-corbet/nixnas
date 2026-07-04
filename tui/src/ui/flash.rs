@@ -135,6 +135,16 @@ impl FlashScreen {
             _ => true, // unknown device size — the typed confirmation still gates
         }
     }
+
+    /// True when the image is SMALLER than the device: grow-to-fill applies (extend the last
+    /// partition now, grow the f2fs on first boot). False (or unknown size) ⇒ no grow — an
+    /// exact-fit image already reaches the device end.
+    fn grows_to_fill(&self) -> bool {
+        matches!(
+            (&self.image, self.selected_disk().and_then(|d| d.size)),
+            (Some((_, img)), Some(dev)) if *img < dev
+        )
+    }
 }
 
 pub fn on_key(app: &mut App, key: KeyEvent) {
@@ -186,9 +196,10 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 if typed.trim() == name {
                     let (image, _) = st.image.clone().expect("confirmed without an image");
                     let backup_to = st.backup.then(|| flash::backup_path(&config_path));
+                    let grow = st.grows_to_fill();
                     // The action is real from here: open its session-log file.
                     st.session_log = app.log.begin("flash");
-                    st.rx = Some(flash::spawn_flash(image, dev, size, backup_to));
+                    st.rx = Some(flash::spawn_flash(image, dev, size, backup_to, grow));
                     st.phase = Phase::Running;
                 } else {
                     st.phase = Phase::Confirm {
@@ -322,17 +333,34 @@ pub(crate) fn disk_lines(d: &Disk, _selected: bool) -> Vec<Line<'static>> {
 }
 
 fn draw_devices(f: &mut Frame, st: &mut FlashScreen, area: ratatui::layout::Rect) {
-    let items: Vec<ListItem> = st
-        .disks
+    draw_disk_list(
+        f,
+        area,
+        &st.disks,
+        st.selected,
+        st.list_error.as_deref(),
+        "Flash stick — pick the TARGET disk (it will be OVERWRITTEN)",
+    );
+}
+
+/// Crate-visible: the "Build & flash a stick" pathway reuses this exact disk picker to choose
+/// the target device it will SIZE the image to (and later flash to).
+pub(crate) fn draw_disk_list(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    disks: &[Disk],
+    selected: usize,
+    list_error: Option<&str>,
+    title: &str,
+) {
+    let items: Vec<ListItem> = disks
         .iter()
         .enumerate()
-        .map(|(i, d)| ListItem::new(disk_lines(d, i == st.selected)))
+        .map(|(i, d)| ListItem::new(disk_lines(d, i == selected)))
         .collect();
-    let title = "Flash stick — pick the TARGET disk (it will be OVERWRITTEN)";
     if items.is_empty() {
-        let msg = st
-            .list_error
-            .clone()
+        let msg = list_error
+            .map(str::to_string)
             .unwrap_or_else(|| "No whole disks found — plug the stick in and press r".into());
         f.render_widget(
             Paragraph::new(msg)
@@ -343,7 +371,7 @@ fn draw_devices(f: &mut Frame, st: &mut FlashScreen, area: ratatui::layout::Rect
         return;
     }
     let mut state = ListState::default();
-    state.select(Some(st.selected));
+    state.select(Some(selected));
     f.render_stateful_widget(
         List::new(items)
             .block(ui::panel(title))
@@ -411,6 +439,12 @@ fn draw_summary(
             Style::default().fg(ERR).add_modifier(Modifier::BOLD),
         )));
     }
+    if st.grows_to_fill() {
+        lines.push(Line::from(Span::styled(
+            "  ⤢ Image smaller than the device — grow to fill (partition now, filesystem on first boot).",
+            Style::default().fg(OK),
+        )));
+    }
     lines.push(Line::from(vec![
         Span::styled(
             if st.backup { "  [x] " } else { "  [ ] " },
@@ -438,7 +472,13 @@ fn draw_summary(
     );
 }
 
-fn draw_confirm_modal(f: &mut Frame, disk: Option<&Disk>, typed: &str, error: Option<&str>) {
+/// Crate-visible: the "Build & flash a stick" pathway reuses this typed-name confirmation modal.
+pub(crate) fn draw_confirm_modal(
+    f: &mut Frame,
+    disk: Option<&Disk>,
+    typed: &str,
+    error: Option<&str>,
+) {
     let Some(disk) = disk else { return };
     let area = ui::centered_rect(f.area(), 62, 8);
     let inner = ui::modal(f, area, "Point of no return");
@@ -479,7 +519,25 @@ fn draw_confirm_modal(f: &mut Frame, disk: Option<&Disk>, typed: &str, error: Op
 }
 
 fn draw_progress(f: &mut Frame, st: &FlashScreen, area: ratatui::layout::Rect) {
-    let block = ui::panel("Flash stick — writing");
+    draw_progress_body(
+        f,
+        area,
+        "Flash stick — writing",
+        st.gauge_title,
+        st.progress,
+    );
+}
+
+/// Crate-visible: a titled panel with a phase line + byte-counter gauge. Reused by the
+/// "Build & flash a stick" pathway for its flash phase.
+pub(crate) fn draw_progress_body(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    panel_title: &str,
+    phase: &str,
+    progress: (u64, u64),
+) {
+    let block = ui::panel(panel_title);
     let inner = block.inner(area);
     f.render_widget(block, area);
     let [_, title_area, gauge_area, _] = Layout::vertical([
@@ -491,12 +549,12 @@ fn draw_progress(f: &mut Frame, st: &FlashScreen, area: ratatui::layout::Rect) {
     .areas(inner);
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!("  {}", st.gauge_title),
+            format!("  {phase}"),
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ))),
         title_area,
     );
-    let (done, total) = st.progress;
+    let (done, total) = progress;
     let ratio = if total > 0 {
         (done as f64 / total as f64).min(1.0)
     } else {
