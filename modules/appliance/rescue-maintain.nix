@@ -49,6 +49,7 @@ let
     name = "nixnas-rescue-maintain";
     runtimeInputs = with pkgs; [
       nix coreutils util-linux cryptsetup systemd sbsigntool gnugrep gawk releaseCblocks
+      diffutils  # cmp — the signed-UKI vs ESP-UKI compare for the -prev rollback rotation
     ];
     text = ''
       # `nix copy` / `nix build` / `nix store gc` are `nix …` subcommands → they need the
