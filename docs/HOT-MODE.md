@@ -45,11 +45,21 @@ unattended. The channel is authenticated by the **TPM-sealed initrd host key** (
 tampered initrd/swapped stick can't phish the key. Data confidentiality is a *feature*: you
 must enter a key in a secure environment to unlock anything.
 
-On a box where `/nix` and the data share one LUKS pool (the common whole-disk-LUKS case),
-the single key you enter at boot unlocks the pool — so `/nix` and
-the data come up together. "Full OS running, data still locked" is not available in that
-layout without a second encryption boundary; the **rescue** system covers the
-data-free-maintenance case instead (it needs no pool at all).
+**One key, every pool — the unlock algorithm.** The operator key you enter once is tried
+against EVERY declared LUKS member in the initrd — the hot-store members (`store.hot.unlock`,
+e.g. hot) AND the data members (`storage.unlock`, e.g. a cold archive pool + standalone
+archive disks). Whatever the key opens, opens; the pools that become available are imported. So
+a fleet of SEPARATE pools that share ONE passphrase all come up from a SINGLE entry — there is
+no second post-boot `nixnas-unlock` in hot mode (it stays a manual fallback). The two member
+classes differ only in failure semantics: hot members are boot-critical (`device-timeout=0`,
+infinite wait — no `/nix` without them), data members are `nofail` with a finite device timeout
+(an absent or dead archive disk is SKIPPED, never hangs the boot). Stage-2 then auto-raises
+`nixnas-storage.target` off the already-open mappers (imports + mounts) with no further prompt.
+
+Where `/nix` and the data literally share ONE pool (the simplest whole-disk-LUKS box) the same
+holds trivially — one key, one pool, everything up. "Full OS running, data still locked" is a
+`usb`-mode / rescue property (the rescue needs no pool at all), not a hot-mode one: hot mode's
+contract is that one secure entry brings up everything the key fits.
 
 Storage-agnostic: nixnas only requires the hot store to be an operator-declared, unlockable
 device with a filesystem NixOS can mount as `/nix`. ZFS is one choice (then the initrd
@@ -148,10 +158,16 @@ exactly what rescue-maintain's GC keeps).
 ## What changes vs `usb` mode (implementation map)
 
 - `modules/store/location.nix`: the `store.location` switch; the hot-mode MAIN /nix
-  (`store.hot.*`, neededForBoot), the initrd operator-key LUKS unlock (serialised — one
-  entry opens all members via the kernel-keyring cache), ZFS-in-initrd when the hot store
-  is a dataset (with the import ordered after cryptsetup.target — the pool appears only
-  after the operator's key), and the tmpfs root + by-label ESP mount disko no longer provides.
+  (`store.hot.*`, neededForBoot), and the initrd operator-key unlock of **all members — hot
+  AND data** (`store.hot.unlock` ∪ `storage.unlock`), serialised into one kernel-keyring chain
+  so a SINGLE entry opens every pool that shares the key. Hot members are boot-critical
+  (`device-timeout=0`); data members are `nofail` + finite timeout (skip an absent/dead disk).
+  ZFS-in-initrd when the hot store is a dataset (import ordered after cryptsetup.target — the
+  pool appears only after the key); tmpfs root + by-label ESP mount disko no longer provides.
+- `modules/storage/connect.nix`: hot-aware. Since the initrd opened the data members too, in
+  hot mode it does NOT re-open them and AUTO-RAISES `nixnas-storage.target` at boot (imports the
+  data pools off the open mappers + mounts) — no manual `nixnas-unlock`. In `usb`/rescue mode it
+  is unchanged: members stay locked at boot, `nixnas-unlock` raises the target post-boot.
 - `modules/boot/disk.nix` + `modules/store/budget.nix` + `modules/crypto/tpm2.nix`
   (auto-unlock half): gated to `usb`-mode systems — which includes the RESCUE, a minimal
   usb nixnas the operator declares as a second host (there is no separate rescue module;
