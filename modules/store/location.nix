@@ -24,7 +24,13 @@ let
     if hot.zpool != null then hot.zpool
     else if hot.device != null then builtins.head (lib.splitString "/" hot.device)
     else "-unset-";
-  unlockNames = lib.attrNames hot.unlock; # attrNames is sorted — a stable chain order
+  # The nixnas unlock algorithm: the ONE operator key opens EVERY declared member in the
+  # initrd. Hot-store members (hot) are boot-critical; data members (cold + SMR, from
+  # storage.unlock) ride the SAME single passphrase (kernel-keyring cache) but are non-fatal.
+  dataUnlock = cfg.storage.unlock; # cold + SMR — declared in infra, opened here
+  dataPools = cfg.storage.zfsPools; # non-root pools imported in the initrd too
+  # attrNames is sorted — a stable chain order across the whole set (hot ∪ data).
+  allUnlockNames = lib.attrNames (hot.unlock // dataUnlock);
 in
 {
   config = lib.mkIf isHot (lib.mkMerge [
@@ -88,31 +94,46 @@ in
         options = [ "x-systemd.device-timeout=0" ];
       };
 
-      # Open the hot store's LUKS members in the INITRD with the operator's passphrase —
-      # interactive, no TPM enrollment here. systemd-initrd + initrd-SSH surface the prompt;
-      # the operator hands the key to the password agent. Each opens at /dev/mapper/<name>.
-      # x-systemd.device-timeout=0: the OTHER 90 s trap (boot/disk.nix) — each
-      # systemd-cryptsetup@<name>.service waits on its BACKING device unit, whose job dies
-      # at DefaultDeviceTimeoutSec (90 s) on slow-POST controllers / slow disk spin-up.
-      # The crypttab option pins that backing-device job infinite (the passphrase QUERY
-      # itself never times out — the generated service carries TimeoutSec=infinity).
-      boot.initrd.luks.devices = lib.mapAttrs
-        (_: dev: {
-          device = dev;
-          crypttabExtraOpts = [ "x-systemd.device-timeout=0" ];
-        })
-        hot.unlock;
+      # ── ONE key, ALL storage — the nixnas unlock algorithm, run in the INITRD ──────────
+      # The single operator passphrase (interactive, over initrd-SSH / console, never TPM)
+      # opens EVERY declared member here, so ONE entry brings up everything and there is no
+      # second post-boot prompt. Two classes, different failure semantics:
+      #
+      #   * HOT-store members (hot) — BOOT-CRITICAL. x-systemd.device-timeout=0 pins the
+      #     backing-device job INFINITE (the 90 s trap of boot/disk.nix: the job would else
+      #     die at DefaultDeviceTimeoutSec on slow-POST / slow spin-up). No /nix without
+      #     these, so a failure correctly stops the boot.
+      #   * DATA members (cold + SMR, from nixnas.storage.unlock) — NON-fatal. `nofail`
+      #     + a FINITE device timeout: an absent or dead archive disk is SKIPPED after the
+      #     timeout instead of hanging the boot forever (the opposite of the hot members).
+      #     They ride the SAME passphrase via the kernel-keyring cache — no extra prompt.
+      boot.initrd.luks.devices =
+        (lib.mapAttrs
+          (_: dev: {
+            device = dev;
+            crypttabExtraOpts = [ "x-systemd.device-timeout=0" ];
+          })
+          hot.unlock)
+        // (lib.mapAttrs
+          (_: dev: {
+            device = dev;
+            # 45 s: generous enough for cold-boot HDD/SMR enumeration + spin-up, still FINITE
+            # so a genuinely dead/absent archive disk is skipped (nofail) rather than hanging
+            # the boot forever the way the hot members (device-timeout=0) deliberately do.
+            crypttabExtraOpts = [ "nofail" "x-systemd.device-timeout=45s" ];
+          })
+          dataUnlock);
 
-      # Serialise the member unlocks (same pattern as storage/connect.nix stage-2): the
-      # first member prompts, systemd caches the passphrase in the kernel keyring, and
-      # every later member finds it and opens silently — ONE entry for the whole set.
-      # Without this all members race and queue N password-agent questions in parallel.
+      # Serialise ALL member unlocks (hot ∪ data) into one keyring chain: the first member
+      # prompts, systemd caches the passphrase in the kernel keyring, and every later member
+      # (hot or data) finds it and opens silently — ONE entry for the whole set. Without the
+      # chain all members race and queue N password-agent questions in parallel.
       boot.initrd.systemd.services = lib.listToAttrs (lib.imap0
         (i: n: lib.nameValuePair "systemd-cryptsetup@${n}" {
           overrideStrategy = "asDropin";
-          after = lib.optional (i > 0) "systemd-cryptsetup@${builtins.elemAt unlockNames (i - 1)}.service";
+          after = lib.optional (i > 0) "systemd-cryptsetup@${builtins.elemAt allUnlockNames (i - 1)}.service";
         })
-        unlockNames);
+        allUnlockNames);
     }
 
     # ZFS-in-initrd only when the hot store is ZFS (a dataset). LUKS does the crypto, so ZFS

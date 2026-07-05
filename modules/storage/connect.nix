@@ -37,6 +37,14 @@ let
   unlockUnits = map (n: "systemd-cryptsetup@${n}.service") unlockNames;
   importUnits = map (p: "nixnas-import-${p}.service") cfg.storage.zfsPools;
 
+  # HOT mode: the initrd (store/location.nix) already opened EVERY member — hot AND data —
+  # with the one operator passphrase, so the mappers are present the moment stage-2 starts.
+  # Here that means: stage-2 does NOT re-open the data members (no double-open), and the
+  # storage target AUTO-RAISES at boot (imports + mounts follow the open mappers) — no manual
+  # `nixnas-unlock`. In usb/rescue mode the members are still LOCKED at boot and the operator
+  # raises the target post-boot with `nixnas-unlock` (the original THIN model).
+  isHot = cfg.enable && cfg.store.location == "hot";
+
   # `name → /dev/mapper/name`, a STABLE mapper the operator references in fileSystems.
   # `noauto`: nothing opens at boot — nixnas-storage.target pulls these on demand.
   # `nofail`: a missing/degraded disk never fails the target (non-fatal by design).
@@ -88,11 +96,14 @@ in
         })
         unlockNames);
 
-      # The one switch the operator flips (via nixnas-unlock): everything data.
+      # The data-storage switch. HOT mode: auto-raised at boot (members already open in the
+      # initrd — pull only the imports + mounts, NOT the cryptsetup units). USB/rescue mode:
+      # stays inert until `nixnas-unlock` flips it, and it pulls the member unlocks too.
       systemd.targets.nixnas-storage = {
         description = "nixnas data storage (LUKS members open, ZFS pools imported, mounts up)";
-        wants = unlockUnits ++ importUnits;
-        after = unlockUnits ++ importUnits;
+        wants = (lib.optionals (!isHot) unlockUnits) ++ importUnits;
+        after = (lib.optionals (!isHot) unlockUnits) ++ importUnits;
+        wantedBy = lib.optionals isHot [ "multi-user.target" ];
       };
     })
 
@@ -105,7 +116,9 @@ in
       systemd.services = listToAttrs (map
         (p: nameValuePair "nixnas-import-${p}" {
           description = "Import ZFS pool ${p} (nixnas data storage)";
-          after = unlockUnits;
+          # HOT: mappers are open from the initrd — no cryptsetup units to wait on (they never
+          # run in hot mode; ordering after them would deadlock). USB: wait for the unlocks.
+          after = lib.optionals (!isHot) unlockUnits;
           serviceConfig = {
             Type = "oneshot";
             RemainAfterExit = true;
