@@ -51,6 +51,13 @@ let
       nix coreutils util-linux cryptsetup systemd sbsigntool gnugrep gawk releaseCblocks
     ];
     text = ''
+      # `nix copy` / `nix build` / `nix store gc` are `nix …` subcommands → they need the
+      # nix-command experimental feature (+ flakes for the flakeAttr build path). Enable it
+      # self-containedly instead of depending on the host nix.conf — a hot MAIN may not set it,
+      # and the running daemon here didn't, so `nix copy` died with "nix-command is disabled"
+      # right after the (now working) store unlock (FIELD-BACKLOG #6).
+      export NIX_CONFIG="experimental-features = nix-command flakes"
+
       # ── inputs ─────────────────────────────────────────────────────────────
       # (defaults keep the script eval-safe when built for the demo, where these are null;
       #  real use is gated by `active`, whose assertions require a rescue source.)
@@ -123,8 +130,13 @@ let
       # systemd-tpm2 LUKS2 token — plain `cryptsetup open` cannot read it on NixOS
       # (no external token plugin path), so use systemd's own tool.
       if [ ! -e /dev/mapper/nixnas-rescue-store ]; then
-        ${sdCryptsetup} attach nixnas-rescue-store "$storepart" - tpm2-device=auto \
-          || { echo "rescue-maintain: TPM2 attach failed — was the rescue store enrolled (nixnas-enroll-tpm2, on the rescue)?" >&2; exit 1; }
+        # headless=yes is LOAD-BEARING: without a TPM2 token enrolled, systemd-cryptsetup would
+        # fall back to an INTERACTIVE passphrase prompt on a service with no stdin — which hangs
+        # until TimeoutStartSec (observed: a full 30-min stall, 32.5K read, that never copies).
+        # headless disables every interactive query, so an un-enrolled / PCR-mismatched store
+        # FAILS FAST here with the actionable message below instead of silently wedging.
+        ${sdCryptsetup} attach nixnas-rescue-store "$storepart" - tpm2-device=auto,headless=yes \
+          || { echo "rescue-maintain: TPM2 attach failed — the rescue store has no usable TPM2 token. Enroll it (nixnas-enroll-tpm2, or systemd-cryptenroll --tpm2-device=auto on the store partition)." >&2; exit 1; }
       fi
       mkdir -p "$mnt/nix"
       # The SHARED f2fs options (modules/lib/f2fs-store-mount-opts.nix): a bare mount would
