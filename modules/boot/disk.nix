@@ -167,15 +167,28 @@ in
     # that needs an explicit per-file release (modules/lib/f2fs-release-cblocks.nix). gen-1 is
     # populated by nixos-install via copy/substitution, not a local build of the closure it
     # installs, so the ongoing post-build-hook (optimizations.nix) never sees it — the image
-    # needs its own explicit pass. An activationScript is the right hook regardless of whether
-    # nixos-install runs it during the build or it first fires on the appliance's own initial
-    # boot (NixOS's normal per-boot activation) — either way it runs at least once before
-    # anyone relies on the store's size, with zero disko-specific plumbing. Idempotent: an
-    # already-released file's ioctl is a cheap no-op, so re-running on later boots is harmless.
-    # Confirmed load-bearing on a real deployment (2026-07-04): a store that never ran this
-    # pass stayed at its pre-compression size (55% used; 40% after one manual pass).
-    system.activationScripts.nixnasF2fsReleaseCblocks = lib.stringAfter [ "users" ] ''
-      ${import ../lib/f2fs-release-cblocks.nix { inherit pkgs; }}/bin/nixnas-f2fs-release-cblocks /nix/store
-    '';
+    # needs its own explicit pass. Run it ASYNC via a timer, NEVER on the boot-critical path: a
+    # full-store sweep that forks a release ioctl per file must not block `nixos-activation` —
+    # wired as an activationScript it hung the boot indefinitely ("A start job is running for
+    # NixOS Activation … / no limit"; the ioctl runs against the very binaries mmapped from that
+    # store), which was the boot-test regressor. OnBootSec fires it a few minutes AFTER boot (off
+    # the critical path, so activation → multi-user → sshd come up normally); a daily tick catches
+    # later gens. Idempotent: an already-released file's ioctl is a cheap no-op. Confirmed
+    # load-bearing on a real deployment (2026-07-04): a store that never ran this pass stayed at
+    # its pre-compression size (55% used; 40% after one manual pass). Same async pattern as
+    # rescue-maintain (the first instance of this defect class fixed).
+    systemd.services.nixnas-f2fs-release-cblocks = {
+      description = "f2fs compression release pass over the on-stick /nix/store (density reclaim)";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${import ../lib/f2fs-release-cblocks.nix { inherit pkgs; }}/bin/nixnas-f2fs-release-cblocks /nix/store";
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+    systemd.timers.nixnas-f2fs-release-cblocks = {
+      wantedBy = [ "timers.target" ];
+      timerConfig = { OnBootSec = "3min"; OnCalendar = "daily"; Persistent = true; };
+    };
   };
 }
