@@ -28,10 +28,13 @@
 #      previous, DIFFERENT one to nixnas-rescue-prev.efi as a one-step rescue rollback).
 # It no-ops when the installed toplevel (persistent marker on /nix) is already current.
 #
-# TRIGGERS: wantedBy multi-user.target — runs at boot (self-heals a pruned ESP entry), and
-# because the script embeds the pinned toplevel path, a deploy that changes the rescue also
-# changes THIS unit → switch-to-configuration restarts it (deploy-triggered maintenance).
-# A daily timer catches flake-built (non-pinned) drift.
+# TRIGGERS: a TIMER only, never a boot/switch dependency (the copy is a multi-minute cross-store
+# write to a slow stick — making a boot target wait on it stalls boots AND deadlocks
+# switch-to-configuration; learned the hard way 2026-07-05). OnBootSec runs it a few minutes
+# after boot (async ESP/stick self-heal, off the critical path); a daily tick catches flake-built
+# drift. Deploy-triggered updates land on that next tick, not synchronously — fine, the rescue is
+# a fallback and its CURRENT stick UKI keeps booting meanwhile. It is idempotent (no-ops when the
+# installed toplevel marker already matches).
 { config, lib, pkgs, ... }:
 let
   cfg = config.nixnas;
@@ -186,27 +189,38 @@ in
       }
     ];
 
-    # Runs at boot (ESP self-heal after the main's lzbt runs / a fresh install), and — because
-    # the script text embeds the pinned rescue toplevel — every deploy that changes the rescue
-    # changes this unit, so switch-to-configuration restarts it: deploy-triggered maintenance.
+    # ASYNC BY THE TIMER — the service is NEVER a synchronous dependency of any boot/switch
+    # target. This is load-bearing: the maintainer does a multi-minute closure copy onto a slow
+    # USB stick, and `wantedBy = multi-user.target` on a 30-min oneshot makes systemd BLOCK the
+    # target on it — which stalls every boot AND every switch-to-configuration (a `start
+    # multi-user.target` at the tail of the switch waits, holding the switch lock; observed
+    # 2026-07-05: ~30-min boot stalls + repeated switch deadlocks). So it is driven ONLY by the
+    # timer below (OnBootSec fires it a few minutes AFTER boot, off the critical path; a daily
+    # tick catches drift). It is idempotent + no-ops when the rescue is unchanged, so the async
+    # boot run still self-heals a pruned ESP entry — just without holding the boot hostage.
+    # Deploy-triggered updates land on the next boot/daily tick instead of synchronously (the
+    # rescue is a fallback; brief staleness is fine — the CURRENT stick UKI still boots).
     systemd.services.nixnas-rescue-maintain = {
       description = "Maintain the nixnas RESCUE system on the stick (closure + signed UKI)";
-      wantedBy = [ "multi-user.target" ];
+      # NO wantedBy multi-user.target — see the block comment above. after/wants only order it
+      # WHEN the timer runs it; they do not pull it into the boot transaction.
       after = [ "local-fs.target" "boot.mount" ];
       wants = [ "boot.mount" ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = lib.getExe maintain;
-        # Building + signing + a cross-store copy: give it room, but never block boot.
+        # Building + signing + a cross-store copy over a slow stick: give it room. Off the
+        # boot/switch path (timer-only), so this long timeout blocks nothing.
         TimeoutStartSec = "30min";
       };
     };
 
-    # Daily catch-up — matters for the flake-built (rescue.flakeAttr) source, where the
-    # rescue can drift without a deploy; harmless no-op for the pinned source.
+    # The ONLY trigger: a few minutes after boot (async ESP/stick self-heal, off the critical
+    # path) + a daily catch-up (matters for the flake-built source; harmless no-op for pinned).
     systemd.timers.nixnas-rescue-maintain = {
       wantedBy = [ "timers.target" ];
       timerConfig = {
+        OnBootSec = "3min";
         OnUnitActiveSec = "1d";
         Persistent = true;
       };
