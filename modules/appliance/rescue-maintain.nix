@@ -161,7 +161,13 @@ let
       # bootable rescue.
       roots="$mnt/nix/var/nix/gcroots"; mkdir -p "$roots"
       if [ -L "$roots/rescue-current" ] && [ "$(readlink "$roots/rescue-current")" != "$rescueTop" ]; then
-        mv -f "$roots/rescue-current" "$roots/rescue-prev"
+        # -T is LOAD-BEARING: these roots are ABSOLUTE /nix/store symlinks (chroot-store
+        # semantics — on the stick they mean the stick's own store). A plain `mv` DEREFERENCES
+        # an existing destination symlink; when its target happens to exist in the HUB's store,
+        # mv sees a directory and tries to move INTO it → EROFS on the hub's read-only
+        # /nix/store (field 2026-07-12; it only ever worked while prev's target was dangling
+        # host-side). -T replaces the symlink OBJECT, mirroring the `ln -sfn` below.
+        mv -fT "$roots/rescue-current" "$roots/rescue-prev"
       fi
       nix store gc --store "$mnt" || echo "rescue-maintain: pre-copy stick GC failed (non-fatal)" >&2
       # $mnt is a chroot store root: nix copy registers the closure into $mnt/nix/store.
