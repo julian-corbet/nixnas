@@ -143,20 +143,34 @@ let
       # The SHARED f2fs options (modules/lib/f2fs-store-mount-opts.nix): a bare mount would
       # write the new closure UNCOMPRESSED and blow the stick budget.
       mount -o ${lib.escapeShellArg f2fsOpts} /dev/mapper/nixnas-rescue-store "$mnt/nix"
-      # $mnt is a chroot store root: nix copy registers the closure into $mnt/nix/store.
-      nix copy --no-check-sigs --to "$mnt" "$rescueTop"
-      # GC the stick store down to current + prev (mirrors the UKI rotation below) — without
-      # this the ~5 GiB stick fills after a few rescue updates.
+      # ── make room BEFORE the copy (reordered 2026-07-12) ───────────────────────
+      # The old order (copy → rotate roots → GC) needed old-current + old-prev + the
+      # WHOLE new closure on the stick at once. Across a nixpkgs world bump the three
+      # closures are ~disjoint → ~3× closure size → ENOSPC on the ~5 GiB stick (unit
+      # red from 2026-07-05's world until the 07-11 bump made it structural; a failed
+      # copy also strands partial paths that compound the next run). Rotate + GC FIRST:
+      #   • rescue-prev ← rescue-current (the one-step rollback becomes the outgoing
+      #     rescue — exactly what it would be after success anyway; old-prev unroots),
+      #   • GC sweeps old-prev + any stranded partials from failed runs,
+      #   • THEN copy: peak = old-current + new (2 closures, not 3).
+      # A mid-copy ENOSPC stays SAFE: the ESP UKI still pins the OLD toplevel and its
+      # closure stays rooted via rescue-prev → the stick remains bootable; the marker
+      # (below) only advances on full success, so the next tick retries. If even
+      # old-current + new cannot fit, the unit fails LOUDLY — that is a real stick
+      # sizing problem for a human, never something to solve by unrooting the only
+      # bootable rescue.
       roots="$mnt/nix/var/nix/gcroots"; mkdir -p "$roots"
       if [ -L "$roots/rescue-current" ] && [ "$(readlink "$roots/rescue-current")" != "$rescueTop" ]; then
         mv -f "$roots/rescue-current" "$roots/rescue-prev"
       fi
+      nix store gc --store "$mnt" || echo "rescue-maintain: pre-copy stick GC failed (non-fatal)" >&2
+      # $mnt is a chroot store root: nix copy registers the closure into $mnt/nix/store.
+      nix copy --no-check-sigs --to "$mnt" "$rescueTop"
       ln -sfn "$rescueTop" "$roots/rescue-current"
-      nix store gc --store "$mnt" || echo "rescue-maintain: stick GC failed (non-fatal)" >&2
       # `nix copy --to $mnt` writes into a FOREIGN store from the MAIN's own daemon — no local
       # post-build-hook ever sees these paths, so without this the stick fills as if
-      # compression were off (see modules/lib/f2fs-release-cblocks.nix). After GC so we only
-      # spend the pass on what current+prev actually kept.
+      # compression were off (see modules/lib/f2fs-release-cblocks.nix). After the GC'd
+      # copy, so the pass only touches what current+prev actually kept.
       nixnas-f2fs-release-cblocks "$mnt/nix/store" || echo "rescue-maintain: release pass failed (non-fatal)" >&2
       sync
       umount "$mnt/nix"
