@@ -308,14 +308,14 @@ autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
   | Layer | What | Where |
   |---|---|---|
   | OS image | the **nix store** (kernel, k3s/containerd binaries, systemd, rendered config) | **USB stick** (read into RAM; impermanence) |
-  | Runtime state | **container images**, the kine DB, app PVCs, persistent logs | **your fast pool** (SSD — any name, e.g. `/tank`) |
+  | Runtime state | **container images**, the kine DB, app PVCs, persistent logs | **your fast pool** (SSD — any name, e.g. `/hot`) |
   | Bulk | media, backups | **your bulk pool** (HDD — any name, e.g. `/bulk`) |
   | Workloads | the k8s/Argo manifests (what runs) | **Git** (pulled at runtime) |
   The nix store holds *programs*, never *container images* — containerd keeps those in its own
   store (a ZFS snapshotter dataset on your fast pool). So the stick stays ~3–4 GiB no matter how many
   apps run.
 - **Mounting is native; nixnas doesn't reinvent it.** You mount your storage with plain
-  `fileSystems` at `/tank`, `/bulk`, or any nested path (an XFS drive *under* a ZFS tree, …),
+  `fileSystems` at `/hot`, `/bulk`, or any nested path (an XFS drive *under* a ZFS tree, …),
   hooked to `nixnas-storage.target` (`"noauto" "x-systemd.wanted-by=nixnas-storage.target"` —
   the mappers don't exist until `nixnas-unlock`). nixnas adds only `storage.unlock` (open your
   LUKS members post-boot with one passphrase, non-fatally, at a stable `/dev/mapper/<name>`)

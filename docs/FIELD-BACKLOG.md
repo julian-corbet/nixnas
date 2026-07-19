@@ -119,7 +119,7 @@ rescue's nix.conf did not have `experimental-features = nix-command` — so the 
 not exist` — the auth module points root/admin at that runtime file (modules/appliance/auth.nix),
 but only the TUI image build writes it (usb images); install-hot never seeds it onto the hot
 store, so the MAIN's CONSOLE login is fail-closed locked (SSH-key still works). Worked around by
-writing the yescrypt hash to `tank/system/nix` `…/nixnas/auth/passphrase.hash` (0600) by hand
+writing the yescrypt hash to `hot/system/nix` `…/nixnas/auth/passphrase.hash` (0600) by hand
 before the reboot.
 **Fix:** install-hot should seed the auth hash onto the hot store the same way it seeds the SB
 PKI (step 3) — either copy the operator-provided hash, or (cleaner) let the MAIN config carry an

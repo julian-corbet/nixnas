@@ -25,9 +25,9 @@ let
     else if hot.device != null then builtins.head (lib.splitString "/" hot.device)
     else "-unset-";
   # The nixnas unlock algorithm: the ONE operator key opens EVERY declared member in the
-  # initrd. Hot-store members (e.g. tank) are boot-critical; data members (e.g. coldpool + SMR,
+  # initrd. Hot-store members (e.g. hot) are boot-critical; data members (e.g. cold + SMR,
   # from storage.unlock) ride the SAME single passphrase (kernel-keyring cache) but are non-fatal.
-  dataUnlock = cfg.storage.unlock; # e.g. coldpool + SMR — declared in infra, opened here
+  dataUnlock = cfg.storage.unlock; # e.g. cold + SMR — declared in infra, opened here
   dataPools = cfg.storage.zfsPools; # non-root pools imported in the initrd too
   # attrNames is sorted — a stable chain order across the whole set (hot ∪ data).
   allUnlockNames = lib.attrNames (hot.unlock // dataUnlock);
@@ -99,11 +99,11 @@ in
       # opens EVERY declared member here, so ONE entry brings up everything and there is no
       # second post-boot prompt. Two classes, different failure semantics:
       #
-      #   * HOT-store members (e.g. tank) — BOOT-CRITICAL. x-systemd.device-timeout=0 pins the
+      #   * HOT-store members (e.g. hot) — BOOT-CRITICAL. x-systemd.device-timeout=0 pins the
       #     backing-device job INFINITE (the 90 s trap of boot/disk.nix: the job would else
       #     die at DefaultDeviceTimeoutSec on slow-POST / slow spin-up). No /nix without
       #     these, so a failure correctly stops the boot.
-      #   * DATA members (e.g. coldpool + SMR, from nixnas.storage.unlock) — NON-fatal. `nofail`
+      #   * DATA members (e.g. cold + SMR, from nixnas.storage.unlock) — NON-fatal. `nofail`
       #     + a FINITE device timeout: an absent or dead archive disk is SKIPPED after the
       #     timeout instead of hanging the boot forever (the opposite of the hot members).
       #     They ride the SAME passphrase via the kernel-keyring cache — no extra prompt.

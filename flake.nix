@@ -23,7 +23,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Declarative persistence onto your pools (the impermanence module) — nixnas provides
-    # the tmpfs root; you route state with `environment.persistence."/tank" = {...}`. We use
+    # the tmpfs root; you route state with `environment.persistence."/hot" = {...}`. We use
     # the community module rather than reinvent bind-mount routing.
     impermanence.url = "github:nix-community/impermanence";
   };

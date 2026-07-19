@@ -406,7 +406,7 @@ in
         device = mkOption {
           type = types.nullOr types.str;
           default = null;
-          example = "tank/nixnas/nix";
+          example = "hot/nixnas/nix";
           description = ''
             `hot` mode: the `fileSystems."/nix".device` for the MAIN system — the store that
             holds the full OS closure. A ZFS dataset name (with `fsType = "zfs"`), or a
@@ -434,7 +434,7 @@ in
         zpool = mkOption {
           type = types.nullOr types.str;
           default = null;
-          example = "tank";
+          example = "hot";
           description = "For `fsType = \"zfs\"`: the pool the initrd imports (via /dev/mapper) before mounting `store.hot.device`.";
         };
       };

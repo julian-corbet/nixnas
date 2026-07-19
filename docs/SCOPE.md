@@ -21,7 +21,7 @@ nixnas = {
   boot.secureBoot.enable = true;
   crypto.tpm2.enable = true;
   storage.unlock = { tank0 = "/dev/disk/by-id/…"; };   # LUKS members; mount natively (fileSystems)
-  storage.zfsPools = [ "tank" ];                        # optional: import this ZFS pool
+  storage.zfsPools = [ "hot" ];                        # optional: import this ZFS pool
 };
 ```
 
@@ -82,7 +82,7 @@ nixnas = {
   boot.secureBoot = { enable = true; keysSops = ./secrets/sb-db.key; };
   crypto.tpm2.enable = true;
   storage.unlock   = { tank0 = "/dev/disk/by-id/…"; bulk0 = "/dev/disk/by-id/…"; };
-  storage.zfsPools = [ "tank" "bulk" ];
+  storage.zfsPools = [ "hot" "bulk" ];
   tailscale.enable = true;
 };
 # … plus native fileSystems for the mounts, and your workloads as plain NixOS.

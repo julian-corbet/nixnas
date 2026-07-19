@@ -27,7 +27,7 @@ So `hot` does **not** compose. It uses **two independent systems, each a normal 
 store on its own medium** — the proven "NixOS root-on-ZFS + a USB rescue" pattern:
 
 - **MAIN system** — its `/nix` is the operator's hot store (e.g. the ZFS dataset
-  `tank/nixnas/nix`). One normal writable store: autoUpgrade writes new generations, GC
+  `hot/nixnas/nix`). One normal writable store: autoUpgrade writes new generations, GC
   prunes them, exactly as any NixOS-on-ZFS box. This is what runs in normal operation.
 - **RESCUE system** — a small, self-contained NixOS closure on the stick's own f2fs store,
   with its own signed UKI. It references ZERO paths on the hot store, so it boots to a full
@@ -47,7 +47,7 @@ must enter a key in a secure environment to unlock anything.
 
 **One key, every pool — the unlock algorithm.** The operator key you enter once is tried
 against EVERY declared LUKS member in the initrd — the hot-store members (`store.hot.unlock`,
-e.g. tank) AND the data members (`storage.unlock`, e.g. a cold archive pool + standalone
+e.g. hot) AND the data members (`storage.unlock`, e.g. a cold archive pool + standalone
 archive disks). Whatever the key opens, opens; the pools that become available are imported. So
 a fleet of SEPARATE pools that share ONE passphrase all come up from a SINGLE entry — there is
 no second post-boot `nixnas-unlock` in hot mode (it stays a manual fallback). The two member
