@@ -47,7 +47,7 @@ must enter a key in a secure environment to unlock anything.
 
 **One key, every pool — the unlock algorithm.** The operator key you enter once is tried
 against EVERY declared LUKS member in the initrd — the hot-store members (`store.hot.unlock`,
-e.g. hot) AND the data members (`storage.unlock`, e.g. a cold archive pool + standalone
+e.g. tank) AND the data members (`storage.unlock`, e.g. a cold archive pool + standalone
 archive disks). Whatever the key opens, opens; the pools that become available are imported. So
 a fleet of SEPARATE pools that share ONE passphrase all come up from a SINGLE entry — there is
 no second post-boot `nixnas-unlock` in hot mode (it stays a manual fallback). The two member

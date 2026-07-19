@@ -100,8 +100,8 @@ appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on
   a tmpfs copy). Cap `nix.settings.max-jobs/cores`; `TMPDIR` on the persistent store.
   - **Why build on the box (not receive a closure):** nixnas targets machines *strong enough to
     build themselves* — and more than that, a nixnas box is **the nexus**: the capable hub that
-    may in turn build + push closures to weaker *dependent* systems (an e2-micro, an alwaysdata
-    box) that must never do real work. So the model is inverted from the fleet's tiny nodes:
+    may in turn build + push closures to weaker *dependent* systems (a tiny free-tier VM, a
+    shared-hosting box) that must never do real work. So the model is inverted from a fleet's tiny nodes:
     nixnas is the builder, not the built-for. (Contrast the [build on hub, never on node] rule for
     the brittle fleet — nixnas *is* a hub.) No receive-closure / image-swap path for nixnas itself.
 - **`lanzaboote`** signs the new generation's UKI on the box; the SB `db` key lives in

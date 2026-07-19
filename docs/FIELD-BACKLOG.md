@@ -1,8 +1,8 @@
 # Field backlog — product items from real deployments
 
 Every entry is a lesson from a REAL boot on REAL hardware, not a speculative feature.
-Items graduate out of this file when they land as code + a test. (The first deployment,
-2026-07-04, produced the console flip, the 5s menu, the grow-unit removal, the auth
+Items graduate out of this file when they land as code + a test. (The first real-hardware
+deployment produced the console flip, the 5s menu, the grow-unit removal, the auth
 module, the failed-units CI gate, and the ephemeral first-boot SSH key — this file
 tracks what that session surfaced but did not yet land.)
 
@@ -56,7 +56,7 @@ rescue-maintain already run inside systemd units, i.e. detached by construction;
 README now says "never run activation through a droppable session".
 
 ## 6. TPM seal must survive SB key enrollment (self-heal) — LANDED
-**Evidence (2026-07-04, first real deployment):** the initrd-SSH host key is sealed on first
+**Evidence (first real deployment):** the initrd-SSH host key is sealed on first
 boot with `systemd-creds encrypt --tpm2-pcrs=7`, but Secure Boot key enrollment
 (`nixnas-enroll-sb`, a deliberate MANUAL step) runs AFTER that seal and **changes PCR 7**. On
 the next boot the sealed `.cred` no longer decrypts. Two things then compounded into a hard
@@ -105,7 +105,7 @@ graphics is the console) but it LOOKS alarming on the console and cost triage ti
 on its console are expected on dGPU hosts; the MAIN host config carries
 `hardware.enableRedistributableFirmware`.
 
-## 6. install-hot needs nix-command enabled (field-hit 2026-07-04)
+## 6. install-hot needs nix-command enabled (field-hit)
 **Evidence:** `nixnas-install-hot` runs `nix copy --to "$target"` (a nix-command call), but the
 rescue's nix.conf did not have `experimental-features = nix-command` — so the install aborted
 `error: experimental Nix feature 'nix-command' is disabled`. Worked around with
@@ -114,12 +114,12 @@ rescue's nix.conf did not have `experimental-features = nix-command` — so the 
 `nixnas-install-hot`, which requires it), or install-hot invokes `nix copy` with
 `--extra-experimental-features nix-command` itself. The latter is more robust (self-contained).
 
-## 7. install-hot must place the console auth hash on the hot store (field-hit 2026-07-04)
+## 7. install-hot must place the console auth hash on the hot store (field-hit)
 **Evidence:** the MAIN's install warned `password file '/nix/nixnas/auth/passphrase.hash' does
 not exist` — the auth module points root/admin at that runtime file (modules/appliance/auth.nix),
 but only the TUI image build writes it (usb images); install-hot never seeds it onto the hot
 store, so the MAIN's CONSOLE login is fail-closed locked (SSH-key still works). Worked around by
-writing the yescrypt hash to `hot/system/nix` `…/nixnas/auth/passphrase.hash` (0600) by hand
+writing the yescrypt hash to `tank/system/nix` `…/nixnas/auth/passphrase.hash` (0600) by hand
 before the reboot.
 **Fix:** install-hot should seed the auth hash onto the hot store the same way it seeds the SB
 PKI (step 3) — either copy the operator-provided hash, or (cleaner) let the MAIN config carry an
