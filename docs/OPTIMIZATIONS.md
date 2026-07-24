@@ -91,10 +91,13 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
   signing keys vanish each boot. It is `/nix/lanzaboote/pki` directly (the encrypted store), no
   bind needed. (`modules/boot/secureboot.nix`)
 - ⬢ **Persist boot identity** that tmpfs would wipe: `/etc/machine-id`, the running system's SSH
-  host key, tailscale state, `/var/lib/nixos` — all on the encrypted store at `/nix/persist`
-  (`modules/appliance/identity.nix`). If these regenerated each boot, machine-id / the pinned
-  SSH identity / the tailnet node would drift. (The LUKS header is on-disk already; the initrd
-  unlock host key is separately TPM-sealed by remote-unlock.)
+  host key, each `nixnas.persist.overlayClients` entry's state, `/var/lib/nixos` — all on the
+  encrypted store at `/nix/persist` (`modules/appliance/identity.nix`). If these regenerated each
+  boot, machine-id / the pinned SSH identity / the mesh node identity would drift. (The LUKS
+  header is on-disk already; the initrd unlock host key is separately TPM-sealed by
+  remote-unlock.) `modules/appliance/persist-enforce.nix` then fails the build for any OTHER
+  `StateDirectory`-declaring service that is neither persisted nor an acknowledged
+  `nixnas.persist.explicitlyEphemeral` entry.
 - ⬢ generation count = `nixnas.boot.keepGenerations` (default **8**, sized to the 1 GiB ESP —
   one signed UKI each) via `boot.loader.systemd-boot.configurationLimit`, which lanzaboote
   inherits; bounding the count caps ESP writes/space (the ESP is the tighter bound — see

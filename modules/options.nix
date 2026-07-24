@@ -580,6 +580,44 @@ in
       };
     };
 
+    ## ── Tier-1 persistence: identity that must survive reboot BEFORE the data pools unlock ──
+    persist = {
+      overlayClients = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = literalExpression ''[ "tailscale" "netbird" ]'';
+        description = ''
+          Names of overlay/mesh-VPN clients whose `/var/lib/<name>` state directory must
+          survive a reboot for the box to be REACHABLE before the data pools unlock — the
+          same problem `admin.authorizedKeys` + `boot.remoteUnlock` solve for SSH, but for
+          the mesh identity the operator actually connects over. Each name gets a Tier-1
+          bind mount (`/var/lib/<name>` → `/nix/persist/var/lib/<name>`), created and
+          mounted in stage-1 (see modules/appliance/identity.nix) alongside machine-id and
+          the SSH host keys — small, rarely-written identity state, kind to the stick.
+          Losing one of these on every reboot means the client re-provisions (or never
+          rejoins) its mesh — the exact failure class this option exists to prevent.
+        '';
+      };
+      explicitlyEphemeral = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = literalExpression ''[ "systemd-timesyncd" "unbound" ]'';
+        description = ''
+          Systemd service names (as in `config.systemd.services.<name>`) whose declared
+          `serviceConfig.StateDirectory` is a DELIBERATE, first-class acknowledgment that
+          losing that state every reboot is fine — self-healing caches, regenerated keys,
+          scratch/lock directories. This is NOT a default or a fallback: it is the explicit
+          opt-in half of the build-time enforcement in
+          modules/appliance/persist-enforce.nix, which fails the build for any
+          StateDirectory-bearing service that is neither backed by a real `fileSystems`
+          entry (from this module's own Tier-1 bind mounts, or the operator's own
+          Tier-2/Tier-3 persistence) nor listed here. Only list a service once its state
+          has been checked and genuinely found disposable — an unlisted, unbacked service
+          is meant to fail the build until that check happens.
+        '';
+      };
+    };
+
     ## ── Self-update (autoUpgrade) ─────────────────────────────────────────
     autoUpgrade = {
       enable = mkOption {

@@ -45,6 +45,9 @@
     # Nix store, and a build without it fails closed.
 
     tailscale.enable = true;
+    # Persist tailscale's identity on the stick so the box rejoins your tailnet BEFORE
+    # the data pools unlock — list any other overlay/mesh-VPN client the same way.
+    persist.overlayClients = [ "tailscale" ];
 
     # The flake this box self-updates from. Private flakes need pull auth (deploy key / netrc).
     autoUpgrade.flake = "github:you/nas-config#nas";
@@ -58,8 +61,11 @@
   #     options = [ "noauto" "nofail" "x-systemd.wanted-by=nixnas-storage.target" "noatime" ]; };
   #
   # Heavy service state belongs on the pools, gated on the unlock (identity —
-  # machine-id, SSH host keys, tailscale — is already persisted on the stick by
-  # nixnas). See examples/host.nix for the bind-mount + service-gating pattern.
+  # machine-id, SSH host keys, and any nixnas.persist.overlayClients — is already
+  # persisted on the stick by nixnas). See examples/host.nix for the bind-mount +
+  # service-gating pattern. Any OTHER service declaring `serviceConfig.StateDirectory`
+  # must be persisted or added to `nixnas.persist.explicitlyEphemeral` — nixnas fails
+  # the build until you choose (modules/appliance/persist-enforce.nix).
   #
   # And your actual workloads are just NixOS too — you bring them:
   #   services.k3s.enable = true;   # gate it on nixnas-storage.target (examples/host.nix)

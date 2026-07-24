@@ -54,12 +54,13 @@ Under `modules/` (all built + VM-validated unless noted):
 | `crypto/recovery-escrow.nix` | break-glass recovery keyslot escrowed to Vaultwarden (hub tool + box status). |
 | `storage/connect.nix` | POST-boot data unlock: `nixnas-unlock` + `nixnas-storage.target` (serial one-passphrase LUKS opens, per-pool ZFS import). Mounting is native. |
 | `appliance/base.nix` | Stable host identity + Tailscale. |
-| `appliance/identity.nix` | machine-id, the running SSH host key, tailscale state — persisted on the encrypted stick (`/nix/persist`). |
+| `appliance/identity.nix` | machine-id, the running SSH host key, `persist.overlayClients` (tailscale, netbird, …) state — persisted on the encrypted stick (`/nix/persist`). |
+| `appliance/persist-enforce.nix` | Build-time gate: every `StateDirectory`-bearing systemd service must be persisted (any `fileSystems` entry) or listed in `persist.explicitlyEphemeral` — else the build fails. |
 | `appliance/ssh.nix` | Headless admin sshd (key-only root). |
 | `appliance/auto-upgrade.nix` | Self-update: stage-only, never self-reboot. |
 | `appliance/optimizations.nix` | Appliance defaults: zram, journald→RAM, no swap, store.preload. |
 
-**Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.{tpm2,recovery}`, `zfs.source`, `store.{preload,persistLogs}`, `storage.{unlock,zfsPools}`, `tailscale`, `autoUpgrade`. Mounting itself is native NixOS (`fileSystems`, `boot.zfs`), not a nixnas option.
+**Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.{tpm2,recovery}`, `zfs.source`, `store.{preload,persistLogs}`, `storage.{unlock,zfsPools}`, `persist.{overlayClients,explicitlyEphemeral}`, `tailscale`, `autoUpgrade`. Mounting itself is native NixOS (`fileSystems`, `boot.zfs`), not a nixnas option.
 
 **Thin by construction.** The option surface carries NO `compute.*` (k3s/GPU/VMs) — those were deliberately kept out. nixnas owns boot / crypto / the USB store / kernel packaging only; everything else is the operator's plain NixOS alongside the import (see "What nixnas is NOT").
 
@@ -84,6 +85,7 @@ nixnas = {
   storage.unlock   = { tank0 = "/dev/disk/by-id/…"; bulk0 = "/dev/disk/by-id/…"; };
   storage.zfsPools = [ "hot" "bulk" ];
   tailscale.enable = true;
+  persist.overlayClients = [ "tailscale" ];
 };
 # … plus native fileSystems for the mounts, and your workloads as plain NixOS.
 ```

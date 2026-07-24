@@ -33,7 +33,8 @@ nixnas/
 │   │                         #   (serial one-passphrase LUKS opens + per-pool ZFS import)
 │   └── appliance/
 │       ├── base.nix           # stable hostName + Tailscale
-│       ├── identity.nix       # machine-id + SSH host key + tailscale state on /nix/persist
+│       ├── identity.nix       # machine-id + SSH host key + persist.overlayClients state on /nix/persist
+│       ├── persist-enforce.nix # build-time gate: every StateDirectory service persisted or explicitlyEphemeral
 │       ├── ssh.nix            # headless admin sshd (key-only root)
 │       ├── auto-upgrade.nix   # self-update: stage-only, never self-reboot
 │       └── optimizations.nix  # appliance defaults: zram, journald→RAM, no swap, store.preload

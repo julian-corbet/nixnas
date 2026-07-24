@@ -60,6 +60,20 @@
 
     tailscale.enable = true;
 
+    # Tier-1 identity persistence (modules/appliance/identity.nix): the box must rejoin
+    # its mesh BEFORE the data pools unlock, so tailscale's /var/lib/tailscale is bound
+    # from the encrypted stick, not tmpfs. Demonstrates the generic overlay-client loop
+    # with the one overlay client this demo actually runs.
+    persist.overlayClients = [ "tailscale" ];
+
+    # Build-time enforcement (modules/appliance/persist-enforce.nix) walks every
+    # StateDirectory-bearing systemd service. `linger-users` (nixpkgs'
+    # `systemd.services.linger-users`, StateDirectory = "systemd/linger") is a
+    # declarative marker: it is fully recreated from `users.users.*.linger` on every
+    # boot (nixos/modules/config/users-groups.nix), so losing it is genuinely
+    # inconsequential — a deliberate, checked opt-in, not a default.
+    persist.explicitlyEphemeral = [ "linger-users" ];
+
     # DEMO placeholder so the demo exercises the self-update wiring (never pulled here).
     # A real host points this at its own flake; private flakes add pull auth.
     autoUpgrade.flake = "github:DEMO/nas-config#demo";

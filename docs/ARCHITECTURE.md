@@ -51,8 +51,8 @@ USB they have and nixnas lays it out:
 #2  nixos  f2fs-in-LUKS2  REST of stick  the NixOS system: persistent /nix (store = all kept
                                           generations; /nix/var = db/profiles/gcroots) +
                                           /nix/persist — the box's identity: machine-id, the
-                                          running system's SSH host key, tailscale state
-                                          (modules/appliance/identity.nix)
+                                          running system's SSH host key, persist.overlayClients
+                                          state (modules/appliance/identity.nix)
 ```
 
 Sizing rule: **ESP = 1 GiB default (2 GiB on a larger stick), f2fs = everything else.**
@@ -78,7 +78,7 @@ appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on
    channel is trusted: a maid cannot phish it with a tampered initrd or a swapped stick (§6).
 4. **Root `/` is tmpfs** (impermanence); the real persistent **`/nix`** is mounted read-write from
    the unlocked LUKS partition; only `/nix` and the ESP persist (identity — machine-id, SSH host
-   keys, tailscale state — lives at `/nix/persist`). The stick is **not loaded wholesale into
+   keys, `persist.overlayClients` state — lives at `/nix/persist`). The stick is **not loaded wholesale into
    RAM** — hot store paths are **page-cached on demand** and self-limiting (cold pages drop and
    re-read from the compressed f2fs). Working memory is kept small by **zram** (compressed swap,
    20 % of RAM, no disk swap) + f2fs **`compress_cache`** (compressed store blocks cached in

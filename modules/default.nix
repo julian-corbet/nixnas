@@ -25,7 +25,8 @@
     ./store/budget.nix       # the 8 GiB-stick guard: fail the build if the closure exceeds store.maxClosureBytes
 
     ./appliance/base.nix          # stable identity (hostName) + Tailscale
-    ./appliance/identity.nix      # machine-id, SSH host keys, tailscale state — persisted on the stick
+    ./appliance/identity.nix      # machine-id, SSH host keys, overlay-client state — persisted on the stick
+    ./appliance/persist-enforce.nix # build-time gate: every StateDirectory-bearing service must be persisted or explicitlyEphemeral
     ./appliance/ssh.nix           # headless admin sshd (key-only root)
     ./appliance/auth.nix          # console login: root (+ optional admin user) by the ONE store passphrase
     ./appliance/auto-upgrade.nix  # self-update: stage-only, never self-reboot

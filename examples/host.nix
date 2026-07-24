@@ -6,8 +6,8 @@
 # All device-ids / names here are ILLUSTRATIVE placeholders.
 #
 # The through-line: the USB stick only ever holds the OS (loaded into RAM) plus the box's
-# small identity (machine-id, SSH host keys, tailscale state — nixnas persists those on the
-# encrypted stick automatically). EVERYTHING else — container images, databases, media,
+# small identity (machine-id, SSH host keys, and any nixnas.persist.overlayClients — the
+# encrypted stick automatically persists those). EVERYTHING else — container images, databases, media,
 # service state — is directed onto your POOLS, which unlock POST-boot: the box boots
 # reachable with the data locked, you `ssh` in and run `nixnas-unlock`, ONE passphrase
 # opens every member, the pools import, and the gated mounts + services below come up.
@@ -25,6 +25,7 @@
     crypto.tpm2.enable = true;   # sealHostKey=true default: the initrd-SSH key is TPM-sealed on first boot
     kernel.march = "x86_64-v3";                                  # your CPU's baseline
     tailscale.enable = true;
+    persist.overlayClients = [ "tailscale" ];   # add other overlay/mesh clients (e.g. netbird) the same way
     autoUpgrade.flake = "github:you/nas-config#nas";
 
     # The store's LUKS passphrase is injected by the TUI at image-build time
