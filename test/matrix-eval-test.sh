@@ -12,6 +12,8 @@
 #   matrix-stick-32g   — 32 GiB stick: imageSizeGiB=32, espSizeMiB=2048 + budget math
 #   matrix-hot-ext4    — hot mode, fsType=ext4: initrd MUST carry NO "zfs" filesystem
 #   matrix-pin-strict  — requirePin=true explicit + pcrs=[7,11] → crypttab has tpm2-pin=yes
+#   matrix-persist-nested — StateDirectory nested under a bind-mounted ancestor must evaluate
+#                            (persist-enforce ancestor walk; 2026-07-24 acme incident guard)
 #
 # Each config is probed with `nix eval` only — no builds, no QEMU. This is intentionally
 # cheap: the goal is eval-correctness coverage (option wiring, assertion guards, module
@@ -245,12 +247,25 @@ check_contains "pin-strict: crypttabExtraOpts contains tpm2-device=auto" "$v" '"
 check_contains "pin-strict: crypttabExtraOpts contains tpm2-pin=yes"     "$v" '"tpm2-pin=yes"'
 
 # ──────────────────────────────────────────────────────────────────────────────────────
+# VARIANT 7: matrix-persist-nested
+# ──────────────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "── matrix-persist-nested (StateDirectory nested under a bind-mounted ancestor) ──"
+# The load-bearing proof: this variant declares StateDirectory two path components below a
+# fileSystems bind mount, never as its own exact key. Before the ancestor-walk fix, this ate
+# an assertion failure (nix eval below would come back empty) exactly like the real
+# 2026-07-24 corbet-server acme incident (acme-setup/acme-corbet.ch/acme-order-renew-corbet.ch,
+# all nested under fileSystems."/var/lib/acme"). check_drv succeeding here is the regression
+# guard: persist-enforce.nix must keep recognizing this shape as persisted.
+check_drv "persist-nested" "matrix-persist-nested"
+
+# ──────────────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "================ RESULT ================"
 total=$(( PASS + FAIL ))
 if [ "$FAIL" = 0 ]; then
   echo "PASS — all ${total} matrix eval checks passed."
-  echo "       Six nixnas operator-persona variants evaluate without error and carry"
+  echo "       Seven nixnas operator-persona variants evaluate without error and carry"
   echo "       the expected option values. (No builds, no QEMU — eval-correctness only.)"
   exit 0
 fi

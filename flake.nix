@@ -194,6 +194,10 @@
         system = "x86_64-linux";
         modules = matrixBase ++ [ ./hosts/matrix/pin-strict.nix ];
       };
+      nixosConfigurations.matrix-persist-nested = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = matrixBase ++ [ ./hosts/matrix/persist-nested.nix ];
+      };
 
       # `nix flake check` proves the demo toplevel builds without the private overlay, and
       # that its closure stays within the 8 GiB-stick budget (modules/store/budget.nix).
@@ -219,6 +223,10 @@
         matrix-stick-32g-toplevel  = self.nixosConfigurations.matrix-stick-32g.config.system.build.toplevel;
         matrix-hot-ext4-toplevel   = self.nixosConfigurations.matrix-hot-ext4.config.system.build.toplevel;
         matrix-pin-strict-toplevel = self.nixosConfigurations.matrix-pin-strict.config.system.build.toplevel;
+        # persist-enforce must recognize a StateDirectory nested under a bind-mounted
+        # ancestor as persisted (modules/appliance/persist-enforce.nix ancestor walk) —
+        # regression guard for the 2026-07-24 corbet-server acme incident.
+        matrix-persist-nested-toplevel = self.nixosConfigurations.matrix-persist-nested.config.system.build.toplevel;
       });
 
       # The personalised USB image. The TUI builds this locally for a real host; here
