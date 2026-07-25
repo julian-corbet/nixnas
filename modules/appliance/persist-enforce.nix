@@ -72,7 +72,7 @@ let
   # from before — the tier that mounted it doesn't matter), OR one of its ancestors is a bind
   # mount: everything nested under a bind-mounted directory rides on the same backing storage
   # as the mount itself, generically, at any nesting depth, for any parent so bound — this is
-  # exactly how bind mounts work, not a corbet-server/acme special case.
+  # exactly how bind mounts work, not a special case for any one service.
   isPersisted = dir:
     let path = "/var/lib/${dir}";
     in lib.hasAttr path config.fileSystems || lib.any isBindMountAt (ancestorsOf path);

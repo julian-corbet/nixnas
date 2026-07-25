@@ -225,7 +225,8 @@
         matrix-pin-strict-toplevel = self.nixosConfigurations.matrix-pin-strict.config.system.build.toplevel;
         # persist-enforce must recognize a StateDirectory nested under a bind-mounted
         # ancestor as persisted (modules/appliance/persist-enforce.nix ancestor walk) —
-        # regression guard for the 2026-07-24 corbet-server acme incident.
+        # regression guard for a real production incident where a nested-persist ACME
+        # state directory was wrongly flagged as non-persisted.
         matrix-persist-nested-toplevel = self.nixosConfigurations.matrix-persist-nested.config.system.build.toplevel;
       });
 
