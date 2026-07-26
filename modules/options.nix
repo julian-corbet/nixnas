@@ -43,9 +43,25 @@ in
         default = 8;
         description = ''
           How many past generations to keep bootable (the rollback menu depth, and the
-          structural failsafe). Bounded by the ESP: each kept generation is one signed UKI
-          (~80 MiB), so the default 8 fits the 1 GiB `usb.espSizeMiB`. Raise both together
-          for deeper history. (Measured Boot, a later increment, caps this at 8.)
+          structural failsafe).
+
+          This must EXCEED the number of generations the host builds in one uptime, or
+          lanzaboote's ESP garbage collection evicts the RUNNING generation's own entry:
+          the menu then cannot roll back to the system you are on, and
+          `systemd-bless-boot` fails for the rest of that uptime because
+          `LoaderBootCountPath` still names the file that was deleted. A box that
+          rebuilds ~20 times a day needs a limit well above 20, not the default 8.
+
+          The ESP cost is far smaller than an earlier revision of this text claimed
+          (~80 MiB per kept generation). Measured on a live 2 GiB stick 2026-07-26: a
+          kept generation is a lanzaboote STUB of ~195 KiB, while kernel+initrd are
+          written once per kernel VERSION into `EFI/nixos` (~50 MiB a pair) and shared
+          by every generation using them. 30 kept generations cost ~6 MiB of stubs. The
+          real ESP weight is a self-contained rescue UKI, at ~47 MiB each.
+
+          So raise this freely for rollback depth; size the ESP for kernel versions and
+          rescue images, not for generation count. (Measured Boot, a later increment,
+          caps this at 8.)
         '';
       };
       consolePrimary = mkOption {
