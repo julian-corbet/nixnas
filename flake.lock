@@ -375,11 +375,11 @@
         "system-manager": "system-manager"
       },
       "locked": {
-        "lastModified": 1785122362,
-        "narHash": "sha256-q0sbM8IztLW7ycbxQCqhOIXinc61BR+whS3PtI0qmAs=",
+        "lastModified": 1785142918,
+        "narHash": "sha256-6UO18SdP5eUujsGkEsiksHQ/W/lT4jAh8tI80HeeT2c=",
         "owner": "julian-corbet",
         "repo": "nixram-corbet-ch",
-        "rev": "68e24f175f79d3a56751ca99ab5064d29faf33d8",
+        "rev": "20372ba23e7e13e27a2f1f11089ebd6c0accfaac",
         "type": "github"
       },
       "original": {

@@ -290,7 +290,7 @@ check_contains "zswap: host kernelParams still present alongside it" "$v" '"root
 v=$(nix eval --impure --json --expr "
 ((builtins.getFlake \"$(pwd)\").nixosConfigurations.demo.extendModules {
   modules = [ {
-    services.nixram.mode = \"zswap\";
+    nixram.mode = \"zswap\";
     swapDevices = [ { device = \"/dev/disk/by-label/swap\"; } ];
   } ];
 }).config.boot.kernelParams" 2>/dev/null)

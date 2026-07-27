@@ -35,7 +35,7 @@
     ./appliance/optimizations.nix # ⬢ appliance defaults: journald→RAM, no disk swap, store.preload.
                                   #   The memory subsystem itself (zram/zswap/vm sysctls/oomd) is
                                   #   nixram's — composed in flake.nix, enabled here, values there.
-                                  #   Each host must declare `services.nixram.level` once.
+                                  #   Each host must declare `nixram.level` once.
     ./appliance/switch.nix        # `nixnas-switch`: detached (session-immune) activation + honest result report
     # NOTE: k3s / GPU / shares / the Arch LXC / the Office VM / the apps are NOT nixnas —
     # they are plain NixOS the operator declares in their own repo alongside

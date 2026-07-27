@@ -117,14 +117,14 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
   optimisation, not a doctrine, here.
 - ⬢ **The memory subsystem belongs to [nixram](https://github.com/julian-corbet/nixram-corbet-ch),
   not to nixnas.** nixnas composes it (`nixosModules.nixnas` pulls in `nixram.nixosModules.nixram`)
-  and sets only `services.nixram.enable = true` + `mode = "zram"` — the latter forced by
+  and sets only `nixram.enable = true` + `mode = "zram"` — the latter forced by
   `swapDevices = [ ]`, since zswap is a cache in *front* of a durable swap device and there is none.
   **Every host must declare its RAM level once**, because nix evaluation cannot read the target's
   `/proc/meminfo`:
 
   ```
   nix run github:julian-corbet/nixram-corbet-ch#detect-level
-  services.nixram.level = "…";   # paste the printed line
+  nixram.level = "…";   # paste the printed line
   ```
 
   Skipping it is a build failure with that command in the message, never a silently-wrong tuning.

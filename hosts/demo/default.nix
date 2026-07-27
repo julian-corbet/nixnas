@@ -10,7 +10,7 @@
   # derive, because it cannot read the target machine's /proc/meminfo -- so every
   # host declares it once, from `nix run <nixram>#detect-level`, and nixram
   # asserts rather than guessing. 8G is the demo box's placeholder.
-  services.nixram.level = "8G";
+  nixram.level = "8G";
 
   nixnas = {
     enable = true;

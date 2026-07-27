@@ -29,7 +29,7 @@
 
     # nixram — the memory subsystem, and the SOLE owner of it. zram / zswap /
     # vm.* sysctls / systemd-oomd all derive from one declared RAM level
-    # (`services.nixram.level`). nixnas used to hand-declare a slice of this
+    # (`nixram.level`). nixnas used to hand-declare a slice of this
     # (zramSwap at 20%, and nothing at all about zswap, which is how a CachyOS
     # kernel's CONFIG_ZSWAP_DEFAULT_ON=y ended up silently armed in front of a
     # zram-only swap on a real 125 GiB deployment). Splitting one subsystem

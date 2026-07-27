@@ -55,7 +55,7 @@ in
     # now; nixnas declares no memory values at all.
     swapDevices = lib.mkDefault [ ];
 
-    services.nixram = {
+    nixram = {
       enable = lib.mkDefault true;
 
       # zram, not zswap -- forced by `swapDevices` above, not a preference.
@@ -72,7 +72,7 @@ in
       # Every nixnas host must declare it once:
       #
       #     nix run github:julian-corbet/nixram-corbet-ch#detect-level
-      #     services.nixram.level = "...";   # paste the printed line
+      #     nixram.level = "...";   # paste the printed line
       #
       # An operator who skips it gets nixram's own assertion, naming that
       # command -- a build failure, never a silently-wrong tuning.

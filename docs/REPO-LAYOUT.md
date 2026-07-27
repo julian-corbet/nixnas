@@ -38,7 +38,7 @@ nixnas/
 │       ├── ssh.nix            # headless admin sshd (key-only root)
 │       ├── auto-upgrade.nix   # self-update: stage-only, never self-reboot
 │       └── optimizations.nix  # appliance defaults: journald→RAM, no disk swap, store.preload;
-│                              #   memory subsystem delegated to nixram (services.nixram.*)
+│                              #   memory subsystem delegated to nixram (nixram.*)
 │
 ├── hosts/demo/default.nix    # FAKE zero-secrets host so the public repo builds standalone
 │                             #   (DEMO-* / RFC-5737 / .invalid placeholders; demo LUKS pass `nixnas-demo`)
