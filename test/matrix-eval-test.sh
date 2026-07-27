@@ -260,13 +260,49 @@ echo "── matrix-persist-nested (StateDirectory nested under a bind-mounted a
 check_drv "persist-nested" "matrix-persist-nested"
 
 # ──────────────────────────────────────────────────────────────────────────────────────
+# INVARIANT: zswap is off whenever there is no durable swap to write back to
+# ──────────────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "── zswap/swapDevices invariant (appliance/optimizations.nix) ──"
+# The CachyOS kernel nixnas ships is built with CONFIG_ZSWAP_DEFAULT_ON=y, so zswap is
+# armed before userspace exists -- nothing in any config file to grep for. Combined with
+# the appliance default of zram-as-the-only-swap, zswap's writeback target becomes RAM
+# itself: it compresses already-compressed pages into the resource it is caching, and with
+# swapDevices = [ ] it has nowhere to evict to at all. Found live on a 125 GiB deployment
+# (enabled=Y, stored_pages climbing, written_back_pages pinned at 0).
+#
+# Both directions matter. The parameter must appear by default, AND it must disappear on
+# its own for a host that gives itself a real swap partition -- the gate is written against
+# swapDevices precisely so that host needs no override to remember.
+v=$(nix_eval "nixosConfigurations.demo.config.boot.kernelParams" --json)
+check_contains "zswap: disabled by default (swapDevices = [ ])" "$v" '"zswap.enabled=0"'
+
+# Also proves the parameter MERGES with a host's own boot.kernelParams rather than
+# replacing them (it is a list; a lib.mkDefault here would have been silently dropped by
+# any host defining kernelParams at normal priority).
+check_contains "zswap: host kernelParams still present alongside it" "$v" '"root=fstab"'
+
+# The negative half, via extendModules so it is provably the SAME config plus one swap
+# device -- not a separate hand-built variant that could drift.
+v=$(nix eval --impure --json --expr "
+((builtins.getFlake \"$(pwd)\").nixosConfigurations.demo.extendModules {
+  modules = [ { swapDevices = [ { device = \"/dev/disk/by-label/swap\"; } ]; } ];
+}).config.boot.kernelParams" 2>/dev/null)
+if [ -n "$v" ] && ! printf '%s' "$v" | grep -q '"zswap.enabled=0"'; then
+  ok "zswap: re-enabled automatically once a real swap device exists"
+else
+  fail "zswap: still disabled despite a real swap device (got: ${v:-<eval failed>})"
+fi
+
+# ──────────────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "================ RESULT ================"
 total=$(( PASS + FAIL ))
 if [ "$FAIL" = 0 ]; then
   echo "PASS — all ${total} matrix eval checks passed."
   echo "       Seven nixnas operator-persona variants evaluate without error and carry"
-  echo "       the expected option values. (No builds, no QEMU — eval-correctness only.)"
+  echo "       the expected option values, plus the zswap/swapDevices invariant in both"
+  echo "       directions. (No builds, no QEMU — eval-correctness only.)"
   exit 0
 fi
 echo "FAIL — ${FAIL} of ${total} checks failed (PASS: ${PASS})."

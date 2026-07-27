@@ -47,6 +47,32 @@ in
       memoryPercent = lib.mkDefault 20;
     };
 
+    # ── zswap OFF whenever there is no durable swap to write back to ──
+    # The CachyOS kernel nixnas ships (modules/boot/kernel.nix, the default
+    # `kernel.variant`) is built with CONFIG_ZSWAP_DEFAULT_ON=y, so zswap is
+    # armed before userspace exists: no cmdline parameter, nothing in any config
+    # file, nothing to grep for. Paired with the two lines above -- zram as the
+    # ONLY swap device -- that is actively harmful rather than merely redundant.
+    #
+    # zswap is a compressed cache that writes back to THE SWAP DEVICE. Here the
+    # swap device is zram, i.e. RAM. So zswap compresses already-compressed
+    # pages into the very resource it is caching, burning CPU for a second RAM
+    # budget (max_pool_percent, 20 % by default) stacked in front of zram's own.
+    # Worse, its eviction path leads nowhere: with `swapDevices = [ ]` there is
+    # no durable store to shed to, so a box under real pressure can only
+    # compress, never actually free. Seen on a 125 GiB deployment: enabled=Y,
+    # stored_pages climbing, written_back_pages pinned at 0.
+    #
+    # Gated on swapDevices rather than mkDefault'd, for two reasons. It encodes
+    # the actual invariant ("zswap is meaningless without a durable backing
+    # store"), so a host that gives itself a real swap partition gets zswap back
+    # automatically with no override to remember. And mkDefault would be an
+    # outright trap here: boot.kernelParams is a list, a host defining it at
+    # normal priority (as ours does, for a video= mode) would DROP a mkDefault
+    # definition wholesale rather than concatenate with it. Plain assignment
+    # merges; mkDefault would have silently done nothing.
+    boot.kernelParams = lib.optional (config.swapDevices == [ ]) "zswap.enabled=0";
+
     # ── store.preload: warm the booted closure into the (compress-)cache, so runtime
     #    reads come from RAM and the slow stick is untouched — copytoram done right.
     #    Field-proven (first real deployment, 2026-07-04): right after boot/switch on a
