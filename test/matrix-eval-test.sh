@@ -253,10 +253,11 @@ echo ""
 echo "── matrix-persist-nested (StateDirectory nested under a bind-mounted ancestor) ──"
 # The load-bearing proof: this variant declares StateDirectory two path components below a
 # fileSystems bind mount, never as its own exact key. Before the ancestor-walk fix, this ate
-# an assertion failure (nix eval below would come back empty) exactly like the real
-# 2026-07-24 corbet-server acme incident (acme-setup/acme-corbet.ch/acme-order-renew-corbet.ch,
-# all nested under fileSystems."/var/lib/acme"). check_drv succeeding here is the regression
-# guard: persist-enforce.nix must keep recognizing this shape as persisted.
+# an assertion failure (nix eval below would come back empty) exactly like the real-world
+# regression this guards against: a set of ACME service units (acme-setup plus a per-domain
+# order/renew unit pair) all nested under fileSystems."/var/lib/acme", none of which matched an
+# exact StateDirectory key. check_drv succeeding here is the regression guard:
+# persist-enforce.nix must keep recognizing this shape as persisted.
 check_drv "persist-nested" "matrix-persist-nested"
 
 # ──────────────────────────────────────────────────────────────────────────────────────

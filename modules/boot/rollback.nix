@@ -1,8 +1,8 @@
 # nixnas — the structural failsafe: bootable generations + automatic rollback.
 #
-# Julian's principle: "Failsafe entsteht nicht durch die Wahl der Software, sondern
-# dadurch, dass ein fehlgegangenes Update uns nicht aus der Bahn wirft." This module is
-# that — nothing nixnas-specific, just NixOS's own mechanisms wired up:
+# Design principle: failsafe does not come from choosing the right software, but from a failed
+# update being unable to knock the system off course. This module is that — nothing
+# nixnas-specific, just NixOS's own mechanisms wired up:
 #
 #   * KEEP N GENERATIONS (`keepGenerations`) — every past system stays bootable as its own
 #     signed UKI; the bootloader menu is the GUARANTEED manual rollback. Bounded by the ESP.
