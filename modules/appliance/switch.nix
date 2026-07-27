@@ -36,6 +36,24 @@
 let
   cfg = config.nixnas;
 
+  # The unit's ExecStopPost result capture, as a real script file rather than an
+  # inline `/bin/sh -c '...'`. The inline form had to survive THREE escaping layers
+  # in a row -- Nix string, bash double-quote processing inside the wrapper, then
+  # systemd's own Exec-line parsing -- and it did not: `\$\$SERVICE_RESULT` reached
+  # bash as an unescaped `$$`, which bash expanded to the WRAPPER'S OWN PID. Every
+  # run therefore wrote a literal "<pid>SERVICE_RESULT <pid>EXIT_STATUS" into the
+  # result file, never matched "success", and the tool reported FAILED and exited
+  # non-zero after a switch that had in fact completed perfectly. Measured on a real
+  # hub switch: "2619346SERVICE_RESULT 2619346EXIT_STATUS".
+  #
+  # That is the exact inverse of the failure mode this whole tool exists to prevent
+  # (see the header: a wrapper that reports success for a failed run). A separate
+  # script has no nested quoting left to get wrong -- systemd sets SERVICE_RESULT and
+  # EXIT_STATUS in the ExecStopPost environment, and this reads them straight out of it.
+  resultCapture = pkgs.writeShellScript "nixnas-switch-capture-result" ''
+    printf '%s %s\n' "''${SERVICE_RESULT:-unknown}" "''${EXIT_STATUS:-0}" > "$1"
+  '';
+
   switchTool = pkgs.writeShellApplication {
     name = "nixnas-switch";
     runtimeInputs = with pkgs; [
@@ -137,7 +155,7 @@ let
         --collect \
         --quiet \
         --property=TimeoutStartSec=infinity \
-        --property="ExecStopPost=/bin/sh -c 'echo \$\$SERVICE_RESULT \$\$EXIT_STATUS > $resfile'" \
+        --property="ExecStopPost=${resultCapture} $resfile" \
         -- "$stc" "$mode"
 
       # ── follow the unit until it reports ───────────────────────────────────
