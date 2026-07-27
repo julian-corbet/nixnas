@@ -115,8 +115,31 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
   nixnas targets boxes strong enough to build themselves (a nixnas box is typically the *hub*
   that builds for weaker machines) — so on-box building is sanctioned; a cache is an
   optimisation, not a doctrine, here.
-- ⬢ **`zramSwap.enable = true; zramSwap.algorithm = "zstd"; zramSwap.memoryPercent = 20;`** (default)
-  + **no disk swap.** This is the **RAM-compression** lever: the appliance keeps its writable working
+- ⬢ **The memory subsystem belongs to [nixram](https://github.com/julian-corbet/nixram-corbet-ch),
+  not to nixnas.** nixnas composes it (`nixosModules.nixnas` pulls in `nixram.nixosModules.nixram`)
+  and sets only `services.nixram.enable = true` + `mode = "zram"` — the latter forced by
+  `swapDevices = [ ]`, since zswap is a cache in *front* of a durable swap device and there is none.
+  **Every host must declare its RAM level once**, because nix evaluation cannot read the target's
+  `/proc/meminfo`:
+
+  ```
+  nix run github:julian-corbet/nixram-corbet-ch#detect-level
+  services.nixram.level = "…";   # paste the printed line
+  ```
+
+  Skipping it is a build failure with that command in the message, never a silently-wrong tuning.
+  nixram then derives zram sizing/algorithm, the `vm.*` reclaim sysctls and the systemd-oomd
+  thresholds from that one level, as a coherent set.
+
+  *Why it moved:* nixnas used to hand-declare `zramSwap` at 20 % and own **nothing** else in the
+  subsystem — no zswap stance at all. The CachyOS kernel nixnas ships is built
+  `CONFIG_ZSWAP_DEFAULT_ON=y`, so zswap was armed before userspace existed, in front of a zram-only
+  swap, on a live 125 GiB deployment: compressing already-compressed pages into the same RAM it was
+  caching, with `written_back_pages` pinned at 0 because there was nowhere to evict to. Nothing in
+  any config file pointed at it. A subsystem split across two owners has gaps exactly where neither
+  is looking, so it now has one owner. nixram's `zram` mode also actively disables zswap.
+
+- ⬢ **No disk swap.** This is the **RAM-compression** lever: the appliance keeps its writable working
   set (tmpfs root + anon memory) small by compressing cold pages *in RAM* instead of writing them —
   zero flash writes, and it makes nixnas fit boxes with far less than 128 GB. (Pairs with f2fs
   `compress_cache`, which caches *compressed* store blocks in RAM — STORAGE.md §4 / OPTIMIZATIONS §3.)

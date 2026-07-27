@@ -80,8 +80,9 @@ appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on
    the unlocked LUKS partition; only `/nix` and the ESP persist (identity — machine-id, SSH host
    keys, `persist.overlayClients` state — lives at `/nix/persist`). The stick is **not loaded wholesale into
    RAM** — hot store paths are **page-cached on demand** and self-limiting (cold pages drop and
-   re-read from the compressed f2fs). Working memory is kept small by **zram** (compressed swap,
-   20 % of RAM, no disk swap) + f2fs **`compress_cache`** (compressed store blocks cached in
+   re-read from the compressed f2fs). Working memory is kept small by **zram** (compressed swap, no
+   disk swap — sized and tuned by **nixram** from the host's declared RAM level, see
+   OPTIMIZATIONS.md §5) + f2fs **`compress_cache`** (compressed store blocks cached in
    RAM) — so the appliance fits boxes with far less than 128 GB.
 5. The stateless OS comes up **reachable, with the data still locked**: sshd + Tailscale start
    with their stick-persisted identity, while every `storage.unlock` member stays `noauto`. The

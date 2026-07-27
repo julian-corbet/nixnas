@@ -39,39 +39,44 @@ in
     documentation.nixos.enable = lib.mkDefault false;
     systemd.services.systemd-networkd-wait-online.enable = lib.mkDefault false;  # no boot stall on link-up
 
-    # ── Compressed RAM: no disk swap, zram at 20 % (the RAM-compression lever) ──
+    # ── No disk swap. The memory subsystem itself belongs to nixram ──────────
+    # `swapDevices` stays here because "this appliance has no disk swap" is a
+    # STORAGE-LAYOUT decision -- the stick is precious and /nix is the only
+    # persistent filesystem -- which is squarely nixnas's domain.
+    #
+    # Everything DOWNSTREAM of that decision is not: which compression medium,
+    # how it is sized, the vm.* sysctls that tune reclaim against it, the oomd
+    # thresholds that fire when it is exhausted. nixnas used to own a slice of
+    # that (zramSwap at 20%, zstd) and, more damagingly, to own NONE of the rest
+    # -- which is how the kernel's own CONFIG_ZSWAP_DEFAULT_ON=y left zswap
+    # silently armed in front of a zram-only swap on a live 125 GiB deployment,
+    # with nothing in any config file to point at. A subsystem split across two
+    # owners has gaps exactly where neither is looking. nixram owns all of it
+    # now; nixnas declares no memory values at all.
     swapDevices = lib.mkDefault [ ];
-    zramSwap = {
-      enable = lib.mkDefault true;
-      algorithm = "zstd";
-      memoryPercent = lib.mkDefault 20;
-    };
 
-    # ── zswap OFF whenever there is no durable swap to write back to ──
-    # The CachyOS kernel nixnas ships (modules/boot/kernel.nix, the default
-    # `kernel.variant`) is built with CONFIG_ZSWAP_DEFAULT_ON=y, so zswap is
-    # armed before userspace exists: no cmdline parameter, nothing in any config
-    # file, nothing to grep for. Paired with the two lines above -- zram as the
-    # ONLY swap device -- that is actively harmful rather than merely redundant.
-    #
-    # zswap is a compressed cache that writes back to THE SWAP DEVICE. Here the
-    # swap device is zram, i.e. RAM. So zswap compresses already-compressed
-    # pages into the very resource it is caching, burning CPU for a second RAM
-    # budget (max_pool_percent, 20 % by default) stacked in front of zram's own.
-    # Worse, its eviction path leads nowhere: with `swapDevices = [ ]` there is
-    # no durable store to shed to, so a box under real pressure can only
-    # compress, never actually free. Seen on a 125 GiB deployment: enabled=Y,
-    # stored_pages climbing, written_back_pages pinned at 0.
-    #
-    # Gated on swapDevices rather than mkDefault'd, for two reasons. It encodes
-    # the actual invariant ("zswap is meaningless without a durable backing
-    # store"), so a host that gives itself a real swap partition gets zswap back
-    # automatically with no override to remember. And mkDefault would be an
-    # outright trap here: boot.kernelParams is a list, a host defining it at
-    # normal priority (as ours does, for a video= mode) would DROP a mkDefault
-    # definition wholesale rather than concatenate with it. Plain assignment
-    # merges; mkDefault would have silently done nothing.
-    boot.kernelParams = lib.optional (config.swapDevices == [ ]) "zswap.enabled=0";
+    services.nixram = {
+      enable = lib.mkDefault true;
+
+      # zram, not zswap -- forced by `swapDevices` above, not a preference.
+      # zswap is a cache in FRONT of a durable swap device; with none, it has
+      # nowhere to evict to and merely compresses into the same RAM it caches.
+      # nixram's `zram` mode also actively DISABLES zswap (zswap.enabled=0 plus
+      # a switch-time runtime write), which is what closes the kernel-default
+      # hole described above.
+      mode = lib.mkDefault "zram";
+
+      # `level` is deliberately NOT defaulted, and cannot be: nix evaluation
+      # cannot read the target machine's /proc/meminfo, and nixram refuses to
+      # guess rather than silently tune a 128 GiB box as if it were 4 GiB.
+      # Every nixnas host must declare it once:
+      #
+      #     nix run github:julian-corbet/nixram-corbet-ch#detect-level
+      #     services.nixram.level = "...";   # paste the printed line
+      #
+      # An operator who skips it gets nixram's own assertion, naming that
+      # command -- a build failure, never a silently-wrong tuning.
+    };
 
     # ── store.preload: warm the booted closure into the (compress-)cache, so runtime
     #    reads come from RAM and the slow stick is untouched — copytoram done right.

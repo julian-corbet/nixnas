@@ -26,9 +26,23 @@
     # the tmpfs root; you route state with `environment.persistence."/hot" = {...}`. We use
     # the community module rather than reinvent bind-mount routing.
     impermanence.url = "github:nix-community/impermanence";
+
+    # nixram — the memory subsystem, and the SOLE owner of it. zram / zswap /
+    # vm.* sysctls / systemd-oomd all derive from one declared RAM level
+    # (`services.nixram.level`). nixnas used to hand-declare a slice of this
+    # (zramSwap at 20%, and nothing at all about zswap, which is how a CachyOS
+    # kernel's CONFIG_ZSWAP_DEFAULT_ON=y ended up silently armed in front of a
+    # zram-only swap on a real 125 GiB deployment). Splitting one subsystem
+    # across two owners is what produced that; nixnas now composes nixram and
+    # declares no memory values of its own. Same mechanism-lives-in-its-own-flake
+    # split nixnas already uses for the kernel and the boot chain.
+    nixram = {
+      url = "github:julian-corbet/nixram-corbet-ch";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, nixram, ... }:
     let
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
@@ -55,7 +69,18 @@
     {
       # The reusable, FOSS-clean appliance module. All behaviour lives here,
       # parameterised through the `nixnas.*` options (see ./modules/options.nix).
-      nixosModules.nixnas = import ./modules;
+      # nixram rides along with the appliance module rather than being a separate
+      # thing every consumer must remember to import: the memory subsystem is not
+      # optional on an appliance that boots to a tmpfs root with no disk swap.
+      # `import ./modules` and nixram's module are both PATH imports, so the
+      # module system deduplicates them by key if a consumer happens to compose
+      # nixram directly as well.
+      nixosModules.nixnas = {
+        imports = [
+          (import ./modules)
+          nixram.nixosModules.nixram
+        ];
+      };
       nixosModules.default = self.nixosModules.nixnas;
 
       # Demo host — proves the public core evaluates standalone, with ZERO secrets.

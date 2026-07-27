@@ -5,6 +5,13 @@
 # separate, private overlay (see ../../templates/host).
 { lib, pkgs, ... }:
 {
+  # The memory subsystem is nixram's (composed into nixosModules.nixnas). nixnas
+  # sets enable + mode = "zram"; `level` is the one value nix evaluation cannot
+  # derive, because it cannot read the target machine's /proc/meminfo -- so every
+  # host declares it once, from `nix run <nixram>#detect-level`, and nixram
+  # asserts rather than guessing. 8G is the demo box's placeholder.
+  services.nixram.level = "8G";
+
   nixnas = {
     enable = true;
     hostName = "demo";

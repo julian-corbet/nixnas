@@ -32,7 +32,10 @@
     ./appliance/auto-upgrade.nix  # self-update: stage-only, never self-reboot
     ./appliance/rescue-maintain.nix # hot mode: the main keeps the stick's RESCUE current (closure + signed UKI)
     ./appliance/install-hot.nix     # `nixnas-install-hot` on usb systems: install a hot-mode MAIN from the rescue
-    ./appliance/optimizations.nix # ⬢ appliance defaults: zram, journald→RAM, no swap, store.preload
+    ./appliance/optimizations.nix # ⬢ appliance defaults: journald→RAM, no disk swap, store.preload.
+                                  #   The memory subsystem itself (zram/zswap/vm sysctls/oomd) is
+                                  #   nixram's — composed in flake.nix, enabled here, values there.
+                                  #   Each host must declare `services.nixram.level` once.
     ./appliance/switch.nix        # `nixnas-switch`: detached (session-immune) activation + honest result report
     # NOTE: k3s / GPU / shares / the Arch LXC / the Office VM / the apps are NOT nixnas —
     # they are plain NixOS the operator declares in their own repo alongside

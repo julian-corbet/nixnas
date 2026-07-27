@@ -260,10 +260,10 @@ echo "── matrix-persist-nested (StateDirectory nested under a bind-mounted a
 check_drv "persist-nested" "matrix-persist-nested"
 
 # ──────────────────────────────────────────────────────────────────────────────────────
-# INVARIANT: zswap is off whenever there is no durable swap to write back to
+# INVARIANT: nixram owns the memory subsystem; zswap is off under mode = "zram"
 # ──────────────────────────────────────────────────────────────────────────────────────
 echo ""
-echo "── zswap/swapDevices invariant (appliance/optimizations.nix) ──"
+echo "── nixram ownership + zswap invariant (appliance/optimizations.nix) ──"
 # The CachyOS kernel nixnas ships is built with CONFIG_ZSWAP_DEFAULT_ON=y, so zswap is
 # armed before userspace exists -- nothing in any config file to grep for. Combined with
 # the appliance default of zram-as-the-only-swap, zswap's writeback target becomes RAM
@@ -282,16 +282,32 @@ check_contains "zswap: disabled by default (swapDevices = [ ])" "$v" '"zswap.ena
 # any host defining kernelParams at normal priority).
 check_contains "zswap: host kernelParams still present alongside it" "$v" '"root=fstab"'
 
-# The negative half, via extendModules so it is provably the SAME config plus one swap
-# device -- not a separate hand-built variant that could drift.
+# The negative half, via extendModules so it is provably the SAME config with one
+# option changed -- not a separate hand-built variant that could drift. An operator
+# who genuinely wants zswap declares it, and must give the host a durable swap device
+# for it to cache in front of (nixram asserts that pairing itself).
 v=$(nix eval --impure --json --expr "
 ((builtins.getFlake \"$(pwd)\").nixosConfigurations.demo.extendModules {
-  modules = [ { swapDevices = [ { device = \"/dev/disk/by-label/swap\"; } ]; } ];
+  modules = [ {
+    services.nixram.mode = \"zswap\";
+    swapDevices = [ { device = \"/dev/disk/by-label/swap\"; } ];
+  } ];
 }).config.boot.kernelParams" 2>/dev/null)
 if [ -n "$v" ] && ! printf '%s' "$v" | grep -q '"zswap.enabled=0"'; then
-  ok "zswap: re-enabled automatically once a real swap device exists"
+  ok "zswap: not disabled when the operator explicitly selects mode = zswap"
 else
-  fail "zswap: still disabled despite a real swap device (got: ${v:-<eval failed>})"
+  fail "zswap: still force-disabled under mode = zswap (got: ${v:-<eval failed>})"
+fi
+check_contains "zswap: mode = zswap arms it instead" "$v" '"zswap.enabled=1"'
+
+# nixnas itself must declare NO memory values -- the whole point of the migration.
+# zramSwap is nixpkgs' own module and renders the same zram-generator.conf nixram
+# does, so a leftover declaration here is not cosmetic: it is a hard eval conflict
+# waiting for the next person who sets a level.
+if grep -rqE '^\s*(zramSwap|boot\.kernel\.sysctl|systemd\.oomd)' modules/; then
+  fail "nixnas still declares memory-subsystem values (grep modules/ for zramSwap/sysctl/oomd)"
+else
+  ok "nixnas declares no memory-subsystem values of its own"
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────────────

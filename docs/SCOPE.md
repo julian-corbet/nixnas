@@ -58,7 +58,7 @@ Under `modules/` (all built + VM-validated unless noted):
 | `appliance/persist-enforce.nix` | Build-time gate: every `StateDirectory`-bearing systemd service must be persisted (any `fileSystems` entry) or listed in `persist.explicitlyEphemeral` — else the build fails. |
 | `appliance/ssh.nix` | Headless admin sshd (key-only root). |
 | `appliance/auto-upgrade.nix` | Self-update: stage-only, never self-reboot. |
-| `appliance/optimizations.nix` | Appliance defaults: zram, journald→RAM, no swap, store.preload. |
+| `appliance/optimizations.nix` | Appliance defaults: journald→RAM, no disk swap, store.preload. Composes **nixram** for the memory subsystem (zram/zswap/vm sysctls/oomd) — each host declares `services.nixram.level`. |
 
 **Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.{tpm2,recovery}`, `zfs.source`, `store.{preload,persistLogs}`, `storage.{unlock,zfsPools}`, `persist.{overlayClients,explicitlyEphemeral}`, `tailscale`, `autoUpgrade`. Mounting itself is native NixOS (`fileSystems`, `boot.zfs`), not a nixnas option.
 

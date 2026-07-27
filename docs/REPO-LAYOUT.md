@@ -37,7 +37,8 @@ nixnas/
 │       ├── persist-enforce.nix # build-time gate: every StateDirectory service persisted or explicitlyEphemeral
 │       ├── ssh.nix            # headless admin sshd (key-only root)
 │       ├── auto-upgrade.nix   # self-update: stage-only, never self-reboot
-│       └── optimizations.nix  # appliance defaults: zram, journald→RAM, no swap, store.preload
+│       └── optimizations.nix  # appliance defaults: journald→RAM, no disk swap, store.preload;
+│                              #   memory subsystem delegated to nixram (services.nixram.*)
 │
 ├── hosts/demo/default.nix    # FAKE zero-secrets host so the public repo builds standalone
 │                             #   (DEMO-* / RFC-5737 / .invalid placeholders; demo LUKS pass `nixnas-demo`)
