@@ -1,9 +1,10 @@
 # nixnas — stable identity, persisted on the encrypted stick store.
 #
-# The tmpfs root forgets everything; the data pools unlock only POST-boot. Identity
+# USB MODE ONLY. This module exists solely to route identity around a TMPFS root: the
+# tmpfs root forgets everything, and the data pools unlock only POST-boot, so identity
 # must live between the two: on /nix (the LUKS2+f2fs store, mounted in stage-1) at
 # /nix/persist. This is what makes the "boots reachable, data still locked" state
-# trustworthy:
+# trustworthy in usb mode:
 #
 #   * machine-id      — stable node identity (systemd, journal cursors, DHCP DUIDs)
 #   * SSH host keys   — the operator's client PINS these; they authenticate the very
@@ -16,6 +17,14 @@
 #
 # All tiny and rarely written — kind to the stick. Heavy state (containers, app
 # data) belongs on the operator's pools, gated on nixnas-storage.target.
+#
+# `hot` mode does NOT compose this module: its MAIN has an ORDINARY persistent root
+# (modules/store/location.nix, store.root.*) — machine-id, SSH host keys, /var/lib/nixos
+# and every overlay client's state already live there, across every reboot, with zero
+# special handling, exactly like any other NixOS box. Routing them through /nix/persist
+# would be redundant at best and a second, competing source of truth at worst. See
+# modules/store/location.nix's own assertion refusing a hot-mode host that still sets
+# persist.overlayClients/explicitlyEphemeral, so this scoping is never silent.
 { config, lib, ... }:
 let
   cfg = config.nixnas;
@@ -28,7 +37,7 @@ let
   overlayMountUnit = name: "sysroot-var-lib-${name}.mount";
 in
 {
-  config = lib.mkIf cfg.enable {
+  config = lib.mkIf (cfg.enable && cfg.store.location == "usb") {
     # The bind SOURCES must exist before stage-1 mounts them; /sysroot/nix is up
     # once the sysroot store mount is in place.
     boot.initrd.systemd.services.nixnas-persist-dirs = {

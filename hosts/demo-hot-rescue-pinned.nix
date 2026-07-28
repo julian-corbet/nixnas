@@ -9,7 +9,7 @@
 # option would be a straight eval conflict, not an override. Everything else here mirrors
 # demo-hot.nix's own hot-mode wiring; `rescue.enable`/`rescue.toplevel` are set from flake.nix
 # instead (rescue.toplevel needs `self`, which a plain host module does not receive).
-{ pkgs, ... }:
+{ lib, pkgs, ... }:
 {
   nixnas.store.location = "hot";
   nixnas.store.hot = {
@@ -20,10 +20,23 @@
     fsType = "ext4";
     unlock.nixstore-demo-rescue = "/dev/disk/by-partlabel/nixstore-demo-rescue";
   };
+  # The persistent root (REQUIRED — no default; see modules/store/location.nix). Distinct
+  # mapper/partlabel from every other CI fixture, same reasoning as the store device above.
+  nixnas.store.root = {
+    device = "/dev/mapper/nixroot-demo-rescue";
+    fsType = "ext4";
+    unlock.nixroot-demo-rescue = "/dev/disk/by-partlabel/nixroot-demo-rescue";
+  };
 
   # Hot mode enters the store key in the initrd — keep remote-unlock (initrd-SSH) on, same as
   # demo-hot.nix.
   nixnas.boot.remoteUnlock.enable = true;
+
+  # ./hosts/demo sets these for the usb-mode demo (Tier-1 identity persistence around ITS
+  # tmpfs root) — usb-mode-only concepts that location.nix REFUSES to see non-empty in hot
+  # mode. Clear the inherited usb-mode values, same as demo-hot.nix.
+  nixnas.persist.overlayClients = lib.mkForce [ ];
+  nixnas.persist.explicitlyEphemeral = lib.mkForce [ ];
 
   # rescue-maintain.nix asserts hot-mode rescue needs STABLE Secure Boot keys (never the
   # autogenerate/keyless path `hosts/demo` otherwise uses) — a real signing identity is what

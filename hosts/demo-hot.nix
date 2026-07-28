@@ -2,13 +2,13 @@
 #
 # It flips ./hosts/demo to store.location = "hot" with placeholder (RFC-style) devices, so
 # `nix build .#nixosConfigurations.demo-hot...toplevel` proves modules/store/location.nix +
-# the hot wiring EVALUATE and BUILD into a valid system (the /nix-on-external-device
-# fileSystems entry, the initrd operator-key LUKS unlock, no auto). It uses fsType = "ext4"
-# to keep this core check off the ZFS-in-initrd path (a zfs variant is exercised on the real
-# host). rescue.enable is OFF here: the keyless demo has no Secure Boot db key to sign a
-# rescue UKI with, and the rescue itself is just a usb nixnas (already covered by the usb
-# boot-test). See docs/HOT-MODE.md.
-{ ... }:
+# the hot wiring EVALUATE and BUILD into a valid system (the /nix- and /-on-external-device
+# fileSystems entries, the initrd operator-key LUKS unlock, no auto). It uses fsType = "ext4"
+# for BOTH the store and the root to keep this core check off the ZFS-in-initrd path (a zfs
+# variant is exercised by demo-hot-zfs.nix). rescue.enable is OFF here: the keyless demo has
+# no Secure Boot db key to sign a rescue UKI with, and the rescue itself is just a usb nixnas
+# (already covered by the usb boot-test). See docs/HOT-MODE.md.
+{ lib, ... }:
 {
   nixnas.store.location = "hot";
   nixnas.store.hot = {
@@ -24,8 +24,22 @@
       nixstore-demo2 = "/dev/disk/by-partlabel/nixstore-demo2";
     };
   };
+  # The persistent root (REQUIRED — no default; see modules/store/location.nix). A separate
+  # LUKS member from the store's, by-partlabel for the same QEMU fixture reasons above.
+  nixnas.store.root = {
+    device = "/dev/mapper/nixroot-demo";
+    fsType = "ext4";
+    unlock.nixroot-demo = "/dev/disk/by-partlabel/nixroot-demo";
+  };
   nixnas.rescue.enable = false;
 
   # Hot mode enters the store key in the initrd — keep remote-unlock (initrd-SSH) on.
   nixnas.boot.remoteUnlock.enable = true;
+
+  # ./hosts/demo sets these for the usb-mode demo (Tier-1 identity persistence around ITS
+  # tmpfs root). Hot mode's root is a real persistent filesystem — these are usb-mode-only
+  # concepts and location.nix REFUSES a hot-mode host that still sets either non-empty, so
+  # clear both here rather than let the inherited usb-mode values fail this build.
+  nixnas.persist.overlayClients = lib.mkForce [ ];
+  nixnas.persist.explicitlyEphemeral = lib.mkForce [ ];
 }

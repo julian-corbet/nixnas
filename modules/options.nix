@@ -416,10 +416,14 @@ in
             "usb" (default): the whole OS store is on the USB stick (LUKS2+f2fs). Small
               appliances, max resilience — the OS boots from the stick even with the data
               pool down. The stick is the size ceiling.
-            "hot": the MAIN system's `/nix` lives on the operator's own encrypted storage
-              (`store.hot.*`, e.g. a ZFS dataset on an SSD pool — unlimited, install anything
-              system-wide). The stick holds only the ESP + a self-contained RESCUE system
-              (`rescue.*`). The operator ENTERS THEIR KEY in the initrd to unlock it (never
+            "hot": the MAIN system's `/nix` AND `/` (root — `store.root.*`, REQUIRED, no
+              default) live on the operator's own encrypted storage — unlimited, install
+              anything system-wide, and an ORDINARY persistent root (no tmpfs, no
+              impermanence: a main accumulates operational state and losing it silently on
+              reboot is the failure this mode exists to end — see docs/ARCHITECTURE.md §3).
+              The stick holds only the ESP + a self-contained RESCUE system (`rescue.*`,
+              which DOES keep a tmpfs root — impermanence is right for a rescue, wrong for
+              a main). The operator ENTERS THEIR KEY in the initrd to unlock it (never
               auto/TPM). Hub-class boxes. NOT a composed store — two independent systems.
         '';
       };
@@ -457,6 +461,55 @@ in
           default = null;
           example = "hot";
           description = "For `fsType = \"zfs\"`: the pool the initrd imports (via /dev/mapper) before mounting `store.hot.device`.";
+        };
+      };
+      root = {
+        device = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "hot/nixnas/root";
+          description = ''
+            `hot` mode: the `fileSystems."/".device` for the MAIN system — an ORDINARY
+            persistent root filesystem. REQUIRED, no default: hot mode has no tmpfs root
+            (see docs/ARCHITECTURE.md §3, docs/HOT-MODE.md) — the MAIN's `/` must be a real
+            device on the operator's own encrypted storage, same as any root-on-ZFS NixOS
+            box. A ZFS dataset name (with `fsType = "zfs"`, typically a sibling of
+            `store.hot.device` — e.g. `hot/nixnas/root` beside `hot/nixnas/nix`, both
+            `mountpoint=legacy`), or a `/dev/mapper/<name>` for LUKS+ext4/btrfs/f2fs.
+            Mounted by the initrd, after the LUKS members that reach it are open.
+          '';
+        };
+        fsType = mkOption {
+          type = types.str;
+          default = "zfs";
+          example = "ext4";
+          description = "Filesystem of `store.root.device` (zfs/ext4/btrfs/f2fs/…). `zfs` pulls ZFS into the initrd (merged with `store.hot.fsType`'s own need); others don't.";
+        };
+        zpool = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "hot";
+          description = ''
+            For `fsType = "zfs"`: the pool the initrd imports (via /dev/mapper) before
+            mounting `store.root.device`. Leave null when it derives from the device name
+            (`"hot/nixnas/root"` → pool `hot`) — set it only when that derivation is wrong,
+            exactly like `store.hot.zpool`. Usually the SAME pool as `store.hot.zpool` (root
+            and /nix as sibling datasets); the initrd imports each distinct pool exactly once.
+          '';
+        };
+        unlock = mkOption {
+          type = types.attrsOf (types.strMatching "/dev/disk/by-[a-z]+/.+");
+          default = { };
+          example = literalExpression ''{ tank0 = "/dev/disk/by-id/ata-…"; }'';
+          description = ''
+            EXTRA LUKS members the INITRD must open to reach the root filesystem, beyond
+            whatever `store.hot.unlock` already opens — same shape, same one-passphrase
+            chain (merged with `store.hot.unlock` ∪ `storage.unlock` into ONE serialised
+            keyring unlock; see modules/store/location.nix). Leave empty when root and
+            `/nix` live on the SAME encrypted pool/members (the common case — root is just
+            a sibling dataset); set members here only when the root device lives on disks
+            `store.hot.unlock` does not already cover.
+          '';
         };
       };
       preload = mkOption {
@@ -602,21 +655,31 @@ in
     };
 
     ## ── Tier-1 persistence: identity that must survive reboot BEFORE the data pools unlock ──
+    ## USB MODE ONLY. `hot` mode has no tmpfs root to route state around (store.root.* is an
+    ## ordinary persistent filesystem — see modules/store/location.nix), so these two options
+    ## are inert there: modules/appliance/identity.nix and modules/appliance/persist-enforce.nix
+    ## both gate on `store.location == "usb"`, and location.nix's own hot-mode assertions
+    ## REFUSE a hot-mode host that still sets either one non-empty (see its assertions) —
+    ## a silently-ignored persistence option is exactly the footgun this whole area exists to
+    ## prevent.
     persist = {
       overlayClients = mkOption {
         type = types.listOf types.str;
         default = [ ];
         example = literalExpression ''[ "tailscale" "netbird" ]'';
         description = ''
-          Names of overlay/mesh-VPN clients whose `/var/lib/<name>` state directory must
-          survive a reboot for the box to be REACHABLE before the data pools unlock — the
-          same problem `admin.authorizedKeys` + `boot.remoteUnlock` solve for SSH, but for
-          the mesh identity the operator actually connects over. Each name gets a Tier-1
-          bind mount (`/var/lib/<name>` → `/nix/persist/var/lib/<name>`), created and
-          mounted in stage-1 (see modules/appliance/identity.nix) alongside machine-id and
-          the SSH host keys — small, rarely-written identity state, kind to the stick.
-          Losing one of these on every reboot means the client re-provisions (or never
-          rejoins) its mesh — the exact failure class this option exists to prevent.
+          `usb` mode only (see the section note above). Names of overlay/mesh-VPN clients
+          whose `/var/lib/<name>` state directory must survive a reboot for the box to be
+          REACHABLE before the data pools unlock — the same problem `admin.authorizedKeys` +
+          `boot.remoteUnlock` solve for SSH, but for the mesh identity the operator actually
+          connects over. Each name gets a Tier-1 bind mount (`/var/lib/<name>` →
+          `/nix/persist/var/lib/<name>`), created and mounted in stage-1 (see
+          modules/appliance/identity.nix) alongside machine-id and the SSH host keys — small,
+          rarely-written identity state, kind to the stick. Losing one of these on every
+          reboot means the client re-provisions (or never rejoins) its mesh — the exact
+          failure class this option exists to prevent. In `hot` mode this need never arises:
+          the persistent root already keeps `/var/lib/<name>` across a reboot, the same as
+          any ordinary NixOS box — leave this at its default `[ ]` there.
         '';
       };
       explicitlyEphemeral = mkOption {
@@ -624,12 +687,12 @@ in
         default = [ ];
         example = literalExpression ''[ "systemd-timesyncd" "unbound" ]'';
         description = ''
-          Systemd service names (as in `config.systemd.services.<name>`) whose declared
-          `serviceConfig.StateDirectory` is a DELIBERATE, first-class acknowledgment that
-          losing that state every reboot is fine — self-healing caches, regenerated keys,
-          scratch/lock directories. This is NOT a default or a fallback: it is the explicit
-          opt-in half of the build-time enforcement in
-          modules/appliance/persist-enforce.nix, which fails the build for any
+          `usb` mode only (see the section note above). Systemd service names (as in
+          `config.systemd.services.<name>`) whose declared `serviceConfig.StateDirectory` is
+          a DELIBERATE, first-class acknowledgment that losing that state every reboot is
+          fine — self-healing caches, regenerated keys, scratch/lock directories. This is
+          NOT a default or a fallback: it is the explicit opt-in half of the build-time
+          enforcement in modules/appliance/persist-enforce.nix, which fails the build for any
           StateDirectory-bearing service that is neither backed by a real `fileSystems`
           entry (from this module's own Tier-1 bind mounts, or the operator's own
           Tier-2/Tier-3 persistence) nor listed here. Only list a service once its state

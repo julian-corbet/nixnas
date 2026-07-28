@@ -1,17 +1,31 @@
 # nixnas — HOT-MODE.md (the two store locations)
 
-nixnas has two ways to place the OS's `/nix` store, chosen by `nixnas.store.location`:
+nixnas has two ways to place the OS's `/nix` store **and its root filesystem**, chosen by
+`nixnas.store.location`:
 
 | | `usb` (default) | `hot` |
 |---|---|---|
 | The OS `/nix` store lives on | the USB stick (LUKS2+f2fs) | the operator's own encrypted storage (a "hot" device — SSD pool, etc.) |
+| The OS root (`/`) lives on | **tmpfs** (impermanence) | the operator's own encrypted storage (`store.root.*`, REQUIRED — ORDINARY persistent filesystem, no tmpfs, no default) |
 | The USB stick holds | the whole OS + ESP | ESP + a self-contained **rescue** system only |
 | Store size ceiling | the stick (8 GiB-class) | the hot device (unlimited) — install anything system-wide |
-| Boot unlock | TPM2 (auto or PIN) unlocks the stick store | the **operator enters their key** in the initrd (no auto); it unlocks the hot store |
+| Boot unlock | TPM2 (auto or PIN) unlocks the stick store | the **operator enters their key** in the initrd (no auto); it unlocks the hot store AND the root |
 | Survives a dead data pool | yes — the whole OS is on the stick | via the **rescue** system on the stick |
-| For | small appliances, max resilience | hub-class boxes that run a lot |
+| For | small appliances, max resilience | hub-class boxes that run a lot, for a long operational lifetime |
 
 `usb` is unchanged from nixnas's original design. This document specifies `hot`.
+
+**Why `hot` gets a real root and `usb` doesn't:** impermanence is right for a system with no
+state worth keeping — a small appliance re-flashed from a known config, or a rescue system
+booted only when the main OS won't. It is wrong for a MAIN that accumulates operational
+state over months: every path an operator forgets to route through `persist.*` is state
+silently destroyed on the next reboot, discovered only once it's already gone. `hot` mode's
+MAIN therefore carries **no tmpfs root at all** — `/` is an ordinary persistent filesystem,
+exactly like `/nix`, and every service's `/var/lib` just survives a reboot with zero special
+handling (see `docs/ARCHITECTURE.md` §3.2). `modules/appliance/identity.nix` and
+`modules/appliance/persist-enforce.nix` (the machinery that routed identity and enforced
+state-accounting around `usb` mode's tmpfs root) both gate on `store.location == "usb"` and
+never run in `hot` mode — there is nothing left for them to do once the root is real.
 
 ## Why `hot` exists — and why it is NOT a composed store
 
@@ -83,9 +97,11 @@ firmware trusts a key nobody holds. Keys you can't lose beat keys nobody can ste
 ```
 firmware → stick ESP → signed systemd-boot menu:
   ├─ MAIN gen N   → UKI → initrd: NIC up, initrd-SSH, WAIT for operator key
-  │                        → unlock hot device → mount it at /nix → switch-root → full system
+  │                        → unlock hot device + root device → mount /nix + / (both
+  │                          ORDINARY persistent filesystems — no tmpfs anywhere here)
+  │                        → switch-root → full system, exactly as it was before reboot
   ├─ MAIN gen N-1 …  (rollback targets; their UKIs are on the ESP)
-  └─ RESCUE      → UKI → boots wholly from the stick (no pool) → repair shell (+ extraPackages)
+  └─ RESCUE      → UKI → boots wholly from the stick (no pool), tmpfs root → repair shell (+ extraPackages)
 ```
 
 ## Install — the rescue system IS the install environment
@@ -97,31 +113,39 @@ fresh machine) — the rescue boots with zero pools and is the bootstrap environ
    never formats data storage, so this step is yours, with the tools the rescue ships:
    `cryptsetup luksFormat` each member with YOUR passphrase → open them at stable mapper
    names → `zpool create` over `/dev/mapper/*` (or mkfs on LUKS — nixnas is
-   storage-agnostic) → create the OS store dataset with **`mountpoint=legacy`** (e.g.
-   `zfs create -o mountpoint=legacy pool/system/nix`). Migrating boxes skip this — the
-   pool exists.
+   storage-agnostic) → create the OS store dataset AND the root dataset, both with
+   **`mountpoint=legacy`** (e.g. `zfs create -o mountpoint=legacy pool/system/nix` and
+   `zfs create -o mountpoint=legacy pool/system/root` — typically siblings on the same
+   pool). Migrating boxes skip this — the pool exists.
 1. Build + flash the **rescue** image (ESP + rescue f2fs) to the stick via the TUI.
-   (In `hot` mode the disko image is the RESCUE system; the main store is not in the image.)
+   (In `hot` mode the disko image is the RESCUE system; the main store and root are not in
+   the image.)
 2. Boot the rescue → unlock (or step-0-create) the pool → get the MAIN closure onto the
    box: build it on your build machine and `nix copy --to ssh://<rescue>` it over
    (hub-built doctrine), or build on the box if it has the resources.
 3. Run the installer — one command does the whole error-prone dance, verified:
 
    ```
-   nixnas-install-hot --device pool/system/nix /nix/store/…-nixos-system-main
+   nixnas-install-hot --device pool/system/nix --root-device pool/system/root \
+     /nix/store/…-nixos-system-main
    ```
 
-   It stages the target (tmpfs + the hot store + the booted stick's ESP), seeds the Secure
-   Boot PKI into the target store, `nixos-install --system`s the main (profile in the hot
-   store, signed UKIs onto the shared ESP), pre-places the durable
-   `EFI/Linux/nixnas-rescue.efi` (the main's installer prunes the rescue's original
-   `nixos-*` entries, and rescue-maintain only takes over after the main first boots), and
-   verifies all of it before telling you to reboot.
+   It stages the target — the ROOT device mounted at `/mnt/nixnas-install` (a REAL
+   persistent filesystem, not a scratch tmpfs: everything `nixos-install` writes there —
+   `/etc`, `/var`, every service's state directory — must survive every future reboot), the
+   hot store mounted at `./nix` within it, and the booted stick's ESP bind-mounted at
+   `./boot` — seeds the Secure Boot PKI into the target store, `nixos-install --system`s
+   the main (profile in the hot store, signed UKIs onto the shared ESP, and the real root
+   populated), pre-places the durable `EFI/Linux/nixnas-rescue.efi` (the main's installer
+   prunes the rescue's original `nixos-*` entries, and rescue-maintain only takes over
+   after the main first boots), and verifies all of it before telling you to reboot.
    (Do NOT `nixos-rebuild` from the rescue — that would build into the rescue's own stick
    store and switch the RESCUE's profile, not the main's.)
-4. Reboot → the main UKI's initrd asks for your key → unlocks the hot device → mounts the
-   now-populated `/nix` → the full system boots. From then on the main's rescue-maintain
-   keeps the rescue entry + stick store current automatically.
+4. Reboot → the main UKI's initrd asks for your key → unlocks the hot device AND the root
+   device → mounts the now-populated `/nix` and `/` → the full system boots. From then on
+   the main's rescue-maintain keeps the rescue entry + stick store current automatically,
+   and every reboot after the first finds the SAME root it left — no re-provisioning, no
+   `persist.*` list to maintain.
 
 ## autoUpgrade — maintains BOTH stores, from ONE nixpkgs pin
 
@@ -158,12 +182,18 @@ exactly what rescue-maintain's GC keeps).
 ## What changes vs `usb` mode (implementation map)
 
 - `modules/store/location.nix`: the `store.location` switch; the hot-mode MAIN /nix
-  (`store.hot.*`, neededForBoot), and the initrd operator-key unlock of **all members — hot
-  AND data** (`store.hot.unlock` ∪ `storage.unlock`), serialised into one kernel-keyring chain
-  so a SINGLE entry opens every pool that shares the key. Hot members are boot-critical
+  (`store.hot.*`, neededForBoot) AND root (`store.root.*`, an ORDINARY persistent
+  filesystem — REQUIRED, no default, no tmpfs fallback), and the initrd operator-key
+  unlock of **all members — hot, root, AND data** (`store.hot.unlock` ∪ `store.root.unlock`
+  ∪ `storage.unlock`), serialised into one kernel-keyring chain so a SINGLE entry opens
+  every pool that shares the key. Hot and root members are boot-critical
   (`device-timeout=0`); data members are `nofail` + finite timeout (skip an absent/dead disk).
-  ZFS-in-initrd when the hot store is a dataset (import ordered after cryptsetup.target — the
-  pool appears only after the key); tmpfs root + by-label ESP mount disko no longer provides.
+  ZFS-in-initrd when EITHER the hot store or the root is a dataset (import ordered after
+  cryptsetup.target — the pool appears only after the key; one `zfs-import-<pool>` service
+  per distinct pool name, so hot and root sharing one pool cost only one import); by-label
+  ESP mount disko no longer provides. `modules/appliance/identity.nix` and
+  `persist-enforce.nix` (the usb-mode tmpfs-routing machinery) do not run here at all —
+  see the "Why `hot` gets a real root" note above.
 - `modules/storage/connect.nix`: hot-aware. Since the initrd opened the data members too, in
   hot mode it does NOT re-open them and AUTO-RAISES `nixnas-storage.target` at boot (imports the
   data pools off the open mappers + mounts) — no manual `nixnas-unlock`. In `usb`/rescue mode it
@@ -180,4 +210,11 @@ exactly what rescue-maintain's GC keeps).
   stays only for the self-upgrading persona (`rescue.flakeAttr`), which resolves its toplevel at
   runtime and so cannot be expressed as one of nixboot's declarative `extraEntries` (see that
   file's header for the full split).
-- Docs: this file + ARCHITECTURE §10 (the composed-store rejection).
+- Docs: this file + ARCHITECTURE §3.2 (the persistent-root boot flow) + §10 (the
+  composed-store rejection).
+
+## Already running a `hot`-mode host on the old tmpfs root?
+
+`nixnas-install-hot` only targets a blank root (a fresh install or a migration onto new
+disks). Moving a LIVE host from the old tmpfs root onto `store.root.*` is a separate,
+by-hand procedure — see **[`MIGRATE-HOT-ROOT.md`](MIGRATE-HOT-ROOT.md)**.

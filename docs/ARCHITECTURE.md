@@ -20,6 +20,14 @@ adds only the **USB image/layout**, the **impermanence (tmpfs-root) packaging**,
 > mid-run" idea is dropped — it is intrinsically incompatible with on-box self-update,
 > and autonomy is the fixed constraint that wins.
 
+> **This describes `store.location = "usb"` (the default appliance).** `hot` mode
+> (hub-class boxes; see [`HOT-MODE.md`](HOT-MODE.md)) does NOT run a RAM-resident root at
+> all: its MAIN gets an ORDINARY persistent root on the operator's own storage
+> (`store.root.*`), because impermanence is right for a small appliance / a rescue system
+> and wrong for a main that accumulates operational state (§3 below). Only the small
+> RESCUE system a hot-mode host carries on its stick keeps a tmpfs root — it is itself a
+> `usb`-mode nixnas, so this section describes it too.
+
 > **Supersedes** the read-only dm-verity *image-appliance* model — but on honest grounds
 > (see §1), not the original (wrong) one.
 
@@ -41,6 +49,10 @@ is rejected for **version density, flash wear, and custom surface** on a self-up
 home NAS and is **addable later as a hybrid** (§6).
 
 ## 2. On-stick layout (GPT, adaptive to stick size)
+
+This section describes `usb` mode (the default appliance) and the RESCUE system a
+`hot`-mode host carries — both are the same on-stick shape. A `hot`-mode MAIN does not
+use this layout at all: it has no stick image of its own (§10, HOT-MODE.md).
 
 Only **two** partitions, sized **proportionally to the stick** — the operator brings whatever
 USB they have and nixnas lays it out:
@@ -67,7 +79,9 @@ appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on
 ~80–150 MiB, so the **ESP is the bound on generation count** — ~8 in 1 GiB, ~16 in 2 GiB
 (`boot.lanzaboote.configurationLimit`). The store side is cheap (base once + deltas).
 
-## 3. Boot flow (headless, impermanence, compressed RAM)
+## 3. Boot flow
+
+### 3.1 `usb` mode (headless, impermanence, compressed RAM) — the default appliance
 
 1. UEFI — **Secure Boot, operator-only keys, MS 3rd-party CA removed, firmware password**.
 2. **lanzaboote-signed `systemd-boot`** shows the generation menu.
@@ -78,11 +92,13 @@ appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on
    channel is trusted: a maid cannot phish it with a tampered initrd or a swapped stick (§6).
 4. **Root `/` is tmpfs** (impermanence); the real persistent **`/nix`** is mounted read-write from
    the unlocked LUKS partition; only `/nix` and the ESP persist (identity — machine-id, SSH host
-   keys, `persist.overlayClients` state — lives at `/nix/persist`). The stick is **not loaded wholesale into
-   RAM** — hot store paths are **page-cached on demand** and self-limiting (cold pages drop and
-   re-read from the compressed f2fs). Working memory is kept small by **zram** (compressed swap, no
-   disk swap — sized and tuned by **nixram** from the host's declared RAM level, see
-   OPTIMIZATIONS.md §5) + f2fs **`compress_cache`** (compressed store blocks cached in
+   keys, `persist.overlayClients` state — lives at `/nix/persist`, `modules/appliance/identity.nix`).
+   Impermanence is the right trade **here**: a small appliance (or a rescue system — §10) has no
+   operational state worth keeping, so a forgotten path is never a silent loss. The stick is **not
+   loaded wholesale into RAM** — hot store paths are **page-cached on demand** and self-limiting
+   (cold pages drop and re-read from the compressed f2fs). Working memory is kept small by **zram**
+   (compressed swap, no disk swap — sized and tuned by **nixram** from the host's declared RAM
+   level, see OPTIMIZATIONS.md §5) + f2fs **`compress_cache`** (compressed store blocks cached in
    RAM) — so the appliance fits boxes with far less than 128 GB.
 5. The stateless OS comes up **reachable, with the data still locked**: sshd + Tailscale start
    with their stick-persisted identity, while every `storage.unlock` member stays `noauto`. The
@@ -93,7 +109,41 @@ appliance tuning is in **[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md)**. Data lives on
    sops-nix) and builds the next generation. The flake is *not* part of nixnas — it is how the
    declarative system config is loaded; nixnas only provides the mechanism.
 
+### 3.2 `hot` mode — a real persistent root, no tmpfs anywhere on the MAIN
+
+A `hot`-mode MAIN is a **hub-class box that runs for a long operational lifetime** —
+containers, dev tooling, service state that accumulates over months, not a small appliance
+booted fresh from a stick every time. Impermanence is **wrong** for that shape: every path
+an operator forgets to route through `persist.*` is state silently destroyed on the next
+reboot, discovered only when it's already gone (an SSH backup key, a sops age key — both real
+incidents that motivated this design). So `hot` mode's MAIN carries **no tmpfs root at all**:
+
+1. Steps 1–3 above are the same shape (Secure Boot, signed UKI, signed initrd) — except the
+   initrd unlocks `store.hot.*` **and** `store.root.*` with the OPERATOR'S key, never TPM auto
+   (HOT-MODE.md's unlock model). Both are LUKS members opened by the SAME one-passphrase chain
+   as every `storage.unlock` data member — one entry, everything that shares the key.
+2. **`/` (root) and `/nix` are each mounted from their own device** — ordinary, persistent
+   NixOS filesystems (`modules/store/location.nix`, `store.root.device`/`store.hot.device`,
+   REQUIRED, no default). Users, rendered `/etc`, every service's `/var/lib` — all of it just
+   lives on disk across every reboot, exactly like any other NixOS box. There is no
+   `/nix/persist` dance, no Tier-1 bind-mount list, no build-time StateDirectory gate: nothing
+   needs routing around an ephemeral root, because there isn't one
+   (`modules/appliance/identity.nix` and `persist-enforce.nix` both gate on `usb` mode only,
+   and this mode's own assertions refuse a config that still sets `persist.*`).
+3. The small **RESCUE** system on the stick — a `usb`-mode nixnas — is where impermanence
+   correctly lives instead: it has zero state worth keeping, so a tmpfs root there is free
+   resilience, not a footgun. See §10 and HOT-MODE.md for the full split.
+4. From here the MAIN behaves like §3.1 steps 5–6: data pools unlock post-boot (or auto-raise,
+   since the initrd already opened them — HOT-MODE.md), and `autoUpgrade` builds new
+   generations straight into the same persistent store and root.
+
 ## 4. Updates — autonomous, native
+
+Written against `usb` mode's on-stick store; `hot` mode's MAIN follows the identical
+`autoUpgrade`/generations/`lanzaboote` mechanism against `store.hot.*` (and now, per §3.2,
+against an equally persistent `store.root.*`) instead of the stick — HOT-MODE.md's own
+"autoUpgrade — maintains BOTH stores" section covers the two-store (MAIN + RESCUE) split that
+is unique to `hot` mode.
 
 - **`system.autoUpgrade`** periodically pulls the operator's flake (their private repo,
   deploy key via sops-nix) and `nixos-rebuild boot`s a new generation — built **on the box**
@@ -323,17 +373,21 @@ autoUpgrade-to-LUKS — replaced by tmpfs-root + persistent store, §3.)*
   and `storage.zfsPools` (per-pool `nixnas-import-<pool>` services; datasets self-mount at
   their `mountpoint` properties). Persisting heavy state off the tmpfs root = bind mounts from
   the pools, gated on the same target (identity is already on the stick). See `examples/host.nix`.
-- **/nix location is a choice — `store.location = "usb" | "hot"` (see docs/HOT-MODE.md).** The
-  DEFAULT, **`usb`**, is everything above: /nix on the stick, self-contained (boots even if a
-  pool is missing) — the resilient appliance default, and for it the stick's OS content never
-  relocates onto a data pool. **`hot`** is the deliberate opt-in for hub-class boxes that must
-  install heavy software *system-wide* (beyond an 8 GiB stick): the MAIN system's /nix lives on
-  your encrypted pool, and the stick is relegated to the ESP + a self-contained **RESCUE**
-  system. The operator enters their key in the initrd (never auto), and a dead pool drops to the
-  rescue rather than "boots reachable anyway". It is **not** a composed store (overlaying stick +
-  pool into one /nix is structurally unsound — researched and rejected); it is two *independent*
-  systems, the proven "root-on-ZFS + a USB rescue" pattern. (The earlier flat "never store-on-HOT"
-  rule is exactly the `usb` default; `hot` makes the trade explicit and opt-in.)
+- **/nix (and root) location is a choice — `store.location = "usb" | "hot"` (see
+  docs/HOT-MODE.md).** The DEFAULT, **`usb`**, is everything above: /nix on the stick, tmpfs
+  root, self-contained (boots even if a pool is missing) — the resilient appliance default,
+  and for it the stick's OS content never relocates onto a data pool. **`hot`** is the
+  deliberate opt-in for hub-class boxes that must install heavy software *system-wide*
+  (beyond an 8 GiB stick) AND that run long enough to accumulate real operational state: the
+  MAIN system's /nix **and its root filesystem** (`store.root.*`, REQUIRED — no tmpfs
+  fallback, §3.2) live on your encrypted pool, and the stick is relegated to the ESP + a
+  self-contained **RESCUE** system (which alone keeps the tmpfs-root shape — impermanence is
+  right for it, wrong for the MAIN). The operator enters their key in the initrd (never
+  auto), and a dead pool drops to the rescue rather than "boots reachable anyway". It is
+  **not** a composed store (overlaying stick + pool into one /nix is structurally unsound —
+  researched and rejected); it is two *independent* systems, the proven "root-on-ZFS + a USB
+  rescue" pattern. (The earlier flat "never store-on-HOT" rule is exactly the `usb` default;
+  `hot` makes the trade explicit and opt-in.)
 - **Wear isolation (measured) — and why that's enough.** Cheap USB sticks have no SSD-grade flash
   management and die / go slow under a steady write *stream*. Impermanence removes that stream:
   logs (journald `volatile`), `/tmp`, coredumps and swap (zram) all live in RAM; stray writes hit

@@ -54,8 +54,8 @@ Under `modules/` (all built + VM-validated unless noted):
 | `crypto/recovery-escrow.nix` | break-glass recovery keyslot escrowed to Vaultwarden (hub tool + box status). |
 | `storage/connect.nix` | POST-boot data unlock: `nixnas-unlock` + `nixnas-storage.target` (serial one-passphrase LUKS opens, per-pool ZFS import). Mounting is native. |
 | `appliance/base.nix` | Stable host identity + Tailscale. |
-| `appliance/identity.nix` | machine-id, the running SSH host key, `persist.overlayClients` (tailscale, netbird, …) state — persisted on the encrypted stick (`/nix/persist`). |
-| `appliance/persist-enforce.nix` | Build-time gate: every `StateDirectory`-bearing systemd service must be persisted (any `fileSystems` entry) or listed in `persist.explicitlyEphemeral` — else the build fails. |
+| `appliance/identity.nix` | **`usb` mode only.** machine-id, the running SSH host key, `persist.overlayClients` (tailscale, netbird, …) state — persisted on the encrypted stick (`/nix/persist`). Inert in `hot` mode: its MAIN has an ordinary persistent root, so nothing needs routing around a tmpfs one. |
+| `appliance/persist-enforce.nix` | **`usb` mode only.** Build-time gate: every `StateDirectory`-bearing systemd service must be persisted (any `fileSystems` entry) or listed in `persist.explicitlyEphemeral` — else the build fails. Inert in `hot` mode (nothing to enforce against a real root). |
 | `appliance/ssh.nix` | Headless admin sshd (key-only root). |
 | `appliance/auto-upgrade.nix` | Self-update: stage-only, never self-reboot. |
 | `appliance/optimizations.nix` | Appliance defaults: journald→RAM, no disk swap, store.preload. Composes **nixram** for the memory subsystem (zram/zswap/vm sysctls/oomd) — each host declares `nixram.level`. |

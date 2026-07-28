@@ -1,5 +1,14 @@
 # nixnas — build-time enforcement: no silent state loss.
 #
+# USB MODE ONLY. This gate exists solely because usb mode's root is a tmpfs — a service's
+# StateDirectory is invisible-by-default there unless something explicitly backs it. `hot`
+# mode has an ORDINARY persistent root (modules/store/location.nix, store.root.*): every
+# service's /var/lib state already survives a reboot with NO explicit accounting needed,
+# the same as any other NixOS box — running this gate there would do the opposite of its
+# job, incorrectly flagging every stateful service as "unaddressed" (no bind mount, no
+# explicitlyEphemeral entry — nothing to check, because nothing needs checking). So this
+# module gates on `store.location == "usb"` below, same as modules/appliance/identity.nix.
+#
 # systemd's `StateDirectory=` is already the signal a service uses to say "I keep
 # durable state at /var/lib/<name>" — no per-app knowledge needed here, just read it
 # back off every declared service. For each one, require an EXPLICIT answer to "does
@@ -101,7 +110,7 @@ let
   };
 in
 {
-  config = lib.mkIf cfg.enable {
+  config = lib.mkIf (cfg.enable && cfg.store.location == "usb") {
     assertions = map assertionFor unaddressed;
   };
 }

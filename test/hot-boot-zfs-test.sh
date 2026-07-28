@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # test/hot-boot-zfs-test.sh — prove the HOT-mode ZFS boot path (modules/store/location.nix).
 #
-# THE CLAIM UNDER TEST: a nixnas MAIN boots its /nix from a ZFS dataset on a pool whose
-# vdevs are LUKS-encrypted — the initrd opens TWO LUKS members with the OPERATOR'S
-# passphrase (interactive, no TPM/auto), imports the pool from /dev/mapper, mounts
-# qapool/system/nix (mountpoint=legacy) at /nix, and switch-roots into the full system.
+# THE CLAIM UNDER TEST: a nixnas MAIN boots BOTH its /nix AND its / (root) from ZFS
+# datasets on a pool whose vdevs are LUKS-encrypted — the initrd opens TWO LUKS members
+# with the OPERATOR'S passphrase (interactive, no TPM/auto), imports the pool from
+# /dev/mapper ONCE, mounts qapool/system/nix AND qapool/system/root (both
+# mountpoint=legacy) at /nix and /, and switch-roots into the full system on an ORDINARY
+# PERSISTENT root (no tmpfs anywhere in hot mode — docs/ARCHITECTURE.md §3.2). Root and
+# store are SIBLING datasets on the SAME pool (hosts/demo-hot-zfs.nix's store.root.zpool =
+# store.hot.zpool = "qapool"), so this doubly proves location.nix's zfsPoolsNeeded dedup:
+# one shared pool costs exactly one zfs-import service, not two.
 #
 # The ZFS twist vs the ext4 hot test: both LUKS members are active ZFS vdevs (striped pool),
 # so the pool import ITSELF proves the serialised single-entry unlock. If the second member
@@ -107,6 +112,10 @@ zfs create -o mountpoint=none qapool/system
 # The store dataset: mountpoint=legacy is the hot-mode contract (location.nix mounts it
 # with mount(8) in stage-1; a property-managed mountpoint would fight the boot ordering).
 zfs create -o mountpoint=legacy qapool/system/nix
+# The root dataset — SAME contract, sibling dataset, same pool. Left otherwise EMPTY:
+# NixOS activation populates /etc/users/var-lib on first boot the same way whether root
+# started as tmpfs or a fresh persistent dataset, so there is nothing to pre-seed here.
+zfs create -o mountpoint=legacy qapool/system/root
 
 ROOT="$WORK/root"; MNT="$ROOT/nix"; mkdir -p "$MNT"
 mount -t zfs qapool/system/nix "$MNT"
@@ -170,9 +179,11 @@ kill "$VM" 2>/dev/null; wait "$VM" 2>/dev/null
 echo "================ RESULT ================"
 if [ "$ok" = 1 ]; then
   echo "PASS — the initrd unlocked both LUKS members (single passphrase via kernel keyring),"
-  echo "       imported zpool 'qapool' from /dev/mapper, mounted qapool/system/nix (legacy)"
-  echo "       at /nix, and the hot-mode ZFS system reached login."
-  echo "       (location.nix ZFS path — initrd import-after-key + legacy mount + keyring ✔)"
+  echo "       imported zpool 'qapool' from /dev/mapper ONCE, mounted qapool/system/nix AND"
+  echo "       qapool/system/root (both legacy) at /nix and /, and the hot-mode ZFS system"
+  echo "       reached login on an ORDINARY PERSISTENT root (no tmpfs)."
+  echo "       (location.nix ZFS path — initrd import-after-key + legacy mounts + keyring +"
+  echo "       shared-pool zfsPoolsNeeded dedup ✔)"
   exit 0
 fi
 echo "FAIL — the hot-mode ZFS system did not reach login. Serial tail:"
