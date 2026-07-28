@@ -40,9 +40,24 @@
       url = "github:julian-corbet/nixram-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # nixboot — the boot domain (firmware handoff through switch-root), and the SOLE owner of
+    # `nixboot.extraEntries`: the ukify+sbsign+place+rotate pipeline that used to live inline in
+    # modules/appliance/rescue-maintain.nix, generalised there and consumed here for the
+    # pinned/hub-built rescue persona only (see that file's own header for why the
+    # self-upgrading persona cannot be represented by nixboot's declarative option surface, and
+    # stays on the original inline pipeline). `nixboot.enable` itself is never turned on for a
+    # nixnas host — nixnas keeps owning its OWN Secure Boot / lanzaboote wiring
+    # (modules/boot/secureboot.nix) exactly as before; only the extraEntries option tree and its
+    # unconditionally-exposed maintainer derivations are consumed. Same mechanism-lives-in-its-
+    # own-flake split as nixram above.
+    nixboot = {
+      url = "github:julian-corbet/nixboot-corbet-ch";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, nixram, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, nixram, nixboot, ... }:
     let
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
@@ -79,6 +94,12 @@
         imports = [
           (import ./modules)
           nixram.nixosModules.nixram
+          # Both files of nixboot's own module (nixboot.nix + extra-entries.nix, bundled as
+          # one nixosModules.nixboot) — needed even though `nixboot.enable` stays off on every
+          # nixnas host, because `nixboot.extraEntries.*` (options.nix's own declarations) and
+          # `system.build.extraEntryMaintainers` (unconditional passthrough) both live in that
+          # same file pair. See modules/appliance/rescue-maintain.nix's header.
+          nixboot.nixosModules.nixboot
         ];
       };
       nixosModules.default = self.nixosModules.nixnas;
@@ -169,6 +190,41 @@
         ];
       };
 
+      # Hot mode + a PINNED rescue toplevel — proves the nixboot.extraEntries wiring end to end
+      # in CI: `system.build.extraEntryMaintainers.rescue` must actually build (shellcheck
+      # clean) from a REAL toplevel, and `nixnas-rescue-maintain` must be wired to call it (see
+      # the `rescue-uki-pipeline-equivalence` check below). Reuses the demo's OWN toplevel as
+      # the "rescue" toplevel purely to exercise the wiring cheaply — it is already built by the
+      # demo-toplevel check above, so this adds no new closure to build — NOT a template for a
+      # real host, which points rescue.toplevel at an actual minimal rescue nixosConfiguration
+      # (see modules/options.nix's own rescue.toplevel doc). A separate hot-mode host (not
+      # demo-hot.nix, which turns rescue off outright) so this file can set rescue.toplevel
+      # without colliding with demo-hot.nix's own `rescue.enable = false`.
+      nixosConfigurations.demo-hot-rescue-pinned = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          disko.nixosModules.disko
+          lanzaboote.nixosModules.lanzaboote
+          impermanence.nixosModules.impermanence
+          self.nixosModules.nixnas
+          ./hosts/demo
+          ./hosts/demo-hot-rescue-pinned.nix
+          {
+            nixnas.rescue.enable = true;
+            nixnas.rescue.toplevel = self.nixosConfigurations.demo.config.system.build.toplevel;
+          }
+          { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
+          {
+            disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
+            disko.imageBuilder.kernelPackages =
+              let sp = nixpkgs-stable.legacyPackages.x86_64-linux;
+              in sp.linuxPackages.extend (_: _: {
+                zfs_cachyos = sp.linuxPackages.${sp.zfs.kernelModuleAttribute};
+              });
+          }
+        ];
+      };
+
       # Upgrade-soak variant: N=5 generation cycles to prove lzbt keepGenerations pruning.
       # keepGenerations=3 so cycles 3-5 exercise the UKI eviction path. The 5 specialisations
       # (soak-gen-2..6) are pre-built here and nix-copied into the VM — no in-VM Nix eval.
@@ -235,6 +291,30 @@
         demo-rescue-maintainer = self.nixosConfigurations.demo.config.system.build.rescueMaintainer;
         # … and the hot installer's shell too (ships on usb systems — the rescue's install role).
         demo-hot-installer = self.nixosConfigurations.demo.config.system.build.hotInstaller;
+        # The pinned-rescue + nixboot wiring: the whole host evaluates+builds (exercises every
+        # assertion in rescue-maintain.nix, including the espFileName/timer equivalence checks)…
+        demo-hot-rescue-pinned-toplevel = self.nixosConfigurations.demo-hot-rescue-pinned.config.system.build.toplevel;
+        # … and nixboot's OWN per-entry maintainer — built from a REAL toplevel — shellchecks
+        # clean, proving `nixboot.extraEntries.rescue` is wired to something real, not a
+        # dangling declaration.
+        demo-hot-rescue-pinned-uki-maintainer = self.nixosConfigurations.demo-hot-rescue-pinned.config.system.build.extraEntryMaintainers.rescue;
+        # A build-level (no VM needed) content proof that the pinned path actually calls
+        # nixboot's maintainer, under the SAME ESP filename the original inline pipeline used —
+        # the concrete "same ESP filename discipline" / "same rotation" equivalence check.
+        rescue-uki-pipeline-equivalence =
+          let pkgs = pkgsFor system; in
+          pkgs.runCommand "nixnas-rescue-uki-pipeline-equivalence" { } ''
+            script=${self.nixosConfigurations.demo-hot-rescue-pinned.config.system.build.rescueMaintainer}/bin/nixnas-rescue-maintain
+            grep -q 'nixnas-rescue.efi' "$script" || {
+              echo "FAIL: espFileName discipline — 'nixnas-rescue.efi' not found in the maintainer script" >&2
+              exit 1
+            }
+            grep -q 'nixboot-extra-entry-rescue' "$script" || {
+              echo "FAIL: the pinned branch does not invoke nixboot's built maintainer (nixboot-extra-entry-rescue) — it may have silently fallen back to (or never left) the inline pipeline" >&2
+              exit 1
+            }
+            echo "PASS: pinned rescue-maintain hands off to nixboot-extra-entry-rescue under the nixnas-rescue.efi name" > "$out"
+          '';
         # The TUI compiles cleanly.
         tui-build = self.packages.${system}.tui;
         # ZFS hot-mode topology builds (ZFS initrd + LUKS vdevs).

@@ -174,5 +174,10 @@ exactly what rescue-maintain's GC keeps).
   `rescue.extraPackages` rides `appliance/base.nix`).
 - `modules/appliance/rescue-maintain.nix`: the MAIN maintains the rescue (closure → stick
   f2fs with the shared compression options + GC to current/prev; self-contained signed UKI
-  → ESP). Runs at boot, on deploys that change the rescue, and daily.
+  → ESP). Runs at boot, on deploys that change the rescue, and daily. The UKI's build+sign+
+  place+rotate step is now `nixboot.extraEntries.rescue` (github:julian-corbet/nixboot-corbet-ch)
+  for the pinned/hub-built persona (`rescue.toplevel`) — this file's own build/sign/place code
+  stays only for the self-upgrading persona (`rescue.flakeAttr`), which resolves its toplevel at
+  runtime and so cannot be expressed as one of nixboot's declarative `extraEntries` (see that
+  file's header for the full split).
 - Docs: this file + ARCHITECTURE §10 (the composed-store rejection).
