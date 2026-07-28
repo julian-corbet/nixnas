@@ -175,6 +175,11 @@ in
           '';
         };
       };
+      # GEOMETRY of nixnas's own stick only — device path, sizes, ESP size, the
+      # passphrase-file handoff. The MECHANISM of booting from removable media (the
+      # kernel modules that let the initrd find a USB-attached device at all) moved to
+      # `nixboot.media.usb.enable` (composed in ./boot/image.nix) — a number belongs
+      # here because no other host could reuse it verbatim; a mechanism does not.
       usb = {
         device = mkOption {
           type = types.str;

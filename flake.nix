@@ -46,11 +46,15 @@
     # modules/appliance/rescue-maintain.nix, generalised there and consumed here for the
     # pinned/hub-built rescue persona only (see that file's own header for why the
     # self-upgrading persona cannot be represented by nixboot's declarative option surface, and
-    # stays on the original inline pipeline). `nixboot.enable` itself is never turned on for a
-    # nixnas host — nixnas keeps owning its OWN Secure Boot / lanzaboote wiring
-    # (modules/boot/secureboot.nix) exactly as before; only the extraEntries option tree and its
-    # unconditionally-exposed maintainer derivations are consumed. Same mechanism-lives-in-its-
-    # own-flake split as nixram above.
+    # stays on the original inline pipeline). Also the SOLE owner of the USB-removable-boot
+    # MECHANISM (`nixboot.media.usb.enable`, composed in modules/boot/image.nix) -- the initrd
+    # kernel modules that let a stick be found at all, moved out of this appliance's own boot
+    # glue because any other host that boots off a stick needs the exact same modules. Both
+    # of these are DELIBERATELY independent of `nixboot.enable`, which itself is never turned
+    # on for a nixnas host — nixnas keeps owning its OWN Secure Boot / lanzaboote / loader-
+    # stance wiring (modules/boot/secureboot.nix, modules/boot/image.nix) exactly as before;
+    # only extraEntries, media.usb, and their unconditionally-exposed outputs are consumed.
+    # Same mechanism-lives-in-its-own-flake split as nixram above.
     nixboot = {
       url = "github:julian-corbet/nixboot-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";

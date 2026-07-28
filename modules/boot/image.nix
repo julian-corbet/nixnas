@@ -4,6 +4,29 @@
 # systemd-boot (lanzaboote wraps its installer when Secure Boot is on — see
 # ./secureboot.nix), the serial console, and the early kernel modules the initrd
 # needs to see the USB stick + the f2fs store.
+#
+# BOOT IS NOT AN APPLIANCE CONCERN — the operator's decision, enacted here:
+# the MECHANISM of booting from removable media (which kernel modules let the
+# initrd even SEE a USB-attached device before any root filesystem exists)
+# now lives in nixboot (`nixboot.media.usb.enable`, deliberately usable
+# without adopting nixboot's whole boot-stance ownership — see that option's
+# own doc). What stays HERE is the GEOMETRY of nixnas's own stick
+# (`nixnas.boot.usb.*` in ../options.nix: device path, image/ESP size,
+# partition count) — never boot's business, since a disk-layout tool's
+# numbers are not a mechanism any other host could reuse verbatim.
+#
+# The loader STANCE below (never write EFI variables) answers the same
+# "removable-vs-NVRAM entry" question nixboot's own `loader.efiVariables`
+# option now generalizes — kept inline here rather than composed, for the
+# same reason `./secureboot.nix` and `./remote-unlock.nix` still are:
+# `nixboot.enable` pulls in a bundle of OTHER opinions (a required
+# `loader.program`, `nixboot-verify`'s readback checks against nixboot's OWN
+# option values, `secureBoot.sbctlCompat`'s unconditional `/etc/sbctl/
+# sbctl.conf` write) that this appliance, which already owns its whole boot
+# chain, would have to carefully neutralize rather than gain anything from
+# (flake.nix's own nixboot input note explains the same boundary for
+# secureBoot/remoteUnlock). A future full cutover is a deliberate, separate
+# migration, not a side effect of this move.
 { config, lib, ... }:
 let
   cfg = config.nixnas;
@@ -49,11 +72,17 @@ in
         "console=tty0"
       ];
 
-    # The boot device + data-pool controllers the initrd must drive. A generic image
-    # auto-detects none, so without these the USB stick (and the f2fs store) are invisible
-    # to early userspace and boot hangs waiting for the root device.
+    # Finding the USB boot stick itself is nixboot's mechanism now (see the header
+    # note above): this asks for it rather than listing usb_storage/uas/xhci_pci/
+    # ehci_pci here a second time. `nixboot.media.usb.enable` is independent of
+    # `nixboot.enable` (nixnas never turns that on — see the header note), so this
+    # is a real composition, not a hole where the mechanism used to be.
+    nixboot.media.usb.enable = true;
+
+    # The data-pool controllers the initrd must drive, once past the stick. A generic
+    # image auto-detects none, so without these the f2fs store's OWN backing disk is
+    # invisible to early userspace and boot hangs waiting for the root device.
     boot.initrd.availableKernelModules = [
-      "usb_storage" "uas" "xhci_pci" "ehci_pci" # USB boot stick
       "ahci" "nvme" "sd_mod"                    # SATA / NVMe (data pools on real hardware)
       "virtio_blk" "virtio_pci" "virtio_scsi"   # VM testing
     ];
