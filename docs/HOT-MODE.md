@@ -113,10 +113,34 @@ fresh machine) — the rescue boots with zero pools and is the bootstrap environ
    never formats data storage, so this step is yours, with the tools the rescue ships:
    `cryptsetup luksFormat` each member with YOUR passphrase → open them at stable mapper
    names → `zpool create` over `/dev/mapper/*` (or mkfs on LUKS — nixnas is
-   storage-agnostic) → create the OS store dataset AND the root dataset, both with
-   **`mountpoint=legacy`** (e.g. `zfs create -o mountpoint=legacy pool/system/nix` and
-   `zfs create -o mountpoint=legacy pool/system/root` — typically siblings on the same
-   pool). Migrating boxes skip this — the pool exists.
+   storage-agnostic) → create the OS store dataset AND the root dataset — typically
+   siblings on the same pool. For ZFS, pick one of the two mount shapes per dataset and
+   declare it with `nixnas.store.{hot,root}.zfsMountpoint`:
+
+   ```
+   # "legacy" (the default) — ZFS does not manage the mount; mount(8) does.
+   zfs create -o mountpoint=legacy pool/system/nix
+   zfs create -o mountpoint=legacy pool/system/root
+
+   # "property" — a real mountpoint plus canmount=noauto, mounted with -o zfsutil.
+   # An imported pool is then self-describing: zfs list shows where each dataset belongs.
+   zfs create -o mountpoint=/nix -o canmount=noauto pool/system/nix
+   zfs create -o mountpoint=/    -o canmount=noauto pool/system/root
+   ```
+
+   The two are **mutually exclusive at mount(8)** — `-o zfsutil` against a
+   `mountpoint=legacy` dataset is refused, and a property-mountpoint dataset cannot be
+   mounted without it — so the declared shape must match what the dataset actually
+   carries. `nixnas-install-hot` checks this before it writes anything. `canmount=noauto`
+   is mandatory for `property`: without it, anything running `zfs mount -a` against the
+   imported pool would mount the dataset straight over a live mountpoint.
+
+   Note which half is load-bearing: the mount **target** always comes from nixnas's
+   `fileSystems` declaration, never from the dataset's mountpoint property. `zfsutil` only
+   makes `mount.zfs` fold the dataset's properties into the mount options. A `property`
+   dataset is self-describing, not self-mounting.
+
+   Migrating boxes skip this — the pool exists.
 1. Build + flash the **rescue** image (ESP + rescue f2fs) to the stick via the TUI.
    (In `hot` mode the disko image is the RESCUE system; the main store and root are not in
    the image.)

@@ -445,6 +445,30 @@ in
           example = "ext4";
           description = "Filesystem of `store.hot.device` (zfs/ext4/btrfs/f2fs/…). `zfs` pulls ZFS into the initrd; others don't.";
         };
+        zfsMountpoint = mkOption {
+          type = types.enum [ "legacy" "property" ];
+          default = "legacy";
+          example = "property";
+          description = ''
+            For `fsType = "zfs"`: which of the two root-on-ZFS mount shapes
+            `store.hot.device` uses. This is NOT cosmetic — the two are mutually
+            exclusive at mount(8), so the module has to be told which one the dataset
+            actually carries (a property is runtime state; nothing can detect it at
+            eval time).
+
+            - `"legacy"` — the dataset has `mountpoint=legacy`. ZFS declines to manage
+              it and the mount is issued plainly. The conventional root-on-ZFS shape.
+            - `"property"` — the dataset carries a real `mountpoint` path plus
+              `canmount=noauto`, and the mount is issued with `-o zfsutil` so
+              `mount.zfs` consults the dataset's own properties. Makes an imported pool
+              self-describing (`zfs list` shows where each dataset belongs) at the cost
+              of a flag `mount.zfs(8)` documents as private.
+
+            Mixing them fails loudly rather than silently: `-o zfsutil` against a
+            `mountpoint=legacy` dataset is refused outright, and a property-mountpoint
+            dataset cannot be mounted without it.
+          '';
+        };
         unlock = mkOption {
           type = types.attrsOf (types.strMatching "/dev/disk/by-[a-z]+/.+");
           default = { };
@@ -474,8 +498,9 @@ in
             (see docs/ARCHITECTURE.md §3, docs/HOT-MODE.md) — the MAIN's `/` must be a real
             device on the operator's own encrypted storage, same as any root-on-ZFS NixOS
             box. A ZFS dataset name (with `fsType = "zfs"`, typically a sibling of
-            `store.hot.device` — e.g. `hot/nixnas/root` beside `hot/nixnas/nix`, both
-            `mountpoint=legacy`), or a `/dev/mapper/<name>` for LUKS+ext4/btrfs/f2fs.
+            `store.hot.device` — e.g. `hot/nixnas/root` beside `hot/nixnas/nix`; pick each
+            one's mount shape with `zfsMountpoint`), or a `/dev/mapper/<name>` for
+            LUKS+ext4/btrfs/f2fs.
             Mounted by the initrd, after the LUKS members that reach it are open.
           '';
         };
@@ -484,6 +509,23 @@ in
           default = "zfs";
           example = "ext4";
           description = "Filesystem of `store.root.device` (zfs/ext4/btrfs/f2fs/…). `zfs` pulls ZFS into the initrd (merged with `store.hot.fsType`'s own need); others don't.";
+        };
+        zfsMountpoint = mkOption {
+          type = types.enum [ "legacy" "property" ];
+          default = "legacy";
+          example = "property";
+          description = ''
+            For `fsType = "zfs"`: which of the two root-on-ZFS mount shapes
+            `store.root.device` uses — see `store.hot.zfsMountpoint` for the full
+            mechanism. Root and /nix are set independently; they need not match.
+
+            One caution specific to `/`: switching an existing dataset from `legacy` to
+            `"property"` is a two-step operation, because a plain
+            `zfs set mountpoint=/ <dataset>` MOUNTS IT IMMEDIATELY at the new location —
+            which for a root dataset means over the running system's `/`. Set
+            `canmount=noauto` FIRST, then use `zfs set -u` (update the property, do not
+            mount). See docs/MIGRATE-HOT-ROOT.md.
+          '';
         };
         zpool = mkOption {
           type = types.nullOr types.str;

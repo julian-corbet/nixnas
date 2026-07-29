@@ -275,6 +275,10 @@
         system = "x86_64-linux";
         modules = matrixBase ++ [ ./hosts/matrix/hot-ext4.nix ];
       };
+      nixosConfigurations.matrix-hot-zfs-property = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = matrixBase ++ [ ./hosts/matrix/hot-zfs-property.nix ];
+      };
       nixosConfigurations.matrix-pin-strict = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = matrixBase ++ [ ./hosts/matrix/pin-strict.nix ];
@@ -331,6 +335,7 @@
         matrix-stick-16g-toplevel  = self.nixosConfigurations.matrix-stick-16g.config.system.build.toplevel;
         matrix-stick-32g-toplevel  = self.nixosConfigurations.matrix-stick-32g.config.system.build.toplevel;
         matrix-hot-ext4-toplevel   = self.nixosConfigurations.matrix-hot-ext4.config.system.build.toplevel;
+        matrix-hot-zfs-property-toplevel = self.nixosConfigurations.matrix-hot-zfs-property.config.system.build.toplevel;
         matrix-pin-strict-toplevel = self.nixosConfigurations.matrix-pin-strict.config.system.build.toplevel;
         # persist-enforce must recognize a StateDirectory nested under a bind-mounted
         # ancestor as persisted (modules/appliance/persist-enforce.nix ancestor walk) —

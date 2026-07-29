@@ -64,8 +64,8 @@ in
             — see docs/ARCHITECTURE.md §3), so root MUST be a real device on your own
             encrypted storage, same as store.hot.device. A ZFS dataset name (with
             store.root.fsType = "zfs", typically a sibling of store.hot.device, e.g.
-            "hot/nixnas/root" beside "hot/nixnas/nix", both mountpoint=legacy), or a
-            /dev/mapper/<name> for LUKS+ext4/btrfs/f2fs.
+            "hot/nixnas/root" beside "hot/nixnas/nix"; declare each one's mount shape with
+            store.root.zfsMountpoint), or a /dev/mapper/<name> for LUKS+ext4/btrfs/f2fs.
           '';
         }
         {
@@ -108,10 +108,19 @@ in
       # The MAIN system's ORDINARY, PERSISTENT root. No tmpfs, no impermanence — a main
       # accumulates state (users, rendered config, every service's /var/lib) across its
       # whole operational life, and losing that silently on reboot is exactly the failure
-      # this mode exists to end (docs/ARCHITECTURE.md §3). For zfs the dataset MUST be
-      # `mountpoint=legacy` (mounted with mount(8) in the initrd; a property-managed
-      # mountpoint needs `zfsutil` and fights the boot ordering) — the same contract as
-      # `store.hot.device`, typically its sibling dataset.
+      # this mode exists to end (docs/ARCHITECTURE.md §3). For zfs, BOTH root-on-ZFS mount
+      # shapes are supported and the operator picks one with `store.root.zfsMountpoint`:
+      # `mountpoint=legacy` (mounted plainly with mount(8)) or a real mountpoint property
+      # plus `canmount=noauto` (mounted with `-o zfsutil`). They are mutually exclusive at
+      # mount(8) — zfsutil against a legacy dataset is REFUSED, and a property dataset
+      # cannot be mounted without it — and a property is runtime state no evaluation can
+      # inspect, which is exactly why it has to be declared rather than detected.
+      #
+      # Note which half is load-bearing: the mount TARGET always comes from this
+      # `fileSystems."/"` declaration, never from the dataset's mountpoint property.
+      # `zfsutil` makes mount.zfs fold the dataset's PROPERTIES into the mount options
+      # (atime=off → noatime); it does not choose the location. A `"property"` dataset is
+      # therefore self-describing to anyone who imports the pool, not self-mounting.
       #
       # FIELD-BACKLOG #2 (see boot/disk.nix for the full proven mechanism): the operator-
       # key wait must be INFINITE, exactly as for /nix below — an unanswered prompt must
@@ -128,12 +137,16 @@ in
       # "requires nixnas.store.root.device" assertion with a raw coercion error.
       // lib.optionalAttrs (root.device != null && lib.hasPrefix "/dev/" root.device) {
         options = [ "x-systemd.device-timeout=0" ];
+      }
+      // lib.optionalAttrs (root.fsType == "zfs" && root.zfsMountpoint == "property") {
+        options = [ "zfsutil" ];
       };
 
       # The MAIN system's /nix = the hot device. neededForBoot ⇒ mounted in stage-1.
-      # For zfs the dataset MUST be `mountpoint=legacy` (the initrd mounts it with mount(8);
-      # a property-managed mountpoint would need `zfsutil` and fights the boot ordering —
-      # legacy is the root-on-ZFS convention and the shape nixnas supports).
+      # For zfs, pick the mount shape with `store.hot.zfsMountpoint` — same mechanism and
+      # same mutual exclusivity as `store.root.zfsMountpoint` above. Root and /nix are
+      # independent: a self-describing `"property"` root beside a `"legacy"` /nix is a
+      # perfectly coherent combination, since each carries its own mount options.
       #
       # FIELD-BACKLOG #2 (see boot/disk.nix for the full proven mechanism): the operator-
       # key wait must be INFINITE — an unanswered prompt must never 90s-timeout into a
@@ -153,6 +166,9 @@ in
       # "requires nixnas.store.hot.device" assertion with a raw coercion error.
       // lib.optionalAttrs (hot.device != null && lib.hasPrefix "/dev/" hot.device) {
         options = [ "x-systemd.device-timeout=0" ];
+      }
+      // lib.optionalAttrs (hot.fsType == "zfs" && hot.zfsMountpoint == "property") {
+        options = [ "zfsutil" ];
       };
 
       # ── ONE key, ALL storage — the nixnas unlock algorithm, run in the INITRD ──────────

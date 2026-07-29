@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test/matrix-eval-test.sh — cheap eval-level coverage of the nixnas matrix variants.
 #
-# WHAT IS UNDER TEST: six nixosConfigurations defined in the integrator-provided flake
+# WHAT IS UNDER TEST: eight nixosConfigurations defined in the integrator-provided flake
 # snippet (see the return value of this script's authorship task), each proving a distinct
 # real-operator configuration evaluates without error AND propagates option values into
 # the expected NixOS config attributes:
@@ -11,6 +11,8 @@
 #   matrix-stick-16g   — 16 GiB stick: imageSizeGiB=16, espSizeMiB=2048 + budget math
 #   matrix-stick-32g   — 32 GiB stick: imageSizeGiB=32, espSizeMiB=2048 + budget math
 #   matrix-hot-ext4    — hot mode, fsType=ext4: initrd MUST carry NO "zfs" filesystem
+#   matrix-hot-zfs-property — mixed mount shapes: root=property (zfsutil) beside
+#                            /nix=legacy (no zfsutil); both directions asserted at once
 #   matrix-pin-strict  — requirePin=true explicit + pcrs=[7,11] → crypttab has tpm2-pin=yes
 #   matrix-persist-nested — StateDirectory nested under a bind-mounted ancestor must evaluate
 #                            (persist-enforce ancestor walk; 2026-07-24 acme incident guard)
@@ -228,6 +230,32 @@ v=$(nix_eval "nixosConfigurations.matrix-hot-ext4.config.boot.initrd.systemd.ser
 check_absent "hot-ext4: no zfs-import service in initrd.systemd.services" "$v" "zfs-import"
 
 # ──────────────────────────────────────────────────────────────────────────────────────
+# VARIANT 5b: matrix-hot-zfs-property
+# ──────────────────────────────────────────────────────────────────────────────────────
+# The two root-on-ZFS mount shapes are MUTUALLY EXCLUSIVE at mount(8): `-o zfsutil` is
+# refused for a mountpoint=legacy dataset, and a property-mountpoint dataset cannot be
+# mounted without it. Getting this wrong does not degrade gracefully — it fails the boot.
+# This variant declares root "property" and /nix "legacy" in ONE config, so both
+# directions are asserted at once; a same-shape-everywhere variant would still pass if
+# the module ignored the option and applied one blanket rule.
+echo ""
+echo "── matrix-hot-zfs-property (mixed shapes: root=property, /nix=legacy) ──"
+check_drv "hot-zfs-property" "matrix-hot-zfs-property"
+
+v=$(nix_eval "nixosConfigurations.matrix-hot-zfs-property.config.nixnas.store.root.zfsMountpoint" --raw)
+check_eq "hot-zfs-property: store.root.zfsMountpoint = property" "$v" "property"
+
+v=$(nix_eval "nixosConfigurations.matrix-hot-zfs-property.config.nixnas.store.hot.zfsMountpoint" --raw)
+check_eq "hot-zfs-property: store.hot.zfsMountpoint = legacy" "$v" "legacy"
+
+# The load-bearing pair — root MUST carry zfsutil, /nix MUST NOT.
+v=$(nix_eval 'nixosConfigurations.matrix-hot-zfs-property.config.fileSystems."/".options' --json)
+check_contains "hot-zfs-property: / mount options carry zfsutil" "$v" '"zfsutil"'
+
+v=$(nix_eval 'nixosConfigurations.matrix-hot-zfs-property.config.fileSystems."/nix".options' --json)
+check_absent "hot-zfs-property: /nix mount options do NOT carry zfsutil" "$v" '"zfsutil"'
+
+# ──────────────────────────────────────────────────────────────────────────────────────
 # VARIANT 6: matrix-pin-strict
 # ──────────────────────────────────────────────────────────────────────────────────────
 echo ""
@@ -317,7 +345,7 @@ echo "================ RESULT ================"
 total=$(( PASS + FAIL ))
 if [ "$FAIL" = 0 ]; then
   echo "PASS — all ${total} matrix eval checks passed."
-  echo "       Seven nixnas operator-persona variants evaluate without error and carry"
+  echo "       Eight nixnas operator-persona variants evaluate without error and carry"
   echo "       the expected option values, plus the zswap/swapDevices invariant in both"
   echo "       directions. (No builds, no QEMU — eval-correctness only.)"
   exit 0

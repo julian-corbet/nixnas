@@ -7,7 +7,8 @@
 #
 # After both members are unlocked the initrd imports qapool from /dev/mapper (location.nix
 # orders zfs-import-qapool after cryptsetup.target, so the import never races the decrypt),
-# then mounts qapool/system/nix (mountpoint=legacy) at /nix and switch-roots into the full
+# then mounts qapool/system/nix (mountpoint=legacy — the store.hot.zfsMountpoint default;
+# hosts/matrix/hot-zfs-property.nix covers the "property" shape) at /nix and switch-roots into the full
 # system. ZFS native-encryption is NOT used (LUKS does the crypto); that is the supported
 # hot-mode contract: one passphrase, one prompt, ZFS sees plaintext block devices.
 #

@@ -94,8 +94,10 @@ Same contract as `store.hot.device` (`docs/HOT-MODE.md` step 0): nixnas never fo
 is the operator's own action, on their own already-unlocked pool.
 
 ```
-# ZFS example — a sibling dataset of the existing hot store, same pool:
-zfs create -o mountpoint=legacy <pool>/system/root
+# ZFS example — a sibling dataset of the existing hot store, same pool.
+# Either mount shape works; declare the one you pick with store.root.zfsMountpoint.
+zfs create -o mountpoint=legacy <pool>/system/root                    # zfsMountpoint = "legacy"
+zfs create -o mountpoint=/ -o canmount=noauto <pool>/system/root      # zfsMountpoint = "property"
 
 # Non-ZFS example — a new LUKS member + filesystem on a spare partition/volume:
 cryptsetup luksFormat /dev/disk/by-id/<new-member>
@@ -106,8 +108,21 @@ mkfs.ext4 -L nixroot /dev/mapper/nixroot
 This step touches only NEW, previously-unused storage. It does not modify the running
 system, the existing store dataset, or anything currently mounted.
 
-**Observable proving this stage:** `zfs list <pool>/system/root` shows `mountpoint legacy`
-(ZFS case), or `blkid /dev/mapper/nixroot` shows the new filesystem (device case). Nothing
+> **Converting an EXISTING dataset from `legacy` to `property` is a two-step operation.**
+> A plain `zfs set mountpoint=/ <dataset>` MOUNTS IT IMMEDIATELY at the new location —
+> which for a root dataset means over the running system's `/`. Set `canmount=noauto`
+> first, then use `zfs set -u` (update the property, do not mount):
+>
+> ```
+> zfs set canmount=noauto <pool>/system/root
+> zfs set -u mountpoint=/ <pool>/system/root
+> ```
+>
+> Verify with `zfs list` that it reports `noauto` and is NOT mounted before continuing.
+
+**Observable proving this stage:** `zfs list <pool>/system/root` shows `mountpoint legacy`,
+or a real mountpoint with `canmount noauto` and `mounted no` for the `property` shape
+(ZFS case); or `blkid /dev/mapper/nixroot` shows the new filesystem (device case). Nothing
 else on the host changed — `mount` output for the running system is identical to before
 this stage.
 

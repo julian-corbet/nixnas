@@ -8,8 +8,11 @@
 #     /nix/store/xxxx-nixos-system-main
 #
 #   1. sanity: the toplevel exists locally; each zfs device's pool is imported (imports it
-#      off /dev/mapper if not) and its dataset is mountpoint=legacy (the hot-mode contract) —
-#      checked for BOTH the store device and the root device;
+#      off /dev/mapper if not) and its dataset actually carries the mount shape the host
+#      declares — mountpoint=legacy, or a real mountpoint plus canmount=noauto for
+#      `--{root-,}zfs-mountpoint property`. Checked for BOTH the store and root device,
+#      because `-o zfsutil` and mountpoint=legacy are mutually exclusive at mount(8) and a
+#      mismatch would otherwise fail cryptically halfway through the install;
 #   2. stage the target: the REAL PERSISTENT ROOT DEVICE mounted at /mnt/nixnas-install (NOT
 #      a scratch tmpfs — a persistent root is the whole point of this refactor: everything
 #      nixos-install writes under the target root — /etc, /var, /home, the user db — must
@@ -35,7 +38,9 @@
 # WHAT NIXNAS DOES NOT DO HERE: it never `zfs create`s / `mkfs`s the root dataset/device —
 # same "unlock + import + mount, never format" contract as the hot store and every data
 # pool (docs/HOT-MODE.md step 0). The operator creates the root dataset the same way they
-# create the store one, e.g. `zfs create -o mountpoint=legacy hot/nixnas/root`.
+# create the store one, e.g. `zfs create -o mountpoint=legacy hot/nixnas/root` — or, for
+# the self-describing shape, `zfs create -o mountpoint=/ -o canmount=noauto
+# hot/nixnas/root` plus `--root-zfs-mountpoint property`.
 #
 # Ships on usb-mode systems (any usb nixnas can install a hot sibling — the rescue story).
 { config, lib, pkgs, ... }:
@@ -50,22 +55,32 @@ let
     text = ''
       device=""; fstype="zfs"; toplevel=""
       rootDevice=""; rootFstype="zfs"
+      # Must match the host's nixnas.store.{hot,root}.zfsMountpoint — "legacy" is the
+      # module default, so the flags are only needed for a "property"-shaped dataset.
+      zfsMountpoint="legacy"; rootZfsMountpoint="legacy"
       usage() {
         echo "usage: nixnas-install-hot --device <dataset|/dev/mapper/x> [--fstype zfs|ext4|…] \\" >&2
+        echo "                          [--zfs-mountpoint legacy|property] \\" >&2
         echo "                          --root-device <dataset|/dev/mapper/x> [--root-fstype zfs|ext4|…] \\" >&2
+        echo "                          [--root-zfs-mountpoint legacy|property] \\" >&2
         echo "                          <main-toplevel-store-path>" >&2
         exit 2
       }
       while [ $# -gt 0 ]; do case "$1" in
         --device) device="$2"; shift ;;
         --fstype) fstype="$2"; shift ;;
+        --zfs-mountpoint) zfsMountpoint="$2"; shift ;;
         --root-device) rootDevice="$2"; shift ;;
         --root-fstype) rootFstype="$2"; shift ;;
+        --root-zfs-mountpoint) rootZfsMountpoint="$2"; shift ;;
         -h|--help) usage ;;
         /nix/store/*) toplevel="$1" ;;
         *) echo "unknown arg: $1" >&2; usage ;;
       esac; shift; done
       [ -n "$device" ] && [ -n "$rootDevice" ] && [ -n "$toplevel" ] || usage
+      for v in "$zfsMountpoint" "$rootZfsMountpoint"; do
+        case "$v" in legacy|property) ;; *) echo "!! zfs mountpoint shape must be 'legacy' or 'property', got: $v" >&2; usage ;; esac
+      done
       [ "$(id -u)" = 0 ] || { echo "must run as root" >&2; exit 1; }
 
       # ── 1. sanity ──────────────────────────────────────────────────────────
@@ -74,9 +89,11 @@ let
       [ -r "$pki/keys/db/db.key" ] || { echo "!! no Secure Boot PKI at $pki (this must run on a TUI-flashed nixnas stick)" >&2; exit 1; }
 
       # checked for BOTH the store device and the root device — either can be zfs or not,
-      # independently, so this runs once per device with its own fstype.
-      check_zfs_legacy() {
-        dev="$1"; fst="$2"; label="$3"
+      # and either mount shape, independently, so this runs once per device with its own
+      # fstype and declared shape. The two shapes are mutually exclusive at mount(8), so a
+      # mismatch here would otherwise surface as a cryptic mount failure mid-install.
+      check_zfs_mountpoint() {
+        dev="$1"; fst="$2"; label="$3"; style="$4"
         [ "$fst" = "zfs" ] || return 0
         pool="''${dev%%/*}"
         zpool list "$pool" >/dev/null 2>&1 || {
@@ -84,10 +101,22 @@ let
           zpool import -d /dev/mapper "$pool"
         }
         mp="$(zfs get -H -o value mountpoint "$dev")"
-        [ "$mp" = "legacy" ] || { echo "!! $label device $dev has mountpoint=$mp — the hot-mode contract is mountpoint=legacy (zfs set mountpoint=legacy $dev)" >&2; exit 1; }
+        if [ "$style" = "legacy" ]; then
+          [ "$mp" = "legacy" ] || { echo "!! $label device $dev has mountpoint=$mp but is declared zfsMountpoint=\"legacy\" — either fix the dataset (zfs set mountpoint=legacy $dev) or declare zfsMountpoint = \"property\"" >&2; exit 1; }
+        else
+          case "$mp" in
+            legacy|none) echo "!! $label device $dev is declared zfsMountpoint=\"property\" but has mountpoint=$mp — mount -o zfsutil is REFUSED for such a dataset. Give it a real mountpoint, or declare zfsMountpoint = \"legacy\"." >&2; exit 1 ;;
+          esac
+          # canmount=noauto is not decoration here: a property-mountpoint ROOT dataset says
+          # mountpoint=/ , and anything that runs `zfs mount -a` against the imported pool
+          # would otherwise mount it straight over the live root. noauto is what makes the
+          # shape safe, so refuse to install onto one that lacks it.
+          cm="$(zfs get -H -o value canmount "$dev")"
+          [ "$cm" = "noauto" ] || { echo "!! $label device $dev has canmount=$cm — a zfsMountpoint=\"property\" dataset MUST be canmount=noauto (zfs set canmount=noauto $dev), else zfs mount -a can mount it over a live mountpoint." >&2; exit 1; }
+        fi
       }
-      check_zfs_legacy "$device" "$fstype" "store"
-      check_zfs_legacy "$rootDevice" "$rootFstype" "root"
+      check_zfs_mountpoint "$device" "$fstype" "store" "$zfsMountpoint"
+      check_zfs_mountpoint "$rootDevice" "$rootFstype" "root" "$rootZfsMountpoint"
 
       # ── 2. stage the target: the PERSISTENT ROOT DEVICE, then /nix and /boot within it ──
       target=/mnt/nixnas-install
@@ -98,13 +127,23 @@ let
       }
       trap cleanup EXIT
       mkdir -p "$target"
+      # `-o zfsutil` is required for a property-mountpoint dataset and REFUSED for a legacy
+      # one — the shape was already validated above, so these branches cannot disagree.
       if [ "$rootFstype" = "zfs" ]
-      then mount -t zfs "$rootDevice" "$target"
+      then
+        if [ "$rootZfsMountpoint" = "property" ]
+        then mount -t zfs -o zfsutil "$rootDevice" "$target"
+        else mount -t zfs "$rootDevice" "$target"
+        fi
       else mount -t "$rootFstype" "$rootDevice" "$target"
       fi
       mkdir -p "$target/nix" "$target/boot"
       if [ "$fstype" = "zfs" ]
-      then mount -t zfs "$device" "$target/nix"
+      then
+        if [ "$zfsMountpoint" = "property" ]
+        then mount -t zfs -o zfsutil "$device" "$target/nix"
+        else mount -t zfs "$device" "$target/nix"
+        fi
       else mount -t "$fstype" "$device" "$target/nix"
       fi
       mount --bind /boot "$target/boot"   # the booted stick's ESP IS the shared ESP
