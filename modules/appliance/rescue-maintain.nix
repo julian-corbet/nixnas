@@ -28,7 +28,7 @@
 #     away from. Retiring this branch too would mean nixboot growing a runtime-toplevel
 #     mechanism, which is out of scope for this migration — nixboot is consumed here as-is, not
 #     extended. This is a stated, load-bearing boundary, not an oversight: every host actually
-#     running in production today is hub-built (rescue.toplevel), per the fleet's own
+#     running in production today is hub-built (rescue.toplevel), per the operator's own
 #     build-on-hub doctrine (self-upgrading boxes do local `nix build`, which the doctrine
 #     exists to avoid) — so this branch exists for the option's own documented persona, not for
 #     a host this migration needs to prove itself against.
@@ -40,7 +40,7 @@
 # whose `init=` path points at a closure NOT YET copied onto the stick — the ESP would then carry
 # a rescue entry that fails to switch-root the moment it is ever booted. So this module does NOT
 # rely on nixboot's own timer/service for the `rescue` entry at all (nixboot.enable stays off
-# fleet-wide for nixnas hosts — see the flake.nix comment on why); it consumes only the two
+# across every nixnas host — see the flake.nix comment on why); it consumes only the two
 # building blocks nixboot exposes UNCONDITIONALLY regardless of `nixboot.enable`
 # (`nixboot.extraEntries.*` as plain option data, and the derivation
 # `system.build.extraEntryMaintainers.rescue`), and calls that derivation itself, from inside

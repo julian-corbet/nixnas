@@ -94,7 +94,7 @@ nixnas-config/
 
 ### Public/private delineation rule
 - **Public core holds:** every mechanism, every typed option, the build library, the demo
-  host with fake values. No hostname, IP, serial, URL, or fleet-topology fact — not even in
+  host with fake values. No hostname, IP, serial, URL, or cross-host topology fact — not even in
   comments or git history.
 - **Private overlay holds:** all literals (serials/IPs/hostnames/URLs), all sops ciphertext,
   the initrd host key, the real `nixosConfigurations`. It *imports* the public core; the

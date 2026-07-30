@@ -15,7 +15,7 @@ the core will be asked to move them out.
 ## Ground rules
 
 - **FOSS-clean core.** The public repo carries no hostname, IP, disk serial, URL, or other
-  site/fleet fact — not even in comments. Every site value is a typed `nixnas.*` option; real
+  site-specific fact — not even in comments. Every site value is a typed `nixnas.*` option; real
   values live in the operator's *private* overlay (`templates/host/` scaffolds one). The
   `hosts/demo` host uses only RFC-5737 / RFC-2606 / `DEMO-*` placeholders.
 - **Fail closed.** Security-relevant defaults must fail loudly, never silently degrade (e.g. a

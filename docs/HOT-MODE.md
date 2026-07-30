@@ -63,7 +63,7 @@ must enter a key in a secure environment to unlock anything.
 against EVERY declared LUKS member in the initrd — the hot-store members (`store.hot.unlock`,
 e.g. hot) AND the data members (`storage.unlock`, e.g. a cold archive pool + standalone
 archive disks). Whatever the key opens, opens; the pools that become available are imported. So
-a fleet of SEPARATE pools that share ONE passphrase all come up from a SINGLE entry — there is
+a whole set of SEPARATE pools that share ONE passphrase all come up from a SINGLE entry — there is
 no second post-boot `nixnas-unlock` in hot mode (it stays a manual fallback). The two member
 classes differ only in failure semantics: hot members are boot-critical (`device-timeout=0`,
 infinite wait — no `/nix` without them), data members are `nofail` with a finite device timeout

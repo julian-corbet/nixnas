@@ -159,7 +159,7 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
 ## Out of scope (operator territory — flag, don't tune here)
 
 - ZFS ARC sizing (`zfs_arc_max`), `recordsize`, dataset `compression`/`atime` on the **data
-  pools** — operator's plain-NixOS config. (Per fleet doctrine: never fence RAM away from ARC.)
+  pools** — operator's plain-NixOS config. (Per house doctrine: never fence RAM away from ARC.)
 - k3s, GPU drivers, Samba/NFS share tuning, libvirt/VMs — operator.
 - Kernel **version** is a *constraint* (newest cached OpenZFS-compatible), not a tunable — don't
   chase mainline/bleeding-edge (STORAGE.md §5).
