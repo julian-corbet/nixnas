@@ -6,7 +6,7 @@ deployment produced the console flip, the 5s menu, the grow-unit removal, the au
 module, the failed-units CI gate, and the ephemeral first-boot SSH key — this file
 tracks what that session surfaced but did not yet land.)
 
-## 1. networkd everywhere (drop dhcpcd in stage 2)
+## 1. networkd everywhere (drop dhcpcd in stage 2) — LANDED
 **Evidence:** the initrd uses systemd-networkd (remote-unlock), stage 2 uses NixOS's
 default dhcpcd. On first boots the stage-2 dhcpcd repeatedly failed its first start
 (`[FAILED] Failed to start DHCP Client`, later self-healed) while the initrd lease kept
@@ -15,8 +15,11 @@ answering pings — two DHCP stacks, one interface, avoidable flake class.
 to stage 2, native lease handover. Multi-NIC guidance (bond/deactivate) in the docs —
 two NICs on one LAN made the DHCP server juggle leases across boots and the NICs
 ARP-fight each other (frozen SSH mid-command).
+**Landed:** `networking.useNetworkd = mkDefault true;` in `modules/appliance/base.nix:27`
+(the module's own comment cites this item by number) — commit `7155a5b` (2026-07-04),
+the same commit that landed item #4.
 
-## 2. Store-unlock prompt must not 90s-timeout into emergency
+## 2. Store-unlock prompt must not 90s-timeout into emergency — LANDED
 **Evidence:** a slow-POST server (~15 min) plus an unanswered LUKS prompt = the
 cryptsetup job times out after ~90 s → emergency mode → on a fresh image the emergency
 shell is LOCKED (no root credential) → total lockout. Recovery required knowing the
@@ -25,16 +28,27 @@ shell is LOCKED (no root credential) → total lockout. Recovery required knowin
 without it anyway — waiting IS the correct behavior), so a human arriving minutes
 later still gets the prompt, not a dead box. Needs a QEMU test: prompt unanswered for
 >5 min, then answered → boot completes.
+**Landed:** `x-systemd.device-timeout=0` on both the `cryptstore` crypttab entry and the
+`/nix` mount options (`modules/boot/disk.nix:93-94`, `FIELD-BACKLOG #2` in its own
+comment; the hot-mode equivalent is `modules/store/location.nix:125,151`) — commit
+`7155a5b` (2026-07-04), the same commit that landed item #4. The queued QEMU test
+(prompt unanswered for minutes, then answered) has not been added — `test/failure-
+injection-test.sh`'s `pool-absent` case covers a genuinely absent device (which is
+still expected to hit the 90 s device-timeout by design), not an unanswered password
+prompt on a present device.
 
-## 3. Preload must not starve the box (IO scheduling)
+## 3. Preload must not starve the box (IO scheduling) — LANDED
 **Evidence:** `store.preload` (warming the closure into the compressed page cache)
 reads the whole closure from a ~5 MB/s stick right after boot/switch; during that
 window interactive use starves — SSH connections accept but shells take >30 s to exec.
 On a rescue system this is exactly when an operator needs the box responsive.
 **Fix:** run the preload unit with `IOSchedulingClass=idle` (+ lowest CPU weight);
 warming is a background optimization and must never compete with the operator.
+**Landed:** `nixnas-store-preload` sets `IOSchedulingClass = "idle"`,
+`CPUSchedulingPolicy = "idle"`, and `Nice = 19` (`modules/appliance/optimizations.nix:98-99`)
+— commit `7155a5b` (2026-07-04), the same commit that landed item #4.
 
-## 4. Activation must survive connection loss (detached switch) — LANDED (commit pending)
+## 4. Activation must survive connection loss (detached switch) — LANDED
 **Evidence:** a `switch-to-configuration switch` carried over a plain SSH session was
 killed mid-flight when the network flapped — getty had already restarted but user
 activation had not run yet: a HALF-activated system (login rejects everyone). The fix
@@ -55,7 +69,36 @@ orphaned inherited fd — deleting the file gives stc a fresh inode). auto-upgra
 rescue-maintain already run inside systemd units, i.e. detached by construction; the
 README now says "never run activation through a droppable session".
 
-## 6. TPM seal must survive SB key enrollment (self-heal) — LANDED
+## 5. Rescue firmware posture (document, not change)
+**Evidence:** the rescue boots a discrete GPU host with `amdgpu … Fatal error during
+GPU init` (no firmware on the stick). Correct for the rescue (closure budget; BMC
+graphics is the console) but it LOOKS alarming on the console and cost triage time.
+**Fix:** docs (HOT-MODE/README): the rescue is deliberately firmware-lean; GPU errors
+on its console are expected on dGPU hosts; the MAIN host config carries
+`hardware.enableRedistributableFirmware`.
+
+## 6. install-hot needs nix-command enabled (field-hit)
+**Evidence:** `nixnas-install-hot` runs `nix copy --to "$target"` (a nix-command call), but the
+rescue's nix.conf did not have `experimental-features = nix-command` — so the install aborted
+`error: experimental Nix feature 'nix-command' is disabled`. Worked around with
+`NIX_CONFIG='experimental-features = nix-command flakes' nixnas-install-hot …`.
+**Fix:** either the rescue (usb-mode) nix config enables `nix-command` by default (it ships
+`nixnas-install-hot`, which requires it), or install-hot invokes `nix copy` with
+`--extra-experimental-features nix-command` itself. The latter is more robust (self-contained).
+
+## 7. install-hot must place the console auth hash on the hot store (field-hit)
+**Evidence:** the MAIN's install warned `password file '/nix/nixnas/auth/passphrase.hash' does
+not exist` — the auth module points root/admin at that runtime file (modules/appliance/auth.nix),
+but only the TUI image build writes it (usb images); install-hot never seeds it onto the hot
+store, so the MAIN's CONSOLE login is fail-closed locked (SSH-key still works). Worked around by
+writing the yescrypt hash to `hot/system/nix` `…/nixnas/auth/passphrase.hash` (0600) by hand
+before the reboot.
+**Fix:** install-hot should seed the auth hash onto the hot store the same way it seeds the SB
+PKI (step 3) — either copy the operator-provided hash, or (cleaner) let the MAIN config carry an
+inline `hashedPassword` for the hot mode where the TUI file mechanism doesn't apply. Reconcile
+the auth module (hashedPasswordFile) vs an inline hashedPassword so hot systems aren't locked.
+
+## 8. TPM seal must survive SB key enrollment (self-heal) — LANDED
 **Evidence (first real deployment):** the initrd-SSH host key is sealed on first
 boot with `systemd-creds encrypt --tpm2-pcrs=7`, but Secure Boot key enrollment
 (`nixnas-enroll-sb`, a deliberate MANUAL step) runs AFTER that seal and **changes PCR 7**. On
@@ -96,32 +139,3 @@ success message. A box-side read-only warning unit (analogous to `nixnas-recover
 flags a store keyslot that no longer unseals is the remaining not-yet-landed piece — untestable
 in the keyless demo (no TPM2 store slot is enrolled there), so it is tracked here rather than
 shipped blind.
-
-## 5. Rescue firmware posture (document, not change)
-**Evidence:** the rescue boots a discrete GPU host with `amdgpu … Fatal error during
-GPU init` (no firmware on the stick). Correct for the rescue (closure budget; BMC
-graphics is the console) but it LOOKS alarming on the console and cost triage time.
-**Fix:** docs (HOT-MODE/README): the rescue is deliberately firmware-lean; GPU errors
-on its console are expected on dGPU hosts; the MAIN host config carries
-`hardware.enableRedistributableFirmware`.
-
-## 6. install-hot needs nix-command enabled (field-hit)
-**Evidence:** `nixnas-install-hot` runs `nix copy --to "$target"` (a nix-command call), but the
-rescue's nix.conf did not have `experimental-features = nix-command` — so the install aborted
-`error: experimental Nix feature 'nix-command' is disabled`. Worked around with
-`NIX_CONFIG='experimental-features = nix-command flakes' nixnas-install-hot …`.
-**Fix:** either the rescue (usb-mode) nix config enables `nix-command` by default (it ships
-`nixnas-install-hot`, which requires it), or install-hot invokes `nix copy` with
-`--extra-experimental-features nix-command` itself. The latter is more robust (self-contained).
-
-## 7. install-hot must place the console auth hash on the hot store (field-hit)
-**Evidence:** the MAIN's install warned `password file '/nix/nixnas/auth/passphrase.hash' does
-not exist` — the auth module points root/admin at that runtime file (modules/appliance/auth.nix),
-but only the TUI image build writes it (usb images); install-hot never seeds it onto the hot
-store, so the MAIN's CONSOLE login is fail-closed locked (SSH-key still works). Worked around by
-writing the yescrypt hash to `hot/system/nix` `…/nixnas/auth/passphrase.hash` (0600) by hand
-before the reboot.
-**Fix:** install-hot should seed the auth hash onto the hot store the same way it seeds the SB
-PKI (step 3) — either copy the operator-provided hash, or (cleaner) let the MAIN config carry an
-inline `hashedPassword` for the hot mode where the TUI file mechanism doesn't apply. Reconcile
-the auth module (hashedPasswordFile) vs an inline hashedPassword so hot systems aren't locked.
