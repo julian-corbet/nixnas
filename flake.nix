@@ -59,9 +59,23 @@
       url = "github:julian-corbet/nixboot-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # nixfs — the filesystem domain, and the SOLE owner of the f2fs compression recipe (mkfs
+    # feature bits, mount options, the kernel floor they need). That recipe used to be vendored
+    # here as modules/lib/f2fs-store-mount-opts.nix, a second, independent copy of exactly the
+    # same facts nixvault also vendored for its own vault -- two copies of one field-validated
+    # thing, with nothing tying either back to where it actually came from. It is data, not
+    # policy, so it is consumed as a lib value (`nixfs.lib.catalogue`), the same
+    # lower-layer-provides-a-lib category as nixtest's own fixtures -- never nixfs's own
+    # nixosModules, which nixnas has no reason to install (nixnas already knows exactly which
+    # filesystem tools it needs and installs them itself).
+    nixfs = {
+      url = "github:julian-corbet/nixfs-corbet-ch";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, nixram, nixboot, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, nixram, nixboot, nixfs, ... }:
     let
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
@@ -95,6 +109,15 @@
       # module system deduplicates them by key if a consumer happens to compose
       # nixram directly as well.
       nixosModules.nixnas = {
+        # The f2fs compression recipe (mkfs feature bits, mount options, the kernel floor),
+        # made available to every submodule below as the plain module argument
+        # `nixfsCatalogue` — a constant this flake closes over, never a per-host
+        # `config.nixfs.*` read: a recipe is a fact about f2fs, not something a host declares.
+        # `_module.args` (rather than `specialArgs`) is what lets this stay entirely internal —
+        # a consumer building a real host from `nixosModules.nixnas` never has to know nixfs
+        # exists, let alone follow it themselves, exactly like nixram and nixboot above.
+        _module.args.nixfsCatalogue = nixfs.lib.catalogue;
+
         imports = [
           (import ./modules)
           nixram.nixosModules.nixram

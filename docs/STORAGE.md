@@ -160,8 +160,14 @@ the floor f2fs compression needs:
 - compressed-block SPOR fix ~**6.7**,
 - release/reserve `i_blocks` accounting fix ~**6.12**.
 
-So the ZFS cap puts us in the safe zone automatically — **no separate kernel pin is needed for
-f2fs** (it is in-tree and comes with the kernel).
+So the ZFS cap puts us in the safe zone automatically — **no separate kernel *choice* is needed for
+f2fs** (it is in-tree and comes with the kernel). This is now a **real, build-time assertion**
+too, not merely this argument in prose: `modules/boot/kernel.nix` checks the SELECTED kernel's
+own version against the **6.12** floor — owned by nixfs (`lib/catalogue.nix`,
+`filesystems.f2fs.compression.requiredKernel`), the same fact nixvault enforces at *runtime* for
+its own vault, since it has no `boot.*` surface on every backend it targets. A host that
+disables ZFS, or overrides `boot.kernelPackages` directly, no longer gets this floor "for free"
+silently — it fails the build instead.
 
 **Kernel choice lives in [`KERNEL.md`](KERNEL.md):** the **CachyOS kernel** via the
 `xddxdd/nix-cachyos-kernel` flake (`release` branch + the `pinned` overlay: the flake.lock pins a
@@ -193,7 +199,7 @@ bound; the default 6.18 sits comfortably between.
 | 3 | Nix DB on the compressed FS → slow + release-could-write-block it | `nocompress_extension=sqlite`; release `find` scoped to `/nix/store`, never `/nix/var` |
 | 4 | unbootable on bad mount/module config | explicit `fsType="f2fs"`, `-O extra_attr,compression`, initrd `f2fs`+`crc32`, assert `F2FS_FS_ZSTD=y`, QEMU-validate |
 | 5 | transient ENOSPC during on-box autoUpgrade on the tiny LFS | GC before update, keep headroom, keep default overprovisioning, prefer building **off-box** + `nix copy` finished closures |
-| 6 | GC broken on pre-5.14 kernel (released = immutable) | assert kernel ≥ 6.12; never GC/optimise the released store from a pre-5.14 rescue kernel |
+| 6 | GC broken on pre-5.14 kernel (released = immutable) | **asserted**, not just documented: `modules/boot/kernel.nix` fails the build below the ≥ 6.12 floor (nixfs's `filesystems.f2fs.compression.requiredKernel`); never GC/optimise the released store from a pre-5.14 rescue kernel |
 | 7 | in-place repair of a released path fails `-EIO` | repair = delete + re-substitute, never `--repair` in place |
 | 8 | no data integrity on incompressible blobs (compress_chksum covers only compressed clusters; LUKS-XTS adds none) | rely on Nix re-substitution by hash; optional future dm-integrity below LUKS |
 

@@ -20,9 +20,17 @@
 # operator's passphrase there with `imageScript --pre-format-files`, so it never touches the
 # Nix store. A build WITHOUT the injected file fails at `luksFormat` (no silent fallback).
 # Only the public demo host opts into a store-path demo passphrase, explicitly.
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, nixfsCatalogue, ... }:
 let
   cfg = config.nixnas;
+  # THE f2fs compression recipe -- ONE, canonical copy, owned by nixfs (the filesystem domain)
+  # and consumed here as plain data, never vendored. See nixfs's lib/catalogue.nix
+  # (filesystems.f2fs.compression) for the per-flag rationale; `nixfsCatalogue` reaches this
+  # module as a plain argument via flake.nix's `_module.args`, not a config read, because a
+  # recipe is a constant, not a per-host fact. SHARED with rescue-maintain (hot mode re-mounts
+  # this store with the identical mount options) — one source, so the compression config
+  # cannot drift.
+  f2fsRecipe = nixfsCatalogue.filesystems.f2fs.compression;
 in
 {
   # The on-stick disko layout applies to STICK-RESIDENT systems only — `usb` mode (the
@@ -137,24 +145,14 @@ in
                 type = "filesystem";
                 format = "f2fs";
                 mountpoint = "/nix";
-                extraArgs = [ "-O" "extra_attr,inode_checksum,sb_checksum,compression" ];
-                # The STORAGE.md §4 recipe: zstd:22, 16 KiB cluster, compress everything,
-                # exclude the Nix sqlite DB, plus the flash-friendly + RAM-cache flags
-                # (OPTIMIZATIONS.md §3):
-                #   flush_merge/checkpoint_merge — coalesce flushes/checkpoints on slow flash
-                #   compress_cache               — cache COMPRESSED blocks in RAM (the
-                #                                  "compressed page cache" the preload warms)
-                #   fsync_mode=nobarrier         — fewer barriers for non-atomic files; safe
-                #                                  here because store paths are re-fetchable
-                #                                  (NEVER the bare `nobarrier` mount option)
-                # NOTE: f2fs extension names are capped at 8 chars (F2FS_EXTENSION_LEN), so
-                # `sqlite-wal`/`sqlite-shm` (10 chars) CANNOT be excluded — f2fs rejects the
-                # whole mount ("invalid extension length"). Only `sqlite` (the main DB) is
-                # excludable; the WAL/SHM sidecars live in /nix/var (never the store-scoped
-                # release pass) and fs-mode compression handles their in-place rewrites fine.
-                # The list is SHARED with rescue-maintain (hot mode re-mounts this store) —
-                # one source so the compression config cannot drift.
-                mountOptions = import ../lib/f2fs-store-mount-opts.nix;
+                # zstd:22, 16 KiB cluster, compress everything, exclude the Nix sqlite DB, plus
+                # the flash-friendly + RAM-cache flags -- the full per-flag rationale (incl. the
+                # 8-char F2FS_EXTENSION_LEN trap that caps the sqlite exclusion to the main DB
+                # file only) now lives at the recipe's own home, nixfs's lib/catalogue.nix
+                # (filesystems.f2fs.compression) -- see STORAGE.md §4 / OPTIMIZATIONS.md §3 for
+                # this appliance's own account of why each flag earns its place.
+                extraArgs = [ "-O" f2fsRecipe.mkfsFeatures ];
+                mountOptions = f2fsRecipe.mountOptions;
                 };
               };
             };

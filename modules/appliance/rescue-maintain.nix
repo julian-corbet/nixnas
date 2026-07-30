@@ -100,13 +100,17 @@
 # a fallback and its CURRENT stick UKI keeps booting meanwhile. It is idempotent (no-ops when the
 # installed toplevel marker already matches). UNCHANGED by this migration — see the assertions
 # below, which now also PROVE it structurally (never wantedBy a boot/switch target).
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, nixfsCatalogue, ... }:
 let
   cfg = config.nixnas;
   active = cfg.enable && cfg.store.location == "hot" && cfg.rescue.enable;
 
   pkiDb = "${config.boot.lanzaboote.pkiBundle}/keys/db";
-  f2fsOpts = lib.concatStringsSep "," (import ../lib/f2fs-store-mount-opts.nix);
+  # THE SAME f2fs compression recipe disk.nix formats the stick store with -- owned by nixfs
+  # (the filesystem domain), reached as plain data via `nixfsCatalogue` (flake.nix's
+  # `_module.args`), never a second, independently-vendored copy. See nixfs's
+  # lib/catalogue.nix (filesystems.f2fs.compression) for the per-flag rationale.
+  f2fsOpts = lib.concatStringsSep "," nixfsCatalogue.filesystems.f2fs.compression.mountOptions;
   sdCryptsetup = "${pkgs.systemd}/lib/systemd/systemd-cryptsetup";
   releaseCblocks = import ../lib/f2fs-release-cblocks.nix { inherit pkgs; };
 
@@ -206,8 +210,9 @@ let
           || { echo "rescue-maintain: TPM2 attach failed — the rescue store has no usable TPM2 token. Enroll it (nixnas-enroll-tpm2, or systemd-cryptenroll --tpm2-device=auto on the store partition)." >&2; exit 1; }
       fi
       mkdir -p "$mnt/nix"
-      # The SHARED f2fs options (modules/lib/f2fs-store-mount-opts.nix): a bare mount would
-      # write the new closure UNCOMPRESSED and blow the stick budget.
+      # The SHARED f2fs options (nixfs's lib/catalogue.nix, filesystems.f2fs.compression --
+      # see this file's own `f2fsOpts` binding above): a bare mount would write the new
+      # closure UNCOMPRESSED and blow the stick budget.
       mount -o ${lib.escapeShellArg f2fsOpts} /dev/mapper/nixnas-rescue-store "$mnt/nix"
       # ── make room BEFORE the copy (reordered 2026-07-12) ───────────────────────
       # The old order (copy → rotate roots → GC) needed old-current + old-prev + the

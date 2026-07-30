@@ -1,6 +1,6 @@
 # nixnas — the f2fs compression "release pass" (STORAGE.md §4/§2).
 #
-# f2fs's fs-mode compression (modules/lib/f2fs-store-mount-opts.nix) shrinks what's WRITTEN
+# f2fs's fs-mode compression (the recipe in nixfs's lib/catalogue.nix, filesystems.f2fs.compression) shrinks what's WRITTEN
 # to flash, but by kernel design it does NOT free the reserved blocks back to free space —
 # that needs an explicit per-file ioctl(F2FS_IOC_RELEASE_COMPRESS_BLOCKS), exposed as
 # `f2fs_io release_cblocks <file>`. Skipping this defeats the entire point of compressing the
