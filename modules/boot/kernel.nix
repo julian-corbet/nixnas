@@ -17,7 +17,15 @@
 # `.kernel.version` is a plain string available at EVAL time (no build needed to read it), and
 # this backend genuinely owns `boot.*` — unlike nixvault, which exports to system-manager too
 # and has no such surface on that backend, hence its own runtime `uname -r` check instead.
-{ config, lib, pkgs, nixfsCatalogue, ... }:
+# `nixfsCatalogue` is a plain closure argument, applied by modules/default.nix at import time
+# (never `_module.args` — see that file's header for why: a module-argument name is a GLOBAL
+# namespace shared with anything else composed alongside this one, and nixvault's own,
+# separately-pinned nixfs closed over the exact same argument name, which collided the one time
+# a consumer composed both flakes together. Partial application here means this file's own
+# `nixfsCatalogue` is a value baked in before the module system ever sees this as a module — it
+# never enters `_module.args` at all, so there is nothing left to collide over.
+{ nixfsCatalogue }:
+{ config, lib, pkgs, ... }:
 let
   cfg = config.nixnas;
   f2fsRequiredKernel = nixfsCatalogue.filesystems.f2fs.compression.requiredKernel;

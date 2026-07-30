@@ -105,21 +105,29 @@
       # nixram rides along with the appliance module rather than being a separate
       # thing every consumer must remember to import: the memory subsystem is not
       # optional on an appliance that boots to a tmpfs root with no disk swap.
-      # `import ./modules` and nixram's module are both PATH imports, so the
-      # module system deduplicates them by key if a consumer happens to compose
-      # nixram directly as well.
+      # nixram's module is a PATH import, so the module system deduplicates it by key
+      # if a consumer happens to compose nixram directly as well.
       nixosModules.nixnas = {
-        # The f2fs compression recipe (mkfs feature bits, mount options, the kernel floor),
-        # made available to every submodule below as the plain module argument
-        # `nixfsCatalogue` — a constant this flake closes over, never a per-host
-        # `config.nixfs.*` read: a recipe is a fact about f2fs, not something a host declares.
-        # `_module.args` (rather than `specialArgs`) is what lets this stay entirely internal —
-        # a consumer building a real host from `nixosModules.nixnas` never has to know nixfs
-        # exists, let alone follow it themselves, exactly like nixram and nixboot above.
-        _module.args.nixfsCatalogue = nixfs.lib.catalogue;
-
+        # The f2fs compression recipe (mkfs feature bits, mount options, the kernel floor) is
+        # applied HERE, as a real function argument to `import ./modules` — never
+        # `_module.args.nixfsCatalogue`. A module argument is a name in the ONE namespace every
+        # module composed alongside this one shares, and nixvault (a sibling appliance-adjacent
+        # flake, also consuming nixfs's own catalogue) picked that exact same name for the exact
+        # same reason — correct in each flake alone, and a hard "defined multiple times" eval
+        # failure the one time a consumer (infra's mkNixnas) composed both. `_module.args` merges
+        # with `mergeOneOption`, which rejects a second definition even when the two values are
+        # identical, so no `inputs.follows` pin could have fixed that either — only partial
+        # application, closing over the value before it ever becomes a module argument at all,
+        # rules the collision out by construction. modules/default.nix takes `nixfsCatalogue` as
+        # a plain function argument (not `{ config, lib, pkgs, ... }:`) and threads it through to
+        # the three files that actually read it (boot/kernel.nix, boot/disk.nix,
+        # appliance/rescue-maintain.nix) the same way, so `import ./modules { ... }` below is
+        # fully applied before the module system ever sees the result — a plain attrset, never a
+        # function it would try to call with the standard module args. A consumer building a real
+        # host from `nixosModules.nixnas` still never has to know nixfs exists, let alone follow
+        # it themselves, exactly as before.
         imports = [
-          (import ./modules)
+          (import ./modules { nixfsCatalogue = nixfs.lib.catalogue; })
           nixram.nixosModules.nixram
           # Both files of nixboot's own module (nixboot.nix + extra-entries.nix, bundled as
           # one nixosModules.nixboot) — needed even though `nixboot.enable` stays off on every

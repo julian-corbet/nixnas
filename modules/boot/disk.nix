@@ -20,16 +20,23 @@
 # operator's passphrase there with `imageScript --pre-format-files`, so it never touches the
 # Nix store. A build WITHOUT the injected file fails at `luksFormat` (no silent fallback).
 # Only the public demo host opts into a store-path demo passphrase, explicitly.
-{ config, lib, pkgs, nixfsCatalogue, ... }:
+# `nixfsCatalogue` is a plain closure argument, applied by modules/default.nix at import time
+# (never `_module.args` — a module-argument name is a GLOBAL namespace shared with anything else
+# composed alongside this one; nixvault's own, separately-pinned nixfs closed over the exact same
+# argument name, which collided the one time a consumer composed both flakes together. Partial
+# application means this file's own `nixfsCatalogue` is baked in before the module system ever
+# sees this as a module — it never enters `_module.args`, so there is nothing left to collide over.
+{ nixfsCatalogue }:
+{ config, lib, pkgs, ... }:
 let
   cfg = config.nixnas;
   # THE f2fs compression recipe -- ONE, canonical copy, owned by nixfs (the filesystem domain)
   # and consumed here as plain data, never vendored. See nixfs's lib/catalogue.nix
   # (filesystems.f2fs.compression) for the per-flag rationale; `nixfsCatalogue` reaches this
-  # module as a plain argument via flake.nix's `_module.args`, not a config read, because a
-  # recipe is a constant, not a per-host fact. SHARED with rescue-maintain (hot mode re-mounts
-  # this store with the identical mount options) — one source, so the compression config
-  # cannot drift.
+  # module as a plain, partially-applied argument (see the header above), not a config read,
+  # because a recipe is a constant, not a per-host fact. SHARED with rescue-maintain (hot mode
+  # re-mounts this store with the identical mount options) — one source, so the compression
+  # config cannot drift.
   f2fsRecipe = nixfsCatalogue.filesystems.f2fs.compression;
 in
 {

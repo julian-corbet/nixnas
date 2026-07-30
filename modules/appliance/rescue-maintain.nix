@@ -100,15 +100,22 @@
 # a fallback and its CURRENT stick UKI keeps booting meanwhile. It is idempotent (no-ops when the
 # installed toplevel marker already matches). UNCHANGED by this migration — see the assertions
 # below, which now also PROVE it structurally (never wantedBy a boot/switch target).
-{ config, lib, pkgs, nixfsCatalogue, ... }:
+# `nixfsCatalogue` is a plain closure argument, applied by modules/default.nix at import time
+# (never `_module.args` — a module-argument name is a GLOBAL namespace shared with anything else
+# composed alongside this one; nixvault's own, separately-pinned nixfs closed over the exact same
+# argument name, which collided the one time a consumer composed both flakes together. Partial
+# application means this file's own `nixfsCatalogue` is baked in before the module system ever
+# sees this as a module — it never enters `_module.args`, so there is nothing left to collide over.
+{ nixfsCatalogue }:
+{ config, lib, pkgs, ... }:
 let
   cfg = config.nixnas;
   active = cfg.enable && cfg.store.location == "hot" && cfg.rescue.enable;
 
   pkiDb = "${config.boot.lanzaboote.pkiBundle}/keys/db";
   # THE SAME f2fs compression recipe disk.nix formats the stick store with -- owned by nixfs
-  # (the filesystem domain), reached as plain data via `nixfsCatalogue` (flake.nix's
-  # `_module.args`), never a second, independently-vendored copy. See nixfs's
+  # (the filesystem domain), reached as plain data via `nixfsCatalogue` (a partially-applied
+  # argument, see the header above), never a second, independently-vendored copy. See nixfs's
   # lib/catalogue.nix (filesystems.f2fs.compression) for the per-flag rationale.
   f2fsOpts = lib.concatStringsSep "," nixfsCatalogue.filesystems.f2fs.compression.mountOptions;
   sdCryptsetup = "${pkgs.systemd}/lib/systemd/systemd-cryptsetup";
