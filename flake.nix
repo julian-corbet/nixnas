@@ -41,22 +41,44 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # nixboot — the boot domain (firmware handoff through switch-root), and the SOLE owner of
-    # `nixboot.extraEntries`: the ukify+sbsign+place+rotate pipeline that used to live inline in
-    # modules/appliance/rescue-maintain.nix, generalised there and consumed here for the
-    # pinned/hub-built rescue persona only (see that file's own header for why the
-    # self-upgrading persona cannot be represented by nixboot's declarative option surface, and
-    # stays on the original inline pipeline). Also the SOLE owner of the USB-removable-boot
-    # MECHANISM (`nixboot.media.usb.enable`, composed in modules/boot/image.nix) -- the initrd
-    # kernel modules that let a stick be found at all, moved out of this appliance's own boot
-    # glue because any other host that boots off a stick needs the exact same modules. Both
-    # of these are DELIBERATELY independent of `nixboot.enable`, which itself is never turned
-    # on for a nixnas host — nixnas keeps owning its OWN Secure Boot / lanzaboote / loader-
-    # stance wiring (modules/boot/secureboot.nix, modules/boot/image.nix) exactly as before;
-    # only extraEntries, media.usb, and their unconditionally-exposed outputs are consumed.
-    # Same mechanism-lives-in-its-own-flake split as nixram above.
+    # nixboot — THE FULL CUTOVER (2026-07-31): nixboot now owns this appliance's WHOLE boot
+    # stance, not just the two mechanisms it started as. `nixboot.enable = true` on every
+    # nixnas host now (modules/boot/nixboot.nix is the bridge: it reads `nixnas.boot.*` /
+    # `nixnas.crypto.tpm2.*` / `nixnas.admin.authorizedKeys` — this repo's own PUBLIC option
+    # surface, UNCHANGED by this cutover — and writes nixboot's own `nixboot.*` options).
+    # DELETED in the same pass: modules/boot/secureboot.nix, modules/boot/remote-unlock.nix,
+    # modules/boot/rollback.nix, and the loader/console half of modules/boot/image.nix — this
+    # appliance no longer hand-rolls Secure Boot (lanzaboote), headless initrd-SSH remote
+    # unlock, or the kept-generations/boot-counting rollback failsafe; nixboot owns all three
+    # (`nixboot.extraEntries`, `nixboot.media.usb.enable`, and now `nixboot.secureBoot.*` /
+    # `nixboot.remoteUnlock.*` / `nixboot.generations.keep` / `nixboot.bootCounting.tries` /
+    # `nixboot.loader.*` / `nixboot.console.*`). See modules/boot/nixboot.nix's own header for
+    # the full port, what was deliberately improved UPSTREAM in nixboot itself rather than kept
+    # as a second nixnas-side tool, and the one thing (the data-store TPM2 re-enrollment
+    # reminder) that stays nixnas's alone because nixboot has no data-unlock concept at all.
+    # This was NOT staged: nixnas writes at plain priority (100), nixboot at `mkOverride 500`,
+    # so leaving both wired would have nixnas's own writes win almost everywhere while looking
+    # like a cutover — see knowledge/hosts/shared/nixnas-boot-convergence.md for the analysis.
     nixboot = {
       url = "github:julian-corbet/nixboot-corbet-ch";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # nixluks — the LUKS domain: this appliance's own hand-rolled `boot.initrd.luks.devices` +
+    # `systemd-cryptsetup@` keyring-chain ordering (formerly modules/store/location.nix's own
+    # code, lines 189-215 pre-cutover — the field-proven mechanism nixluks's own
+    # `modules/initrd.nix` generalises FROM this exact file) is DELETED from this repo; that
+    # file now only DECLARES each hot-mode LUKS member as `nixluks.volumes.<name>` (device,
+    # unlock order, boot-critical-vs-data timeout stance) and nixluks's own
+    # `modules/initrd.nix` renders the actual initrd wiring. Composed as BOTH
+    # `nixosModules.nixluks` (the declare-a-volume base, also separately consumed by a real
+    # host's own header-backup publication config) and `nixosModules.initrd` (the NixOS-only
+    # stage-1 companion, system-manager has no `boot.initrd.*` surface at all) — see
+    # modules/store/location.nix's own header for exactly which fields this appliance owns
+    # and which a co-declaring consumer must leave alone (`order`). Same
+    # mechanism-lives-in-its-own-flake split as nixram/nixboot above.
+    nixluks = {
+      url = "github:julian-corbet/nixluks-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -75,7 +97,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, nixram, nixboot, nixfs, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, nix-cachyos-kernel, disko, lanzaboote, impermanence, nixram, nixboot, nixluks, nixfs, ... }:
     let
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
@@ -86,6 +108,8 @@
         disko.nixosModules.disko
         lanzaboote.nixosModules.lanzaboote
         impermanence.nixosModules.impermanence
+        nixluks.nixosModules.nixluks
+        nixluks.nixosModules.initrd
         self.nixosModules.nixnas
         ./hosts/demo
         { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
@@ -130,13 +154,28 @@
           (import ./modules { nixfsCatalogue = nixfs.lib.catalogue; })
           nixram.nixosModules.nixram
           # Both files of nixboot's own module (nixboot.nix + extra-entries.nix, bundled as
-          # one nixosModules.nixboot) — needed even though `nixboot.enable` stays off on every
-          # nixnas host, because `nixboot.extraEntries.*` (options.nix's own declarations) and
-          # `system.build.extraEntryMaintainers` (unconditional passthrough) both live in that
-          # same file pair. See modules/appliance/rescue-maintain.nix's header.
+          # one nixosModules.nixboot). Post-cutover (2026-07-31) `nixboot.enable = true` on
+          # every nixnas host (modules/boot/nixboot.nix is the bridge) — this appliance's
+          # whole boot stance (Secure Boot, remote unlock, rollback, loader/console) is
+          # nixboot's mechanism now, not merely `extraEntries`/`media.usb` riding along
+          # independently of `enable` as it did before this cutover. See
+          # modules/boot/nixboot.nix's own header for the full port.
           nixboot.nixosModules.nixboot
         ];
       };
+      # nixluks is DELIBERATELY NOT bundled in here, unlike nixram/nixboot above: a real
+      # consumer (infra's own mkNixnas) already composes `nixluks.nixosModules.default` at
+      # its OWN top level for an UNRELATED purpose (header-backup-only, `manageUnlock =
+      # false` declarations against the same volume names — see modules/store/location.nix's
+      # own header) from its OWN separately-pinned `nixluks` input. Bundling a SECOND copy in
+      # here, from THIS flake's own pin, would double-import the module the moment the two
+      # pins ever drift apart (no `inputs.follows` ties them — this flake cannot set one on a
+      # consumer's input). So nixluks stays in the SAME camp as disko/lanzaboote/impermanence
+      # below: composed once, per nixosConfiguration, by whoever actually builds a
+      # `nixosSystem` — this flake's own demo/matrix hosts do it themselves (below), and a
+      # real consumer must do the same (infra's mkNixnas already composes
+      # `nixluks.nixosModules.default`; it additionally needs `nixluks.nixosModules.initrd`
+      # for modules/store/location.nix's own `initrdUnlock.*` wiring to render anything).
       nixosModules.default = self.nixosModules.nixnas;
 
       # Demo host — proves the public core evaluates standalone, with ZERO secrets.
@@ -147,6 +186,11 @@
           disko.nixosModules.disko
           lanzaboote.nixosModules.lanzaboote
           impermanence.nixosModules.impermanence
+          # Composed here, not inside nixosModules.nixnas — see that module's own comment
+          # on why nixluks stays in the same per-nixosConfiguration camp as the three
+          # modules just above, rather than risking a double-import at a real consumer.
+          nixluks.nixosModules.nixluks
+          nixluks.nixosModules.initrd
           self.nixosModules.nixnas
           ./hosts/demo
           ./test/verify-image.nix          # DEV self-check (f2fs compression report on the console)
@@ -186,6 +230,11 @@
           disko.nixosModules.disko
           lanzaboote.nixosModules.lanzaboote
           impermanence.nixosModules.impermanence
+          # Composed here, not inside nixosModules.nixnas — see that module's own comment
+          # on why nixluks stays in the same per-nixosConfiguration camp as the three
+          # modules just above, rather than risking a double-import at a real consumer.
+          nixluks.nixosModules.nixluks
+          nixluks.nixosModules.initrd
           self.nixosModules.nixnas
           ./hosts/demo
           ./hosts/demo-hot.nix
@@ -210,6 +259,11 @@
           disko.nixosModules.disko
           lanzaboote.nixosModules.lanzaboote
           impermanence.nixosModules.impermanence
+          # Composed here, not inside nixosModules.nixnas — see that module's own comment
+          # on why nixluks stays in the same per-nixosConfiguration camp as the three
+          # modules just above, rather than risking a double-import at a real consumer.
+          nixluks.nixosModules.nixluks
+          nixluks.nixosModules.initrd
           self.nixosModules.nixnas
           ./hosts/demo
           ./hosts/demo-hot-zfs.nix
@@ -241,6 +295,11 @@
           disko.nixosModules.disko
           lanzaboote.nixosModules.lanzaboote
           impermanence.nixosModules.impermanence
+          # Composed here, not inside nixosModules.nixnas — see that module's own comment
+          # on why nixluks stays in the same per-nixosConfiguration camp as the three
+          # modules just above, rather than risking a double-import at a real consumer.
+          nixluks.nixosModules.nixluks
+          nixluks.nixosModules.initrd
           self.nixosModules.nixnas
           ./hosts/demo
           ./hosts/demo-hot-rescue-pinned.nix
@@ -269,6 +328,11 @@
           disko.nixosModules.disko
           lanzaboote.nixosModules.lanzaboote
           impermanence.nixosModules.impermanence
+          # Composed here, not inside nixosModules.nixnas — see that module's own comment
+          # on why nixluks stays in the same per-nixosConfiguration camp as the three
+          # modules just above, rather than risking a double-import at a real consumer.
+          nixluks.nixosModules.nixluks
+          nixluks.nixosModules.initrd
           self.nixosModules.nixnas
           ./hosts/demo
           ./hosts/demo-upgrade-soak.nix

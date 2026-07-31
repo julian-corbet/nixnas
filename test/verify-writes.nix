@@ -18,7 +18,7 @@
     # initrd-SSH host key seal) have settled, so we measure STEADY STATE, not the one-time
     # boot writes.
     after = [ "multi-user.target" "nixnas-verify.service" "nixnas-verify-tpm2.service"
-              "nixnas-seal-hostkey.service" ];
+              "nixboot-seal-hostkey.service" ];
     path = [ pkgs.coreutils pkgs.util-linux pkgs.systemd pkgs.gawk ];
     serviceConfig = {
       Type = "oneshot";

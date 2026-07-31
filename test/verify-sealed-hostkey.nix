@@ -2,7 +2,7 @@
 #
 # Proves the TPM2-sealed initrd SSH host key path end-to-end against the test VM's
 # software TPM (swtpm, provided by test/boot-vm.sh):
-#   1. Confirms /boot/nixnas/initrd-hostkey.cred was created by nixnas-seal-hostkey.
+#   1. Confirms /boot/nixnas/initrd-hostkey.cred was created by nixboot-seal-hostkey.
 #   2. Confirms no plaintext private key was left on the ESP.
 #   3. Decrypts the credential using the SAME swtpm that sealed it (succeeds because
 #      swtpm is persisted for the whole boot-vm.sh run) to prove the mechanism is live.
@@ -14,11 +14,11 @@
 { pkgs, ... }:
 {
   systemd.services.nixnas-verify-sealed-hostkey = {
-    description = "DEV: verify TPM2-sealed initrd SSH host key (nixnas-seal-hostkey result)";
+    description = "DEV: verify TPM2-sealed initrd SSH host key (nixboot-seal-hostkey result)";
     wantedBy = [ "multi-user.target" ];
     # Run after the seal service has had a chance to complete.
-    after = [ "local-fs.target" "nixnas-seal-hostkey.service" ];
-    wants = [ "nixnas-seal-hostkey.service" ];
+    after = [ "local-fs.target" "nixboot-seal-hostkey.service" ];
+    wants = [ "nixboot-seal-hostkey.service" ];
     serviceConfig = {
       Type = "oneshot";
       StandardOutput = "journal+console";
@@ -28,13 +28,13 @@
     script = ''
       echo "=== NIXNAS-SEALTEST-START ==="
 
-      cred="/boot/loader/credentials/nixnas-initrd-hostkey.cred"
+      cred="/boot/loader/credentials/nixboot-initrd-hostkey.cred"
 
       # ── 1. Sealed credential on the ESP's loader/credentials dir (the stub drop-in) ──
       if [ -f "$cred" ]; then
         echo "[sealed-blob] EXISTS: $cred ($(wc -c < "$cred") bytes)"
       else
-        echo "[sealed-blob] MISSING — nixnas-seal-hostkey did not run or failed"
+        echo "[sealed-blob] MISSING — nixboot-seal-hostkey did not run or failed"
         echo "=== NIXNAS-SEALTEST-END ==="
         exit 1
       fi
@@ -52,7 +52,7 @@
       tmpout="$(mktemp -t nixnas-verify-hostkey.XXXXXX)"
       if systemd-creds decrypt \
            --tpm2-device=auto \
-           --name=nixnas-initrd-hostkey \
+           --name=nixboot-initrd-hostkey \
            "$cred" "$tmpout" 2>&1; then
         # ssh-keygen -l on a private key needs 0600 + a readable pubkey line; grab the
         # parenthesised type ((ED25519)) robustly, fall back to a plain non-empty label.

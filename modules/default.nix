@@ -21,19 +21,20 @@
 # flakes could still be setting `_module.args.nixfsCatalogue` at all. Closing over the value here
 # instead means nixfsCatalogue never becomes a name in that shared namespace in the first place,
 # so a sibling flake making the same choice about its own consumers cannot collide with this one,
-# regardless of which argument name it happens to pick.
+# regardless of which argument name it happens to pick. The general rule this incident taught the
+# family — a flake must never publish a fact through `_module.args` — is written down once, for
+# every sibling, in nixfs's own README ("Family convention: consuming lib.catalogue ... never
+# through `_module.args`").
 { nixfsCatalogue }:
 {
   imports = [
     ./options.nix
 
     (import ./boot/disk.nix { inherit nixfsCatalogue; }) # disko on-stick layout: ESP + f2fs-zstd store
-    ./boot/image.nix         # UEFI boot chain glue (systemd-boot, serial, initrd modules)
+    ./boot/image.nix         # early-boot geometry: initrd-systemd, USB media, data-pool modules
+    ./boot/nixboot.nix       # boot-stance bridge: nixnas.boot.* -> nixboot (loader/SB/remote-unlock/rollback)
     ./boot/impermanence.nix  # tmpfs root; only /nix + ESP persist
     (import ./boot/kernel.nix { inherit nixfsCatalogue; }) # the tuned CachyOS kernel (nixnas.kernel.*)
-    ./boot/secureboot.nix    # UEFI Secure Boot via lanzaboote (operator-owned keys)
-    ./boot/remote-unlock.nix # headless store unlock: initrd-SSH (NIC up in initrd)
-    ./boot/rollback.nix      # structural failsafe: kept generations + boot-counting
 
     ./crypto/tpm2.nix        # TPM2+PIN store unlock (only the stick); first-boot enrollment
     ./crypto/recovery-escrow.nix   # break-glass recovery keyslot, escrowed to Vaultwarden (hub-side)

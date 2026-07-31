@@ -11,6 +11,28 @@
 #     until the operator enters it; data stays sealed),
 #   * ZFS is pulled into the initrd when EITHER the hot store or the root is a ZFS dataset.
 #
+# THE LUKS-OPEN CHAIN ITSELF IS NIXLUKS'S, NOT THIS FILE'S, AS OF THE NIXBOOT/NIXLUKS
+# CUTOVER: this module used to hand-roll `boot.initrd.luks.devices` + the
+# `systemd-cryptsetup@` keyring-chain ordering directly (see nixluks's own
+# modules/initrd.nix header for the field-proven mechanism this generalises FROM this
+# exact file). It now DECLARES each member as `nixluks.volumes.<name>` (device + unlock
+# order + boot-critical-vs-data timeout stance) and lets nixluks's own `modules/initrd.nix`
+# render the actual `boot.initrd.luks.devices` entries and the ordering chain — nixluks
+# explicitly disclaims owning WHY a volume needs to be open this early (ZFS import,
+# mounting) or WHAT geometry it has, which is exactly what stays here: the fileSystems
+# entries, the ZFS-in-initrd import ordering below, and the assertions.
+#
+# `manageUnlock = false` on every volume this file declares — deliberate, not an oversight:
+# these members are ALREADY open by the time nixluks's own STAGE-2 chain (crypttab +
+# `systemd-cryptsetup@` post-boot ordering) would ever run, so that chain must never also
+# try to open them (a redundant, at-best-inert, at-worst-confusing second attempt). The
+# SAME volumes may ALSO be declared elsewhere (e.g. a consuming host's own header-backup
+# publication config) with their own `manageUnlock = false` and a `headerBackup.destination`
+# — both declarations merge cleanly as long as they agree on shared fields (the module
+# system merges submodule config across files the same way any NixOS option does), but such
+# a consumer must NOT also declare its own `order` for these names: this file is the one
+# that assigns the real, distinct per-volume order value the initrd chain depends on.
+#
 # The RESCUE system (the thing actually flashed to the stick) and the disko stick image are
 # a separate, usb-mode nixnas derived from this config — see modules/boot/rescue.nix. In
 # `usb` mode this module is inert and disk.nix owns / (tmpfs) + /nix on the stick — a
@@ -45,7 +67,14 @@ let
   dataUnlock = cfg.storage.unlock; # e.g. cold + SMR — declared in infra, opened here
   dataPools = cfg.storage.zfsPools; # non-root pools imported in the initrd too
   # attrNames is sorted — a stable chain order across the whole set (hot ∪ root ∪ data).
+  # UNCHANGED sequencing from before the nixluks cutover: this is still the exact order the
+  # keyring-chain prompts in, now expressed as nixluks's own `order` field (an explicit int,
+  # never attribute-definition position) instead of being implicit in this list's own
+  # position — see the `order` assignment below, which maps each name to its index HERE.
   allUnlockNames = lib.attrNames (bootCriticalUnlock // dataUnlock);
+  # index-in-allUnlockNames -> a real, distinct `nixluks.volumes.<name>.order` value,
+  # preserving the exact prompt sequence the old attrNames-derived chain produced.
+  orderByName = lib.listToAttrs (lib.imap0 (i: n: lib.nameValuePair n i) allUnlockNames);
 in
 {
   config = lib.mkIf isHot (lib.mkMerge [
@@ -90,9 +119,35 @@ in
         }
         {
           # The whole point: no unattended decrypt. remote-unlock (initrd-SSH) or a console
-          # must be present so the operator can actually enter the key in stage-1.
-          assertion = cfg.boot.remoteUnlock.enable;
+          # must be present so the operator can actually enter the key in stage-1. Reads
+          # `config.nixboot.remoteUnlock.enable` — the mechanism's OWN authoritative flag,
+          # post-cutover — rather than `cfg.boot.remoteUnlock.enable` (the nixnas-facing
+          # input that only ever feeds it, see ../boot/nixboot.nix): nixluks's own docs note
+          # that "nixboot has no LUKS member list to attach it to", so this assertion can
+          # only ever live here, where both the LUKS members and the actual remote-unlock
+          # gate are visible in the same evaluated config.
+          assertion = config.nixboot.remoteUnlock.enable;
           message = "hot mode enters the store key in the initrd — keep boot.remoteUnlock.enable = true (initrd-SSH), or use a console/IPMI-SOL.";
+        }
+        {
+          # THE SILENT-GAP THIS CATCHES: `nixluks.volumes.<name>.initrdUnlock.enable = true`
+          # (set below) is a plain option WRITE — nothing forces the consumer to have ALSO
+          # composed `nixluks.nixosModules.initrd` (the separate NixOS-only module that reads
+          # it and actually renders `boot.initrd.luks.devices`). Declared-but-uncomposed is
+          # not an eval error anywhere else: the option write just sits there, inert, and the
+          # very first symptom would be a MAIN that boots to an empty initrd with no /nix and
+          # no way to unlock it — discovered at the worst possible time. Checking that every
+          # declared name actually made it into `boot.initrd.luks.devices` turns that into a
+          # loud, immediate, actionable build failure instead.
+          assertion = lib.all (n: config.boot.initrd.luks.devices ? ${n}) allUnlockNames;
+          message = ''
+            hot mode declared LUKS members (${lib.concatStringsSep ", " allUnlockNames}) as
+            nixluks.volumes.*, but boot.initrd.luks.devices does not contain all of them.
+            This means whoever composes this host's module list is missing
+            nixluks.nixosModules.initrd (the separate NixOS-only stage-1 companion —
+            nixluks.nixosModules.nixluks / .default alone is not enough). Add it alongside
+            nixluks's base module, the same way lanzaboote/disko/impermanence are composed.
+          '';
         }
       ];
 
@@ -171,48 +226,56 @@ in
         options = [ "zfsutil" ];
       };
 
-      # ── ONE key, ALL storage — the nixnas unlock algorithm, run in the INITRD ──────────
+      # ── ONE key, ALL storage — the nixnas unlock algorithm, opened by NIXLUKS in the
+      # INITRD ─────────────────────────────────────────────────────────────────────────────
       # The single operator passphrase (interactive, over initrd-SSH / console, never TPM)
       # opens EVERY declared member here, so ONE entry brings up everything and there is no
-      # second post-boot prompt. Two classes, different failure semantics:
+      # second post-boot prompt. This file only ever DECLARES the facts (device, unlock
+      # order, boot-critical-vs-data timeout stance) — nixluks's own `modules/initrd.nix`
+      # renders the actual `boot.initrd.luks.devices` entries and the `systemd-cryptsetup@`
+      # keyring-chain ordering from them (see this file's own header). Two classes, different
+      # failure semantics, exactly as before the cutover:
       #
       #   * BOOT-CRITICAL members (store.hot.unlock ∪ store.root.unlock) — the /nix and /
-      #     LUKS members. x-systemd.device-timeout=0 pins the backing-device job INFINITE
-      #     (the 90 s trap of boot/disk.nix: the job would else die at
+      #     LUKS members. `initrdUnlock.critical = true` pins the backing-device job
+      #     INFINITE (the 90 s trap of boot/disk.nix: the job would else die at
       #     DefaultDeviceTimeoutSec on slow-POST / slow spin-up). No /nix or / without
       #     these, so a failure correctly stops the boot.
-      #   * DATA members (e.g. cold + SMR, from nixnas.storage.unlock) — NON-fatal. `nofail`
-      #     + a FINITE device timeout: an absent or dead archive disk is SKIPPED after the
+      #   * DATA members (e.g. cold + SMR, from nixnas.storage.unlock) — NON-fatal.
+      #     `initrdUnlock.critical = false` (the default) gets `nofail` + nixluks's own
+      #     default 45 s timeout: an absent or dead archive disk is SKIPPED after the
       #     timeout instead of hanging the boot forever (the opposite of the boot-critical
       #     members). They ride the SAME passphrase via the kernel-keyring cache — no extra
       #     prompt.
-      boot.initrd.luks.devices =
+      #
+      # `nixluks.enable`/`raiseMode` are set HERE, unconditionally under hot mode, so this
+      # module is self-sufficient on any host (this repo's own demo-hot/matrix-hot-* CI
+      # fixtures included) — never relying on some OTHER file to have turned nixluks on
+      # first. A consuming host that ALSO declares these same names for header-backup
+      # purposes (e.g. its own publication config) sets the identical values, which merge
+      # silently (same-priority, same-value); see this file's own header for the one field
+      # such a consumer must NOT also set (`order`).
+      nixluks.enable = true;
+      nixluks.raiseMode = "preopened";
+      nixluks.volumes =
         (lib.mapAttrs
-          (_: dev: {
+          (n: dev: {
             device = dev;
-            crypttabExtraOpts = [ "x-systemd.device-timeout=0" ];
+            order = orderByName.${n};
+            manageUnlock = false; # opened by THIS module's own initrdUnlock wiring, never nixluks's post-boot chain
+            initrdUnlock.enable = true;
+            initrdUnlock.critical = true;
           })
           bootCriticalUnlock)
         // (lib.mapAttrs
-          (_: dev: {
+          (n: dev: {
             device = dev;
-            # 45 s: generous enough for cold-boot HDD/SMR enumeration + spin-up, still FINITE
-            # so a genuinely dead/absent archive disk is skipped (nofail) rather than hanging
-            # the boot forever the way the boot-critical members (device-timeout=0) deliberately do.
-            crypttabExtraOpts = [ "nofail" "x-systemd.device-timeout=45s" ];
+            order = orderByName.${n};
+            manageUnlock = false;
+            initrdUnlock.enable = true;
+            initrdUnlock.critical = false; # nixluks's own default timeoutSec (45s) matches the old hardcoded value
           })
           dataUnlock);
-
-      # Serialise ALL member unlocks (hot ∪ data) into one keyring chain: the first member
-      # prompts, systemd caches the passphrase in the kernel keyring, and every later member
-      # (hot or data) finds it and opens silently — ONE entry for the whole set. Without the
-      # chain all members race and queue N password-agent questions in parallel.
-      boot.initrd.systemd.services = lib.listToAttrs (lib.imap0
-        (i: n: lib.nameValuePair "systemd-cryptsetup@${n}" {
-          overrideStrategy = "asDropin";
-          after = lib.optional (i > 0) "systemd-cryptsetup@${builtins.elemAt allUnlockNames (i - 1)}.service";
-        })
-        allUnlockNames);
     }
 
     # ZFS-in-initrd when EITHER the hot store or the root is ZFS (a dataset). LUKS does the
