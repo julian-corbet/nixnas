@@ -46,13 +46,12 @@ in
     #
     # Everything DOWNSTREAM of that decision is not: which compression medium,
     # how it is sized, the vm.* sysctls that tune reclaim against it, the oomd
-    # thresholds that fire when it is exhausted. nixnas used to own a slice of
-    # that (zramSwap at 20%, zstd) and, more damagingly, to own NONE of the rest
-    # -- which is how the kernel's own CONFIG_ZSWAP_DEFAULT_ON=y left zswap
-    # silently armed in front of a zram-only swap on a live 125 GiB deployment,
-    # with nothing in any config file to point at. A subsystem split across two
-    # owners has gaps exactly where neither is looking. nixram owns all of it
-    # now; nixnas declares no memory values at all.
+    # thresholds that fire when it is exhausted. A subsystem split across two
+    # owners has gaps exactly where neither is looking -- that split is how
+    # the kernel's own CONFIG_ZSWAP_DEFAULT_ON=y once left zswap silently
+    # armed in front of a zram-only swap on a live 125 GiB deployment, with
+    # nothing in any config file to point at. nixram owns all of it now;
+    # nixnas declares no memory values at all.
     swapDevices = lib.mkDefault [ ];
 
     nixram = {

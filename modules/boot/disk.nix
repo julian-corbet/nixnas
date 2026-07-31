@@ -22,8 +22,8 @@
 # Only the public demo host opts into a store-path demo passphrase, explicitly.
 # `nixfsCatalogue` is a plain closure argument, applied by modules/default.nix at import time
 # (never `_module.args` — a module-argument name is a GLOBAL namespace shared with anything else
-# composed alongside this one; nixvault's own, separately-pinned nixfs closed over the exact same
-# argument name, which collided the one time a consumer composed both flakes together. Partial
+# composed alongside this one; nixvault's own, separately-pinned nixfs closes over the exact same
+# argument name, which would collide the moment a consumer composed both flakes together. Partial
 # application means this file's own `nixfsCatalogue` is baked in before the module system ever
 # sees this as a module — it never enters `_module.args`, so there is nothing left to collide over.
 { nixfsCatalogue }:

@@ -11,16 +11,13 @@
 #     until the operator enters it; data stays sealed),
 #   * ZFS is pulled into the initrd when EITHER the hot store or the root is a ZFS dataset.
 #
-# THE LUKS-OPEN CHAIN ITSELF IS NIXLUKS'S, NOT THIS FILE'S, AS OF THE NIXBOOT/NIXLUKS
-# CUTOVER: this module used to hand-roll `boot.initrd.luks.devices` + the
-# `systemd-cryptsetup@` keyring-chain ordering directly (see nixluks's own
-# modules/initrd.nix header for the field-proven mechanism this generalises FROM this
-# exact file). It now DECLARES each member as `nixluks.volumes.<name>` (device + unlock
-# order + boot-critical-vs-data timeout stance) and lets nixluks's own `modules/initrd.nix`
-# render the actual `boot.initrd.luks.devices` entries and the ordering chain — nixluks
-# explicitly disclaims owning WHY a volume needs to be open this early (ZFS import,
-# mounting) or WHAT geometry it has, which is exactly what stays here: the fileSystems
-# entries, the ZFS-in-initrd import ordering below, and the assertions.
+# THE LUKS-OPEN CHAIN ITSELF IS NIXLUKS'S, NOT THIS FILE'S: this module DECLARES each
+# member as `nixluks.volumes.<name>` (device + unlock order + boot-critical-vs-data
+# timeout stance) and lets nixluks's own `modules/initrd.nix` render the actual
+# `boot.initrd.luks.devices` entries and the ordering chain — nixluks explicitly
+# disclaims owning WHY a volume needs to be open this early (ZFS import, mounting) or
+# WHAT geometry it has, which is exactly what stays here: the fileSystems entries, the
+# ZFS-in-initrd import ordering below, and the assertions.
 #
 # `manageUnlock = false` on every volume this file declares — deliberate, not an oversight:
 # these members are ALREADY open by the time nixluks's own STAGE-2 chain (crypttab +
@@ -66,14 +63,11 @@ let
   bootCriticalUnlock = hot.unlock // root.unlock; # /nix ∪ / — no /nix or / without these
   dataUnlock = cfg.storage.unlock; # e.g. cold + SMR — declared in infra, opened here
   dataPools = cfg.storage.zfsPools; # non-root pools imported in the initrd too
-  # attrNames is sorted — a stable chain order across the whole set (hot ∪ root ∪ data).
-  # UNCHANGED sequencing from before the nixluks cutover: this is still the exact order the
-  # keyring-chain prompts in, now expressed as nixluks's own `order` field (an explicit int,
-  # never attribute-definition position) instead of being implicit in this list's own
-  # position — see the `order` assignment below, which maps each name to its index HERE.
+  # attrNames is sorted — a stable chain order across the whole set (hot ∪ root ∪ data),
+  # expressed as nixluks's own `order` field (an explicit int, never attribute-definition
+  # position) — see the `order` assignment below, which maps each name to its index HERE.
   allUnlockNames = lib.attrNames (bootCriticalUnlock // dataUnlock);
-  # index-in-allUnlockNames -> a real, distinct `nixluks.volumes.<name>.order` value,
-  # preserving the exact prompt sequence the old attrNames-derived chain produced.
+  # index-in-allUnlockNames -> a real, distinct `nixluks.volumes.<name>.order` value.
   orderByName = lib.listToAttrs (lib.imap0 (i: n: lib.nameValuePair n i) allUnlockNames);
 in
 {
@@ -120,8 +114,8 @@ in
         {
           # The whole point: no unattended decrypt. remote-unlock (initrd-SSH) or a console
           # must be present so the operator can actually enter the key in stage-1. Reads
-          # `config.nixboot.remoteUnlock.enable` — the mechanism's OWN authoritative flag,
-          # post-cutover — rather than `cfg.boot.remoteUnlock.enable` (the nixnas-facing
+          # `config.nixboot.remoteUnlock.enable` — the mechanism's OWN authoritative flag —
+          # rather than `cfg.boot.remoteUnlock.enable` (the nixnas-facing
           # input that only ever feeds it, see ../boot/nixboot.nix): nixluks's own docs note
           # that "nixboot has no LUKS member list to attach it to", so this assertion can
           # only ever live here, where both the LUKS members and the actual remote-unlock
@@ -234,7 +228,7 @@ in
       # order, boot-critical-vs-data timeout stance) — nixluks's own `modules/initrd.nix`
       # renders the actual `boot.initrd.luks.devices` entries and the `systemd-cryptsetup@`
       # keyring-chain ordering from them (see this file's own header). Two classes, different
-      # failure semantics, exactly as before the cutover:
+      # failure semantics:
       #
       #   * BOOT-CRITICAL members (store.hot.unlock ∪ store.root.unlock) — the /nix and /
       #     LUKS members. `initrdUnlock.critical = true` pins the backing-device job
@@ -273,7 +267,7 @@ in
             order = orderByName.${n};
             manageUnlock = false;
             initrdUnlock.enable = true;
-            initrdUnlock.critical = false; # nixluks's own default timeoutSec (45s) matches the old hardcoded value
+            initrdUnlock.critical = false; # nixluks's own default timeoutSec (45s) -- see its own doc
           })
           dataUnlock);
     }

@@ -29,48 +29,38 @@
 
     # nixram — the memory subsystem, and the SOLE owner of it. zram / zswap /
     # vm.* sysctls / systemd-oomd all derive from one declared RAM level
-    # (`nixram.level`). nixnas used to hand-declare a slice of this
-    # (zramSwap at 20%, and nothing at all about zswap, which is how a CachyOS
-    # kernel's CONFIG_ZSWAP_DEFAULT_ON=y ended up silently armed in front of a
-    # zram-only swap on a real 125 GiB deployment). Splitting one subsystem
-    # across two owners is what produced that; nixnas now composes nixram and
-    # declares no memory values of its own. Same mechanism-lives-in-its-own-flake
-    # split nixnas already uses for the kernel and the boot chain.
+    # (`nixram.level`). Splitting this ownership is what let a CachyOS kernel's
+    # CONFIG_ZSWAP_DEFAULT_ON=y end up silently armed in front of a zram-only
+    # swap on a real 125 GiB deployment when nixnas still hand-declared its own
+    # zramSwap slice with no opinion on zswap at all -- nixnas now composes
+    # nixram and declares no memory values of its own. Same
+    # mechanism-lives-in-its-own-flake split nixnas already uses for the
+    # kernel and the boot chain.
     nixram = {
       url = "github:julian-corbet/nixram-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # nixboot — THE FULL CUTOVER (2026-07-31): nixboot now owns this appliance's WHOLE boot
-    # stance, not just the two mechanisms it started as. `nixboot.enable = true` on every
-    # nixnas host now (modules/boot/nixboot.nix is the bridge: it reads `nixnas.boot.*` /
-    # `nixnas.crypto.tpm2.*` / `nixnas.admin.authorizedKeys` — this repo's own PUBLIC option
-    # surface, UNCHANGED by this cutover — and writes nixboot's own `nixboot.*` options).
-    # DELETED in the same pass: modules/boot/secureboot.nix, modules/boot/remote-unlock.nix,
-    # modules/boot/rollback.nix, and the loader/console half of modules/boot/image.nix — this
-    # appliance no longer hand-rolls Secure Boot (lanzaboote), headless initrd-SSH remote
-    # unlock, or the kept-generations/boot-counting rollback failsafe; nixboot owns all three
-    # (`nixboot.extraEntries`, `nixboot.media.usb.enable`, and now `nixboot.secureBoot.*` /
-    # `nixboot.remoteUnlock.*` / `nixboot.generations.keep` / `nixboot.bootCounting.tries` /
-    # `nixboot.loader.*` / `nixboot.console.*`). See modules/boot/nixboot.nix's own header for
-    # the full port, what was deliberately improved UPSTREAM in nixboot itself rather than kept
-    # as a second nixnas-side tool, and the one thing (the data-store TPM2 re-enrollment
-    # reminder) that stays nixnas's alone because nixboot has no data-unlock concept at all.
-    # This was NOT staged: nixnas writes at plain priority (100), nixboot at `mkOverride 500`,
-    # so leaving both wired would have nixnas's own writes win almost everywhere while looking
-    # like a cutover — see knowledge/hosts/shared/nixnas-boot-convergence.md for the analysis.
+    # nixboot — owns this appliance's WHOLE boot stance: loader/Secure Boot, headless
+    # initrd-SSH remote unlock, and the kept-generations/boot-counting rollback failsafe
+    # (`nixboot.extraEntries`, `nixboot.media.usb.enable`, `nixboot.secureBoot.*`,
+    # `nixboot.remoteUnlock.*`, `nixboot.generations.keep`, `nixboot.bootCounting.tries`,
+    # `nixboot.loader.*`, `nixboot.console.*`). `nixboot.enable = true` on every nixnas host;
+    # modules/boot/nixboot.nix is the bridge that reads `nixnas.boot.*` /
+    # `nixnas.crypto.tpm2.*` / `nixnas.admin.authorizedKeys` (this repo's own public option
+    # surface) and writes nixboot's own `nixboot.*` options -- see that file's own header for
+    # the boundary and for the one thing (the data-store TPM2 re-enrollment reminder) that
+    # stays nixnas's alone because nixboot has no data-unlock concept at all.
     nixboot = {
       url = "github:julian-corbet/nixboot-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # nixluks — the LUKS domain: this appliance's own hand-rolled `boot.initrd.luks.devices` +
-    # `systemd-cryptsetup@` keyring-chain ordering (formerly modules/store/location.nix's own
-    # code, lines 189-215 pre-cutover — the field-proven mechanism nixluks's own
-    # `modules/initrd.nix` generalises FROM this exact file) is DELETED from this repo; that
-    # file now only DECLARES each hot-mode LUKS member as `nixluks.volumes.<name>` (device,
-    # unlock order, boot-critical-vs-data timeout stance) and nixluks's own
-    # `modules/initrd.nix` renders the actual initrd wiring. Composed as BOTH
+    # nixluks — the LUKS domain: modules/store/location.nix DECLARES each hot-mode LUKS
+    # member as `nixluks.volumes.<name>` (device, unlock order, boot-critical-vs-data timeout
+    # stance) and nixluks's own `modules/initrd.nix` renders the actual initrd wiring --
+    # this appliance no longer hand-rolls `boot.initrd.luks.devices` or the
+    # `systemd-cryptsetup@` keyring-chain ordering itself. Composed as BOTH
     # `nixosModules.nixluks` (the declare-a-volume base, also separately consumed by a real
     # host's own header-backup publication config) and `nixosModules.initrd` (the NixOS-only
     # stage-1 companion, system-manager has no `boot.initrd.*` surface at all) — see
@@ -83,14 +73,11 @@
     };
 
     # nixfs — the filesystem domain, and the SOLE owner of the f2fs compression recipe (mkfs
-    # feature bits, mount options, the kernel floor they need). That recipe used to be vendored
-    # here as modules/lib/f2fs-store-mount-opts.nix, a second, independent copy of exactly the
-    # same facts nixvault also vendored for its own vault -- two copies of one field-validated
-    # thing, with nothing tying either back to where it actually came from. It is data, not
-    # policy, so it is consumed as a lib value (`nixfs.lib.catalogue`), the same
-    # lower-layer-provides-a-lib category as nixtest's own fixtures -- never nixfs's own
-    # nixosModules, which nixnas has no reason to install (nixnas already knows exactly which
-    # filesystem tools it needs and installs them itself).
+    # feature bits, mount options, the kernel floor they need). It is data, not policy, so it
+    # is consumed as a lib value (`nixfs.lib.catalogue`), the same lower-layer-provides-a-lib
+    # category as nixtest's own fixtures -- never nixfs's own nixosModules, which nixnas has
+    # no reason to install (nixnas already knows exactly which filesystem tools it needs and
+    # installs them itself).
     nixfs = {
       url = "github:julian-corbet/nixfs-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -138,8 +125,8 @@
         # module composed alongside this one shares, and nixvault (a sibling appliance-adjacent
         # flake, also consuming nixfs's own catalogue) picked that exact same name for the exact
         # same reason — correct in each flake alone, and a hard "defined multiple times" eval
-        # failure the one time a consumer (infra's mkNixnas) composed both. `_module.args` merges
-        # with `mergeOneOption`, which rejects a second definition even when the two values are
+        # failure the moment a consumer composes both. `_module.args` merges with
+        # `mergeOneOption`, which rejects a second definition even when the two values are
         # identical, so no `inputs.follows` pin could have fixed that either — only partial
         # application, closing over the value before it ever becomes a module argument at all,
         # rules the collision out by construction. modules/default.nix takes `nixfsCatalogue` as
@@ -154,12 +141,10 @@
           (import ./modules { nixfsCatalogue = nixfs.lib.catalogue; })
           nixram.nixosModules.nixram
           # Both files of nixboot's own module (nixboot.nix + extra-entries.nix, bundled as
-          # one nixosModules.nixboot). Post-cutover (2026-07-31) `nixboot.enable = true` on
-          # every nixnas host (modules/boot/nixboot.nix is the bridge) — this appliance's
-          # whole boot stance (Secure Boot, remote unlock, rollback, loader/console) is
-          # nixboot's mechanism now, not merely `extraEntries`/`media.usb` riding along
-          # independently of `enable` as it did before this cutover. See
-          # modules/boot/nixboot.nix's own header for the full port.
+          # one nixosModules.nixboot). `nixboot.enable = true` on every nixnas host
+          # (modules/boot/nixboot.nix is the bridge) — this appliance's whole boot stance
+          # (Secure Boot, remote unlock, rollback, loader/console) is nixboot's mechanism.
+          # See modules/boot/nixboot.nix's own header for the boundary.
           nixboot.nixosModules.nixboot
         ];
       };
