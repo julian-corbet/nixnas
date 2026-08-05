@@ -160,8 +160,23 @@ in
             PCR 7 (Secure Boot state) is stable across kernel/UKI updates (no reseal), but the
             one-time Secure Boot key ENROLLMENT at provisioning DOES change it — the seal is
             self-healing and re-seals on the next boot (the initrd host-key fingerprint changes
-            once, expect a single known-hosts warning). Requires `crypto.tpm2.enable`. Set false
+            once, expect a single known-hosts warning). This is independent of
+            `crypto.tpm2.enable`: it protects the SSH identity, not any LUKS keyslot. Set false
             to fall back to the plaintext `hostKeyPath`.
+          '';
+        };
+        tpm2.enable = mkOption {
+          type = types.bool;
+          default = config.nixnas.crypto.tpm2.enable;
+          defaultText = literalExpression "config.nixnas.crypto.tpm2.enable";
+          description = ''
+            Whether this host's TPM2 seals the initrd-SSH host key. This defaults to the
+            data-unlock TPM setting for existing appliance configurations, but is deliberately
+            overrideable: an initrd SSH identity can be TPM-sealed while every LUKS volume still
+            requires the operator passphrase. That is the rescue-system posture.
+
+            This controls only the host-key credential consumed by `nixboot.remoteUnlock`; it
+            never enrolls, unlocks, or otherwise changes a data TPM2 keyslot.
           '';
         };
         hostKeyPath = mkOption {

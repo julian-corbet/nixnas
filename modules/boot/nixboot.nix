@@ -133,8 +133,11 @@ in
     nixboot.remoteUnlock.authorizedKeys = cfg.admin.authorizedKeys;
     nixboot.remoteUnlock.sealHostKey = cfg.boot.remoteUnlock.sealHostKey;
     nixboot.remoteUnlock.hostKeyPath = cfg.boot.remoteUnlock.hostKeyPath;
-    # Mirrors nixnas's OWN data-unlock TPM2 enable flag (never its PCR list -- see below).
-    nixboot.remoteUnlock.tpm2.enable = cfg.crypto.tpm2.enable;
+    # This is deliberately a host-identity decision, not the data-unlock TPM2 policy. It
+    # defaults to `crypto.tpm2.enable` in the public option surface for compatibility, while
+    # letting a recovery system TPM-seal its SSH identity and keep every LUKS volume
+    # passphrase-only.
+    nixboot.remoteUnlock.tpm2.enable = cfg.boot.remoteUnlock.tpm2.enable;
     # DELIBERATELY NOT mirrored: `nixboot.remoteUnlock.tpm2.pcrs` stays at ITS OWN default
     # `[ 7 ]`, hardcoded regardless of `crypto.tpm2.pcrs` (the DATA unlock's own, possibly-
     # extended PCR set, e.g. hosts/matrix/pin-strict.nix's `[ 7 11 ]`) -- the two seals are
