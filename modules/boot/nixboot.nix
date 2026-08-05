@@ -101,6 +101,19 @@ in
 
     ## ── Generations / rollback ──────────────────────────────────────────────────────────────
     nixboot.generations.keep = cfg.boot.keepGenerations;
+    # Lanzaboote collects only after it writes. On a small ESP that deadlocks exactly when
+    # recovery matters, so the Secure-Boot path uses NixBoot's pre-install collector: booted
+    # generation + newest alternatives, declared reserve, and every rescue UKI in the budget.
+    nixboot.generations.capacity = {
+      enable = cfg.boot.secureBoot.enable;
+      lanzabootePackage = cfg.boot.lanzabootePackage;
+      generationMiB = 64;
+      reserveMiB = 64;
+      fixedMiB = 32;
+      # A runtime-built rescue cannot be represented as nixboot.extraEntries (its toplevel is
+      # resolved after evaluation), but its three protected UKIs still consume the same budget.
+      extraReservedMiB = if cfg.rescue.flakeAttr != null then 150 else 0;
+    };
     # Boot-counting only exists on the Secure Boot path (the lanzaboote stub renames/counts
     # the entries) -- restated against nixboot's `nullOr` type (null = "no counting",
     # asserted by nixboot to require `loader.program == "lanzaboote"` -- always true here when

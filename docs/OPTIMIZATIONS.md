@@ -98,10 +98,9 @@ Set on `fileSystems."/nix".options` alongside the fixed `compress_algorithm=zstd
   remote-unlock.) `modules/appliance/persist-enforce.nix` then fails the build for any OTHER
   `StateDirectory`-declaring service that is neither persisted nor an acknowledged
   `nixnas.persist.explicitlyEphemeral` entry.
-- ⬢ generation count = `nixnas.boot.keepGenerations` (default **8**, sized to the 1 GiB ESP —
-  one signed UKI each) via `boot.loader.systemd-boot.configurationLimit`, which lanzaboote
-  inherits; bounding the count caps ESP writes/space (the ESP is the tighter bound — see
-  ARCHITECTURE.md §2). (`modules/boot/rollback.nix`)
+- ⬢ normal boot count = `nixnas.boot.keepGenerations` (default **4** for a 512 MiB ESP) through
+  NixBoot's capacity-accounted Lanzaboote retention: it preserves the booted entry, newest
+  alternatives, three rescue UKIs and a write reserve before installing. (`modules/boot/nixboot.nix`)
 - ◯ `nix.settings.require-sigs = true;` + trust only the hub's cache key → `nix store verify`
   covers store integrity. f2fs has no default data checksums; rely on Nix signatures +
   reproducibility rather than fs-level data checksums (this is also what justifies `fsck.mode=skip`).

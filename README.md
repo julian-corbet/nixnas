@@ -154,7 +154,7 @@ external-store boot must reach login from a single operator key entry:
   external, operator-key-unlocked LUKS device: the initrd asks for YOUR key and proceeds
   only then (CI-proven in QEMU, including the serialised single-entry unlock — two LUKS
   members, one passphrase entry). The stick carries a self-contained rescue; the main
-  maintains it (`rescue-maintain`: closure → stick, GC to current+prev, self-signed UKI at
+  maintains it (`rescue-maintain`: closure → stick, GC to current plus two predecessors, signed UKIs at
   `EFI/Linux/nixnas-rescue.efi` — a name lanzaboote's ESP GC provably never prunes).
   The hot-store-on-ZFS initrd path (legacy dataset mount + import-after-key) is
   design-verified but first runs on real hardware.

@@ -40,28 +40,23 @@ in
       };
       keepGenerations = mkOption {
         type = types.ints.positive;
-        default = 8;
+        default = 4;
         description = ''
-          How many past generations to keep bootable (the rollback menu depth, and the
-          structural failsafe).
-
-          This must EXCEED the number of generations the host builds in one uptime, or
-          lanzaboote's ESP garbage collection evicts the RUNNING generation's own entry:
-          the menu then cannot roll back to the system you are on, and
-          `systemd-bless-boot` fails for the rest of that uptime because
-          `LoaderBootCountPath` still names the file that was deleted. A box that
-          rebuilds ~20 times a day needs a limit well above 20, not the default 8.
-
-          The ESP cost is far smaller than an earlier revision of this text claimed
-          (~80 MiB per kept generation). Measured on a live 2 GiB stick 2026-07-26: a
-          kept generation is a lanzaboote STUB of ~195 KiB, while kernel+initrd are
-          written once per kernel VERSION into `EFI/nixos` (~50 MiB a pair) and shared
-          by every generation using them. 30 kept generations cost ~6 MiB of stubs. The
-          real ESP weight is a self-contained rescue UKI, at ~47 MiB each.
-
-          So raise this freely for rollback depth; size the ESP for kernel versions and
-          rescue images, not for generation count. (Measured Boot, a later increment,
-          caps this at 8.)
+          Number of normal boot entries to retain. On a Secure-Boot Lanzaboote host,
+          NixBoot keeps the booted generation plus the newest alternatives within this
+          count, collects unreferenced boot artifacts before installation, and reserves
+          write space. The default is sized for a 512 MiB ESP alongside three protected
+          rescue UKIs; increase it only with a matching ESP budget.
+        '';
+      };
+      lanzabootePackage = mkOption {
+        type = types.nullOr types.package;
+        default = null;
+        description = ''
+          Exact upstream `lzbt` package from the Lanzaboote flake composed by
+          this host. Required when Secure Boot is enabled: NixBoot's
+          capacity-aware installer wraps this package so the installer, signing
+          stub, and Lanzaboote module always come from one pinned release.
         '';
       };
       consolePrimary = mkOption {
@@ -228,7 +223,7 @@ in
         espSizeMiB = mkOption {
           type = types.ints.positive;
           default = 1024;
-          description = "FAT ESP size: lanzaboote-signed systemd-boot + one signed UKI per kept generation (~8 per GiB).";
+          description = "FAT ESP size: capacity-accounted Lanzaboote normal generations, protected rescue UKIs, a write reserve and fixed loader metadata.";
         };
         # NOTE: there is deliberately NO first-boot grow option. Growing a flashed image to
         # fill a bigger stick is a FLASH-TIME job (the TUI's "workbench grow": partition extend

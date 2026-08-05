@@ -185,10 +185,10 @@ ZFS/kernel must always be able to import the live pool). Each run:
 Result: the big closure never touches the stick; the stick takes one main UKI per update
 (a UKI is the kernel + initrd in one PE — typically ~80–150 MiB, more if the initrd carries
 ZFS; measure yours) and a rescue write only on rescue changes — kinder to the stick than
-`usb` mode. Budget the ESP explicitly: set `boot.keepGenerations` so
-(keepGenerations + 1 rescue + 1 rescue-prev) × your-UKI-size fits `boot.usb.espSizeMiB`.
-`keepGenerations` thus splits into "bootable main UKIs on the ESP" (small) vs "hot-store
-history depth" (as deep as you like).
+`usb` mode. Budget the ESP explicitly: NixBoot's capacity contract includes the booted
+normal generation plus the newest alternatives, three protected rescue UKIs, fixed loader
+files and a write reserve. `keepGenerations` is therefore a bounded normal-boot slot count,
+not a promise that arbitrary history fits on a small ESP.
 
 Rollback: per store, independent. Caveat: don't `zpool upgrade` casually — an older main (or
 rescue) built against a pre-upgrade ZFS can't import an upgraded pool; keep the rescue
@@ -196,11 +196,12 @@ current (the shared pin does this).
 
 ## Stick sizing (recommended per-host settings — the RESCUE host sets these)
 
-Recommended: `boot.usb.espSizeMiB = 2048` (2 GiB — holds the main's kept UKIs + the rescue
-pair; see the ESP budget rule above) and an image that never occupies more than **32 GiB**
+Recommended: `boot.usb.espSizeMiB = 2048` (2 GiB — ample room for the main's retained UKIs,
+three rescue slots and the write reserve) and an image that never occupies more than **32 GiB**
 regardless of stick size (a rescue system + generations never needs more): 8 GB stick →
 `imageSizeGiB = 7` (2 + ~5); 16 GB → ~2 + 12; 32 GB → ~2 + 28; a 1 TB stick still gets 32.
-The rescue closure alone is ~1.5–3 GiB, comfortable in ~5 GiB with current+prev (which is
+The rescue closure alone is ~1.5–3 GiB, comfortable in ~5 GiB with current plus two retained
+predecessors (which is
 exactly what rescue-maintain's GC keeps).
 
 ## What changes vs `usb` mode (implementation map)
@@ -227,7 +228,7 @@ exactly what rescue-maintain's GC keeps).
   usb nixnas the operator declares as a second host (there is no separate rescue module;
   `rescue.extraPackages` rides `appliance/base.nix`).
 - `modules/appliance/rescue-maintain.nix`: the MAIN maintains the rescue (closure → stick
-  f2fs with the shared compression options + GC to current/prev; self-contained signed UKI
+  f2fs with the shared compression options + GC to current plus two predecessors; self-contained signed UKIs
   → ESP). Runs at boot, on deploys that change the rescue, and daily. The UKI's build+sign+
   place+rotate step is now `nixboot.extraEntries.rescue` (github:julian-corbet/nixboot-corbet-ch)
   for the pinned/hub-built persona (`rescue.toplevel`) — this file's own build/sign/place code

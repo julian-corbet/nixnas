@@ -89,6 +89,13 @@
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
+      # NixBoot's capacity-safe installer must wrap the lzbt derivation from
+      # the same Lanzaboote input that provides the NixOS module. This is kept
+      # at each nixosSystem composition boundary, never baked into nixnas's
+      # reusable module, because an external consumer may pin Lanzaboote itself.
+      lanzabootePackageModule = { pkgs, ... }: {
+        nixnas.boot.lanzabootePackage = lanzaboote.packages.${pkgs.stdenv.hostPlatform.system}.lzbt;
+      };
       # Shared module list for every matrix nixosConfiguration (eval-level variants).
       # Mirrors demo-hot's builder plumbing; each matrix entry appends one variant overlay.
       matrixBase = [
@@ -98,6 +105,7 @@
         nixluks.nixosModules.nixluks
         nixluks.nixosModules.initrd
         self.nixosModules.nixnas
+        lanzabootePackageModule
         ./hosts/demo
         { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
         {
@@ -177,6 +185,7 @@
           nixluks.nixosModules.nixluks
           nixluks.nixosModules.initrd
           self.nixosModules.nixnas
+          lanzabootePackageModule
           ./hosts/demo
           ./test/verify-image.nix          # DEV self-check (f2fs compression report on the console)
           ./test/verify-tpm2.nix           # DEV self-check (TPM2+PIN enrollment against swtpm)
@@ -221,6 +230,7 @@
           nixluks.nixosModules.nixluks
           nixluks.nixosModules.initrd
           self.nixosModules.nixnas
+          lanzabootePackageModule
           ./hosts/demo
           ./hosts/demo-hot.nix
           { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
@@ -250,6 +260,7 @@
           nixluks.nixosModules.nixluks
           nixluks.nixosModules.initrd
           self.nixosModules.nixnas
+          lanzabootePackageModule
           ./hosts/demo
           ./hosts/demo-hot-zfs.nix
           { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
@@ -286,6 +297,7 @@
           nixluks.nixosModules.nixluks
           nixluks.nixosModules.initrd
           self.nixosModules.nixnas
+          lanzabootePackageModule
           ./hosts/demo
           ./hosts/demo-hot-rescue-pinned.nix
           {
@@ -319,6 +331,7 @@
           nixluks.nixosModules.nixluks
           nixluks.nixosModules.initrd
           self.nixosModules.nixnas
+          lanzabootePackageModule
           ./hosts/demo
           ./hosts/demo-upgrade-soak.nix
           { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
@@ -397,11 +410,15 @@
               echo "FAIL: espFileName discipline — 'nixnas-rescue.efi' not found in the maintainer script" >&2
               exit 1
             }
+            grep -q 'nixnas-rescue-prev-2.efi' "$script" || {
+              echo "FAIL: the third protected rescue UKI is absent from the maintainer script" >&2
+              exit 1
+            }
             grep -q 'nixboot-extra-entry-rescue' "$script" || {
               echo "FAIL: the pinned branch does not invoke nixboot's built maintainer (nixboot-extra-entry-rescue) — it may have silently fallen back to (or never left) the inline pipeline" >&2
               exit 1
             }
-            echo "PASS: pinned rescue-maintain hands off to nixboot-extra-entry-rescue under the nixnas-rescue.efi name" > "$out"
+            echo "PASS: pinned rescue-maintain keeps all three rescue UKI slots and hands off to nixboot-extra-entry-rescue" > "$out"
           '';
         # The TUI compiles cleanly.
         tui-build = self.packages.${system}.tui;

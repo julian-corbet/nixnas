@@ -8,7 +8,7 @@
 #
 # WHO BUILDS/SIGNS/PLACES THE UKI — split by rescue source, not a free choice:
 #   PINNED (rescue.toplevel != null, hub-built): `nixboot.extraEntries.rescue` owns build +
-#     sign + atomic place + current/prev rotation (github:julian-corbet/nixboot-corbet-ch,
+#     sign + atomic place + bounded history retention (github:julian-corbet/nixboot-corbet-ch,
 #     modules/extra-entries.nix). This module still does everything nixboot does NOT and
 #     cannot own: resolving which toplevel is current, getting its CLOSURE onto the stick's
 #     f2fs store (TPM2 unlock, mount, pre-copy GC, `nix copy`, cblock release), and the
@@ -64,7 +64,7 @@
 #   3. (interleaved with the above) TPM2-unlock (systemd-cryptsetup — the token is a
 #      systemd-tpm2 token plain cryptsetup cannot read) + mount the stick's rescue f2fs WITH
 #      the shared compression options, `nix copy` the closure onto it, and GC the stick store
-#      down to current+prev.
+#      down to current plus two retained predecessors.
 # It no-ops when the installed toplevel (persistent marker on /nix) is already current — for
 # BOTH branches, from the SAME marker file, so a re-run with an unchanged rescueTop never
 # re-places a UKI it does not need to.
@@ -109,8 +109,8 @@ let
   sdCryptsetup = "${pkgs.systemd}/lib/systemd/systemd-cryptsetup";
   releaseCblocks = import ../lib/f2fs-release-cblocks.nix { inherit pkgs; };
 
-  # ONE fact, two consumers (nixboot's declarative entry below, and this file's own legacy
-  # inline placement code in the self-upgrading branch) — kept as a single binding so the two
+  # ONE fact, two consumers (nixboot's declarative entry below, and this file's own
+  # runtime-built placement code in the self-upgrading branch) — kept as a single binding so the two
   # pipelines can never independently drift onto different filenames. Must never start with
   # "nixos-" (both lanzaboote's EFI/Linux GC and stock systemd-boot's configurationLimit GC key
   # their own generation cleanup on that prefix — asserted below, not merely commented) and must
@@ -148,6 +148,8 @@ let
       dbcert=${lib.escapeShellArg "${pkiDb}/db.pem"}
       esp=/boot
       espuki="$esp/EFI/Linux/${rescueEspFileName}"
+      espprev="$esp/EFI/Linux/nixnas-rescue-prev.efi"
+      espprev2="$esp/EFI/Linux/nixnas-rescue-prev-2.efi"
       # Persistent marker (hot mode: /nix IS the pool) — the toplevel we last installed.
       # SHARED by both branches below — a re-run with rescueTop unchanged no-ops on the SAME
       # marker regardless of which pipeline built the UKI already on the ESP (see the
@@ -171,7 +173,7 @@ let
           "$flake#nixosConfigurations.$attr.config.system.build.toplevel")
       fi
 
-      if [ -f "$marker" ] && [ "$(cat "$marker")" = "$rescueTop" ] && [ -f "$espuki" ]; then
+      if [ -f "$marker" ] && [ "$(cat "$marker")" = "$rescueTop" ] && [ -f "$espuki" ] && [ -f "$espprev" ] && [ -f "$espprev2" ]; then
         echo "rescue-maintain: rescue unchanged ($rescueTop) — nothing to do."
         exit 0
       fi
@@ -210,16 +212,11 @@ let
       # closure UNCOMPRESSED and blow the stick budget.
       mount -o ${lib.escapeShellArg f2fsOpts} /dev/mapper/nixnas-rescue-store "$mnt/nix"
       # ── make room BEFORE the copy ───────────────────────
-      # A naive order (copy → rotate roots → GC) needs old-current + old-prev + the
-      # WHOLE new closure on the stick at once. Across a nixpkgs world bump the three
-      # closures are ~disjoint → ~3× closure size → ENOSPC on the ~5 GiB stick (a failed
-      # copy also strands partial paths that compound the next run). Rotate + GC FIRST:
-      #   • rescue-prev ← rescue-current (the one-step rollback becomes the outgoing
-      #     rescue — exactly what it would be after success anyway; old-prev unroots),
-      #   • GC sweeps old-prev + any stranded partials from failed runs,
-      #   • THEN copy: peak = old-current + new (2 closures, not 3).
+      # Rotate roots + GC before copying. This drops only the oldest predecessor, retaining
+      # the current rescue and its immediate predecessor while the new closure arrives.
+      # The copy therefore peaks at those two retained closures plus the incoming one.
       # A mid-copy ENOSPC stays SAFE: the ESP UKI still pins the OLD toplevel and its
-      # closure stays rooted via rescue-prev → the stick remains bootable; the marker
+      # closure stays rooted via the retained rescue roots → the stick remains bootable; the marker
       # (below) only advances on full success, so the next tick retries. If even
       # old-current + new cannot fit, the unit fails LOUDLY — that is a real stick
       # sizing problem for a human, never something to solve by unrooting the only
@@ -232,22 +229,25 @@ let
         # mv sees a directory and tries to move INTO it → EROFS on the hub's read-only
         # /nix/store (field 2026-07-12; it only ever worked while prev's target was dangling
         # host-side). -T replaces the symlink OBJECT, mirroring the `ln -sfn` below.
+        [ ! -L "$roots/rescue-prev" ] || mv -fT "$roots/rescue-prev" "$roots/rescue-prev-2"
         mv -fT "$roots/rescue-current" "$roots/rescue-prev"
       fi
       nix store gc --store "$mnt" || echo "rescue-maintain: pre-copy stick GC failed (non-fatal)" >&2
       # $mnt is a chroot store root: nix copy registers the closure into $mnt/nix/store.
       nix copy --no-check-sigs --to "$mnt" "$rescueTop"
       ln -sfn "$rescueTop" "$roots/rescue-current"
+      [ -L "$roots/rescue-prev" ] || ln -sfn "$(readlink "$roots/rescue-current")" "$roots/rescue-prev"
+      [ -L "$roots/rescue-prev-2" ] || ln -sfn "$(readlink "$roots/rescue-prev")" "$roots/rescue-prev-2"
       # `nix copy --to $mnt` writes into a FOREIGN store from the MAIN's own daemon — no local
       # post-build-hook ever sees these paths, so without this the stick fills as if
       # compression were off (see modules/lib/f2fs-release-cblocks.nix). After the GC'd
-      # copy, so the pass only touches what current+prev actually kept.
+      # copy, so the pass only touches the declared three rescue roots.
       nixnas-f2fs-release-cblocks "$mnt/nix/store" || echo "rescue-maintain: release pass failed (non-fatal)" >&2
       sync
       umount "$mnt/nix"
       ${sdCryptsetup} detach nixnas-rescue-store
 
-      # ── 3. build + sign + place the rescue UKI on the ESP (keep one REAL rollback) ─
+      # ── 3. build + sign + place the rescue UKI on the ESP (keep three slots) ────────
       # The closure is on the stick NOW (step 2 above already completed, or this line is
       # unreachable) — this is exactly the sequencing the SEQUENCING header note requires:
       # whichever branch below builds the UKI, the init= path it bakes in already exists on
@@ -279,13 +279,15 @@ let
         sbsign --key "$dbkey" --cert "$dbcert" --output "$signed" "$uki"
 
         mkdir -p "$esp/EFI/Linux"
-        # Rotate to -prev only when the installed UKI actually differs — a re-run after a lost
-        # marker must not clobber the genuine previous version with an identical copy.
+        # Rotate current, previous and second previous only when the newly-built UKI differs.
         if [ -f "$espuki" ] && ! cmp -s "$signed" "$espuki"; then
-          cp -f "$espuki" "$esp/EFI/Linux/nixnas-rescue-prev.efi"
+          [ ! -f "$espprev" ] || cp -f "$espprev" "$espprev2"
+          cp -f "$espuki" "$espprev"
         fi
         install -m0644 "$signed" "$espuki.new"
         mv -f "$espuki.new" "$espuki"                             # rename = atomic on the same fs
+        [ -f "$espprev" ] || cp -f "$espuki" "$espprev"
+        [ -f "$espprev2" ] || cp -f "$espprev" "$espprev2"
         sync
       ''}
 
@@ -323,12 +325,10 @@ in
           # `sign.pkiBundle` appends /keys/db itself (modules/extra-entries.nix, `dbKeyDir`).
           pkiBundle = config.boot.lanzaboote.pkiBundle;
         };
-        # Both explicit even though they are nixboot's own defaults: this is the exact
-        # current/previous shape (`nixnas-rescue.efi` / `nixnas-rescue-prev.efi`) and the exact
-        # "auto-discovery only, no firmware NVRAM entry" posture this module relies on --
-        # stated here rather than merely inherited, so it stays correct even if nixboot's own
-        # defaults ever change.
-        rotate = true;
+        # The three raw rescue slots each need a durable self-contained UKI. The current
+        # entry and two predecessors are deliberately explicit rather than inherited.
+        history.keep = 3;
+        espCapacityMiB = 50;
         bootEntry.enable = false;
       };
     })
