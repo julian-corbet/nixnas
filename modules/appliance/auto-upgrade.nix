@@ -12,6 +12,12 @@
 #     menu: build-then-stage-then-verify, not build-and-pray.
 #
 # Only active once the operator points `autoUpgrade.flake` at their config.
+#
+# OWNERSHIP STATUS: this remains the current, functional implementation.
+# Nixdeploy is now the sole delivery specialist, so the trigger, staging and
+# resulting activation/rollback/health outcome are marked for migration there.
+# Nixnas continues to own the appliance configuration being built, not the
+# decision or schedule that delivers it.
 { config, lib, ... }:
 let
   cfg = config.nixnas;

@@ -6,6 +6,12 @@
 # rescue toplevel that is either deploy-PINNED (rescue.toplevel — hub-built boxes) or built
 # from the same flake autoUpgrade pulls (rescue.flakeAttr — self-upgrading boxes).
 #
+# OWNERSHIP STATUS: the artifact composition described below is current and
+# functional, but its timer, closure copy, slot materialisation and reported
+# outcome are delivery concerns and therefore migrate to nixdeploy. Nixrescue
+# supplies rescue content, nixboot supplies UKI/boot mechanics, and nixnas
+# supplies the appliance/storage geometry. This file has not yet been removed.
+#
 # WHO BUILDS/SIGNS/PLACES THE UKI — split by rescue source, not a free choice:
 #   PINNED (rescue.toplevel != null, hub-built): `nixboot.extraEntries.rescue` owns build +
 #     sign + atomic place + bounded history retention (github:julian-corbet/nixboot-corbet-ch,

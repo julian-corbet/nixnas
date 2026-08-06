@@ -1,10 +1,15 @@
 # nixnas
 
-Boot **your own** declarative NixOS from a USB stick (8 GB+) — with the whole boot chain
-hardened, self-update and rollback built in, and your existing storage connected. nixnas
-is the appliance mechanism (boot, crypto, the store, the kernel); the workloads are plain
-NixOS you bring. A local TUI writes your signed image. Built to be adopted (and
-contributed to) by others, not just one machine.
+Package **your own** declarative NixOS as a USB appliance (8 GB+) with encrypted
+store geometry and your existing storage connected. Nixnas owns the appliance
+runtime, storage layout and non-boot payload. Nixboot owns the booted
+kernel/initrd artifact and everything from firmware to `switch-root`. Nixdeploy owns every delivery path,
+including updates, activation outcomes, rescue materialisation and rollback.
+
+The current source still includes a local flash path, `autoUpgrade`,
+`nixnas-switch`, and a scheduled rescue maintainer. Those are deprecated
+ownership overlaps to remove as consumers migrate to nixdeploy, not evidence
+that the boundary above is already fully realised.
 
 **Two store locations** (`nixnas.store.location` — [`docs/HOT-MODE.md`](docs/HOT-MODE.md)):
 
@@ -40,9 +45,9 @@ contributed to) by others, not just one machine.
   into another machine still opens with the passphrase — no specific box's TPM required.
 - **Bring your own storage**: nixnas imports + unlocks whatever you already use — any Linux
   filesystem and encryption — and never creates, formats, or destroys it.
-- **Kind to the stick**: logs, `/tmp`, coredumps and swap live in RAM, so the USB takes ~no
-  writes except updates — measured at **60 KiB** for ~100 MiB of log+file activity. Cheap
-  sticks don't wear out. The OS runs from RAM; the heavy state (container images, data) lives
+- **Kind to the stick**: logs, `/tmp`, coredumps and swap live in RAM, so
+  routine runtime activity avoids writing the USB. The OS runs from RAM; the
+  heavy state (container images, data) lives
   on your encrypted storage, never the stick.
 - **Evil-Maid hardened**: UEFI Secure Boot with *your own* keys (Microsoft keys not
   enrolled), signed Unified Kernel Images, and LUKS bound to TPM2 + PIN. *(Roadmap: a
@@ -64,25 +69,26 @@ contributed to) by others, not just one machine.
   the strict TPM2 PIN is on — the store's PIN prompt over SSH **in the initrd** (no console
   needed on any boot — the very first boot uses a loudly-flagged ephemeral host key; see
   the first-boot bullet above).
-- **Hands-off**: everything except the one boot passphrase is automated — build, sign,
-  roll out, self-update (stage-only, never self-reboot), rollback. *If you have to think
-  about it, something has gone wrong.*
-- **Activation is drop-proof**: `nixnas-switch [switch|boot|test]` is the shipped way to
+- **Current automated path**: the shipped source can build, sign, flash and
+  self-update stage-only without self-reboot. Triggering, materialising and
+  reporting those operations belong to nixdeploy in the target model.
+- **Current activation wrapper**: `nixnas-switch [switch|boot|test]` is the shipped way to
   activate a configuration on a running box — the real `switch-to-configuration` runs
   **detached** in a transient systemd unit, so a dropped SSH session can never
   half-activate the system, while the wrapper follows the journal and reports the unit's
   real `Result=`. It refuses to overlap a running switch and clears a stale activation
   lock only when no switch process is alive. Never run activation through a droppable
-  session (field-proven: a connection-carried switch died mid-flight and left a system
-  that rejected every login).
+  session. This wrapper remains functional while activation ownership migrates
+  to nixdeploy.
 
 ## What nixnas is — and is not
 
 nixnas is the **appliance mechanism**: it turns any `nixosConfiguration` into a
-bootable, RAM-resident, encrypted, rollback-safe USB stick. The **workloads** a
+RAM-resident, encrypted USB-appliance artifact. The **workloads** a
 particular box runs — k3s, containers, VMs, Samba/NFS, GPU — are **plain NixOS that
 *you* declare**, in the same host, alongside `imports = [ nixnas.nixosModules.nixnas ]`.
-nixnas builds + signs + flashes whatever closure you hand it. See [`docs/SCOPE.md`](docs/SCOPE.md).
+Nixboot supplies the boot artifact and verification contract; nixdeploy owns
+delivery of both the primary and nixrescue roles. See [`docs/SCOPE.md`](docs/SCOPE.md).
 
 ## Design
 
@@ -91,7 +97,7 @@ parameterised core; your machine's real disks, IPs, and secrets live in a *separ
 private overlay repo you own* that imports `nixnas` as a flake input (`templates/host`
 scaffolds one). The public core never references any private overlay.
 
-A small **Rust TUI** (`tui/`) builds and flashes the image **locally**, on a trusted machine
+A small **Rust TUI** (`tui/`) currently builds and flashes the image **locally**, on a trusted machine
 that holds your Secure Boot keys: it drives the flake's image script, injecting your LUKS
 passphrase into the builder VM and your (sops-encrypted) Secure Boot PKI onto the image —
 nothing secret enters the Nix store, and the image is personalised *and* self-signed, so it
@@ -103,8 +109,11 @@ The TUI runs as your **normal user** — the build uses your own Nix and keys �
 Its turnkey path, **Build & Flash**, takes one stick end to end: pick the device and the
 image is sized to its **exact byte count** — no gigabyte rounding, no wasted space — then
 built, flashed, and verified in a single guided flow, with an explicit *back-up-first?*
-prompt before anything is overwritten. A conventional **Build image** + **Flash stick** pair
-is there for reuse (the latter grows a minimal image to fill any larger stick). The finished
+prompt before anything is overwritten. This is the current implementation;
+appliance-payload production remains a nixnas concern, while nixboot supplies
+the boot artifact and selecting a target and materialising the composed image
+belongs under nixdeploy. A conventional **Build
+image** + **Flash stick** pair is present today. The finished
 stick carries plain, self-describing labels: partition **`boot`** (the ESP) and **`nixnas`**
 (the encrypted store).
 
@@ -149,13 +158,16 @@ external-store boot must reach login from a single operator key entry:
   live on the encrypted store, so the box is trustably reachable before any data unlock.
 - ✅ **Rollback** — bounded kept generations + the bootloader menu (guaranteed), plus
   boot-counting (lanzaboote writes/counts the entry down).
-- ✅ **Self-update** — `autoUpgrade`, stage-only, never self-reboots.
+- ✅ **Current self-update implementation** — `autoUpgrade`, stage-only, never
+  self-reboots. It is marked for migration because nixdeploy is the delivery owner.
 - ✅ **Hot mode** (`store.location = "hot"`) — the MAIN system boots with `/nix` on an
   external, operator-key-unlocked LUKS device: the initrd asks for YOUR key and proceeds
   only then (CI-proven in QEMU, including the serialised single-entry unlock — two LUKS
   members, one passphrase entry). The stick carries a self-contained rescue; the main
-  maintains it (`rescue-maintain`: closure → stick, GC to current plus two predecessors, signed UKIs at
+  currently maintains it (`rescue-maintain`: closure → stick, GC to current plus two predecessors, signed UKIs at
   `EFI/Linux/nixnas-rescue.efi` — a name lanzaboote's ESP GC provably never prunes).
+  Scheduling and materialisation of that rescue role belong to nixdeploy in
+  the target model; the present maintainer has not yet been removed.
   The hot-store-on-ZFS initrd path (legacy dataset mount + import-after-key) is
   design-verified but first runs on real hardware.
 

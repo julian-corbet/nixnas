@@ -5,12 +5,18 @@ This document is the post-steelman, decided design.
 
 ## 0. The model, in one line
 
-nixnas is **standard NixOS — encrypted, Secure-Boot-signed (lanzaboote), self-updating
-via generations — packaged to install on an 8 GB USB stick, with a RAM-resident root,
-driven by a flake.** Updates, rollback, multiple versions and signing are *not* bespoke:
-they are NixOS's own `system.autoUpgrade`, generations, `lanzaboote`, and LUKS. nixnas
-adds only the **USB image/layout**, the **impermanence (tmpfs-root) packaging**, and a
-**build+flash TUI**.
+nixnas is **standard NixOS packaged as an encrypted USB-appliance payload,
+with a RAM-resident root and declared storage geometry.** Nixnas owns that
+geometry, appliance runtime and non-boot payload production. Nixboot owns the
+booted kernel/initrd, loader, UKIs, Secure Boot integration, generations and boot verification. Nixdeploy
+owns every delivery path: triggers, publication, primary/nixrescue
+materialisation, activation, rollback, health outcomes and remote image
+upload/register/reimage.
+
+The source still contains `system.autoUpgrade`, a build-and-flash TUI,
+`nixnas-switch`, and scheduled rescue maintenance. They are the current
+implementation and remain usable; they are explicit migration work, not the
+final ownership model.
 
 > **"RAM-resident" means tmpfs *root* + page-cache, NOT the store in RAM.** The
 > `/nix/store` stays a **real persistent read-write LUKS partition** — because the box
@@ -137,7 +143,12 @@ incidents that motivated this design). So `hot` mode's MAIN carries **no tmpfs r
    since the initrd already opened them — HOT-MODE.md), and `autoUpgrade` builds new
    generations straight into the same persistent store and root.
 
-## 4. Updates — autonomous, native
+## 4. Current update implementation — migration required
+
+The behavior below is implemented today. Its trigger, activation, rollback and
+outcome reporting belong to nixdeploy in the target architecture. Nixnas will
+continue to provide the appliance configuration and artifacts, but will not
+remain a second delivery engine.
 
 Written against `usb` mode's on-stick store; `hot` mode's MAIN follows the identical
 `autoUpgrade`/generations/`lanzaboote` mechanism against `store.hot.*` (and now, per §3.2,
@@ -300,15 +311,18 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   activates on the next operator-initiated, PIN-unlocked reboot. The box must never reboot
   itself into a PIN prompt no one is at.
 
-## 7. The flake / TUI workflow
+## 7. The current flake / TUI workflow
 
-- **Build once, here.** The **Rust TUI** runs `nix build .#imageScript` against the operator's
+- **Build once, here.** The **Rust TUI** currently runs `nix build .#imageScript` against the operator's
   flake (a PURE eval — no secrets in the Nix store), then executes the disko image script with
   the LUKS passphrase injected into the builder VM (`--pre-format-files`) and, when configured,
   the Secure Boot PKI injected onto the finished image (`--post-format-files` →
   `/nix/lanzaboote/pki`). The result is the personalised `.raw` (LUKS store seeded with
   generation 1 + the SB keys); the TUI then flashes it (caligula + an independent post-write
-  verification). The TUI is **install-only** — *not* in the update path.
+  verification). The appliance payload remains a nixnas product and the boot
+  artifact is supplied by nixboot; choosing and writing the composed image to
+  a deployment target belongs to nixdeploy and has not yet been removed from
+  the TUI.
 - **After flashing, the box is autonomous** (`autoUpgrade`). Updating nixnas = committing
   to the operator's flake; the box pulls + rebuilds itself.
 - **`nixnas.config`** (the TOML next to the operator's flake) holds only what the TUI itself
@@ -316,17 +330,17 @@ is simply **how NixOS's store already works**. No btrfs, no bcachefs (out of mai
   configuration is Nix: the operator's `nixnas.*` parameters + their own
   `services.k3s`/`hardware.amdgpu`/… — the whole closure is what gets installed.
 
-## 8. What is nixnas-specific (everything else is stock NixOS)
+## 8. What is nixnas-specific
 
 1. The USB **GPT/disko layout** + the **impermanence (tmpfs-root)** packaging + the
    post-boot data-unlock plumbing (`nixnas-unlock` / `nixnas-storage.target`).
-2. The **Rust TUI** (build the initial stick + flash + edit `nixnas.config`).
-3. Packaging Secure Boot (lanzaboote keys) + the LUKS-store-on-USB into a flashable image.
+2. Appliance-payload construction and the configuration interface consumed by tooling.
+3. Packaging the encrypted store and appliance runtime into the image.
 
-Generations, rollback, self-update and signing are **stock NixOS** — `autoUpgrade`, the
-bootloader's generation list, `lanzaboote`, LUKS, impermanence. nixnas is a thin
-packaging of a well-trodden encrypted-Secure-Boot-autoUpgrade NixOS onto USB + a flake
-workflow.
+Boot generations, signing and verification are nixboot's mechanism. Update
+triggers, activation, health and rollback outcomes are nixdeploy's mechanism.
+The current nixnas-local implementations are retained only until that migration
+is complete.
 
 ## 9. Open questions / spikes
 

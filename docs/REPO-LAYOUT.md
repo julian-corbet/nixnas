@@ -22,9 +22,7 @@ nixnas/
 │   │   ├── image.nix          # UEFI + systemd-initrd glue, serial console, initrd modules
 │   │   ├── impermanence.nix   # tmpfs root — only /nix + the ESP persist (RAM-resident, not copytoram)
 │   │   ├── kernel.nix         # the CachyOS kernel (pkgs.cachyosKernels) + zfs_cachyos + lantian cache
-│   │   ├── secureboot.nix     # lanzaboote Secure Boot: operator-owned PK/KEK/db, signed UKIs
-│   │   ├── remote-unlock.nix  # headless store unlock — initrd-SSH; host key TPM-sealed by default
-│   │   └── rollback.nix       # kept generations (configurationLimit) + lanzaboote boot-counting
+│   │   └── nixboot.nix        # bridge: appliance facts -> nixboot-owned boot stance
 │   ├── crypto/
 │   │   ├── tpm2.nix           # TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`
 │   │   └── recovery-escrow.nix # break-glass recovery keyslot → Vaultwarden (hub tool + box status)
@@ -36,7 +34,9 @@ nixnas/
 │       ├── identity.nix       # machine-id + SSH host key + persist.overlayClients state on /nix/persist
 │       ├── persist-enforce.nix # build-time gate: every StateDirectory service persisted or explicitlyEphemeral
 │       ├── ssh.nix            # headless admin sshd (key-only root)
-│       ├── auto-upgrade.nix   # self-update: stage-only, never self-reboot
+│       ├── auto-upgrade.nix   # deprecated trigger overlap; delivery migrates to nixdeploy
+│       ├── rescue-maintain.nix # deprecated rescue materialisation overlap; migrates to nixdeploy
+│       ├── switch.nix         # deprecated activation overlap; migrates to nixdeploy outcomes
 │       └── optimizations.nix  # appliance defaults: journald→RAM, no disk swap, store.preload;
 │                              #   memory subsystem delegated to nixram (nixram.*)
 │
@@ -99,3 +99,7 @@ nixnas-config/
 - **Private overlay holds:** all literals (serials/IPs/hostnames/URLs), all sops ciphertext,
   the initrd host key, the real `nixosConfigurations`. It *imports* the public core; the
   public core never references it.
+
+This privacy boundary is separate from mechanism ownership: nixboot owns the
+boot artifact, and nixdeploy owns every delivery action and outcome. Nixnas
+publishes only the generic appliance/storage mechanism and artifact producer.

@@ -1,11 +1,13 @@
 # nixnas — `nixnas-switch`: detached, session-immune system activation.
 #
-# FIELD LESSON (2026-07-04, the first real deployment): a `switch-to-configuration
-# switch` carried over a plain SSH session was killed mid-flight when the network
-# flapped — getty had already been restarted but user activation had not run yet: a
-# HALF-activated system that rejected every login. The field recovery was re-running
-# the switch under `systemd-run` by hand. This wrapper makes that the shipped path —
-# never run activation through a droppable session:
+# A `switch-to-configuration switch` carried by an SSH session can be killed
+# mid-flight when activation changes that same session's network or login
+# dependencies. This wrapper detaches the work from the transport.
+#
+# OWNERSHIP STATUS: this is the current functional activation wrapper.
+# Activation, rollback, health and their typed outcomes now belong to
+# nixdeploy, so this wrapper is marked for migration rather than a second
+# permanent delivery mechanism:
 #
 #   nixnas-switch [switch|boot|test] [--generation <store-path>]
 #
@@ -17,12 +19,11 @@
 #   * the wrapper then follows the unit's journal and reports the HONEST outcome: an
 #     ExecStopPost hook captures $SERVICE_RESULT/$EXIT_STATUS to /run/nixnas/…,
 #     because after `--collect` garbage-collects the finished unit, `systemctl show`
-#     falsely reports Result=success even for a failed run (measured: exit 7 →
-#     collected → show says success; the hook file says `exit-code 7`);
+#     can lose the failed unit's result after collection;
 #   * a second invocation while any nixnas-switch-* unit is loaded REFUSES (two
 #     activations cannot overlap); the check-then-start race is closed by systemd-run
 #     itself, which refuses an already-loaded unit name;
-#   * stale-lock hygiene (field bug, same deployment): switch-to-configuration-ng
+#   * stale-lock hygiene: switch-to-configuration-ng
 #     serialises on flock(2) of /run/nixos/switch-to-configuration.lock and exits
 #     with the raw errno on contention — EAGAIN, "Could not acquire lock", exit 11.
 #     A killed switch can leave that fd inherited by an orphaned child, so every
@@ -43,11 +44,11 @@ let
   # bash as an unescaped `$$`, which bash expanded to the WRAPPER'S OWN PID. Every
   # run therefore wrote a literal "<pid>SERVICE_RESULT <pid>EXIT_STATUS" into the
   # result file, never matched "success", and the tool reported FAILED and exited
-  # non-zero after a switch that had in fact completed perfectly. Measured on a real
-  # hub switch: "2619346SERVICE_RESULT 2619346EXIT_STATUS".
+  # non-zero after a switch that had in fact completed. The separate script
+  # avoids that quoting ambiguity.
   #
-  # That is the exact inverse of the failure mode this whole tool exists to prevent
-  # (see the header: a wrapper that reports success for a failed run). A separate
+  # That is the exact inverse of the failure mode this tool exists to prevent.
+  # A separate
   # script has no nested quoting left to get wrong -- systemd sets SERVICE_RESULT and
   # EXIT_STATUS in the ExecStopPost environment, and this reads them straight out of it.
   resultCapture = pkgs.writeShellScript "nixnas-switch-capture-result" ''
