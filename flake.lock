@@ -421,11 +421,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1785921919,
-        "narHash": "sha256-PO51dpALSO94g+ftn1Ra0RpldEQRABtSQ/7PmpDKWSo=",
+        "lastModified": 1785996739,
+        "narHash": "sha256-sigyShHAg0oNw8oyXL0TBXwaEfaqWqO8BsdFkJkM8Ew=",
         "owner": "julian-corbet",
         "repo": "nixboot-corbet-ch",
-        "rev": "17f7aea305f5dd7da5bc14e614a41f8feaf043fa",
+        "rev": "bc93f5e1c636bdd27c7154d9492ce4cc2419b9b1",
         "type": "github"
       },
       "original": {
