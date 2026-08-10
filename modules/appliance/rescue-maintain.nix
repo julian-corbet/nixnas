@@ -397,11 +397,25 @@ in
 
     # The ONLY trigger: a few minutes after boot (async ESP/stick self-heal, off the critical
     # path) + a daily catch-up (matters for the flake-built source; harmless no-op for pinned).
+    #
+    # The daily leg is `OnCalendar`, NOT `OnUnitActiveSec`, and the difference is the whole reason
+    # this block has a comment. `OnUnitActiveSec` schedules relative to the last activation of the
+    # service, so it needs a previous run to anchor to. Restart the timer without the service
+    # having run under it -- which is exactly what a rebuild that reloads the unit does -- and the
+    # boot leg is already in the past while the interval leg has nothing to count from, so systemd
+    # computes NO next elapse at all. The timer stays loaded, enabled and listed, showing an empty
+    # NEXT column forever. Observed in the field: a stick that last refreshed on 2026-07-28 and
+    # would never have refreshed again, on a unit whose entire job is to keep the RESCUE media
+    # current -- the one thing you find out is stale at the moment you need it.
+    #
+    # `Persistent` compounded it by looking like insurance and being inert: it only applies to
+    # `OnCalendar`, so paired with `OnUnitActiveSec` it caught nothing up. With a real calendar
+    # expression it now does what it always appeared to.
     systemd.timers.nixnas-rescue-maintain = {
       wantedBy = [ "timers.target" ];
       timerConfig = {
         OnBootSec = "3min";
-        OnUnitActiveSec = "1d";
+        OnCalendar = "daily";
         Persistent = true;
       };
     };
