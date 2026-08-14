@@ -174,6 +174,30 @@ wait_verifiers() { # wait_verifiers <label>
   return 1
 }
 
+# The soak specialisations deliberately contain only the production appliance modules, not
+# demo-only verify-writes.nix. Their readiness contract is therefore the real boot verifier,
+# whose completed ExecMain state must be observed before the cycle assertions run.
+wait_boot_verifier() { # wait_boot_verifier <label>
+  local label="$1"
+  if "${SSH[@]}" -o BatchMode=yes '
+    for _ in $(seq 1 90); do
+      [ "$(systemctl show --value -p ExecMainCode nixboot-verify.service 2>/dev/null)" != 0 ] \
+        && exit 0
+      systemctl is-failed --quiet nixboot-verify.service && exit 1
+      sleep 2
+    done
+    exit 1
+  '; then
+    return 0
+  fi
+  echo "!! ${label}: nixboot verifier did not finish" >&2
+  "${SSH[@]}" -o BatchMode=yes '
+    systemctl status --no-pager -l nixboot-verify.service || true
+    journalctl -b --no-pager -u nixboot-verify.service || true
+  ' 2>&1 | sed 's/^/   /' || true
+  return 1
+}
+
 # ── 1. Build the soak specialisation toplevels on the test runner ─────────────────────
 echo ">> building demo-upgrade-soak toplevel (carries soak-gen-2..6 specialisations) ..."
 SOAK_TOP=$(nix build --no-link --print-out-paths \
@@ -357,9 +381,9 @@ for cycle in $(seq 1 "$N"); do
   vm_booted="$cycle_ok"   # track boot success independently from assertion outcomes
 
   if [ "$cycle_ok" = 1 ]; then
-    # Do not race the failed-unit gate against either verifier, and do not stage the next
-    # generation while the write-isolation sample is still in progress.
-    wait_verifiers "cycle ${cycle}" || { cycle_ok=0; tail -50 "$LOG_C"; }
+    # Do not race the failed-unit gate against the production boot verifier. The soak
+    # specialisations intentionally omit the demo image's write-isolation verifier.
+    wait_boot_verifier "cycle ${cycle}" || { cycle_ok=0; tail -50 "$LOG_C"; }
 
     # (a) boots newest: /etc/nixnas-soak-gen == expected generation number.
     actual_marker=$("${SSH[@]}" "cat /etc/nixnas-soak-gen 2>/dev/null || echo MISSING")
