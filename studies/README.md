@@ -49,12 +49,10 @@ concrete (a login prompt reached, or a login prompt deliberately *not* reached).
   member never opened, `zpool import` itself would fail — the pool geometry proves
   the single-entry unlock, not just an assertion.
 - `test/matrix-eval-test.sh`: eval-only (no QEMU) proof across six operator-persona
-  variants (no-tpm / stick-4·16·32g / hot-ext4 / pin-strict / persist-nested) —
+  variants (stick-4·16·32g / hot-ext4 / hot-zfs-property / persist-nested) —
   option wiring and assertion guards, not boot behaviour.
 
 **What is proven, weekly (or on `test/**` changes)** (`.github/workflows/deep-test.yml`):
-- `test/lifecycle-test.sh`: the full rescue → `nixnas-install-hot` → main boot →
-  rescue-only cycle, three real boots in sequence.
 - `test/failure-injection-test.sh power-cut-mid-write`: a live `kill -9` on QEMU
   mid-write into `/nix`, then reboot — f2fs must recover from its checkpoint and
   reach login without operator repair.
@@ -105,8 +103,8 @@ number attached, not just a mechanism description:
 STORAGE.md §2 — wear/boot-speed reduction is free (mount options alone), but
 *density* (more kept generations fitting the stick) genuinely required shipping the
 release pass as build-time + on-box plumbing, which is what happened
-(`modules/lib/f2fs-release-cblocks.nix`, wired into the image build, `rescue-maintain`'s
-foreign-store `nix copy`, and `nix.extraOptions post-build-hook` for local rebuilds).
+(`modules/lib/f2fs-release-cblocks.nix`, wired into the image build and
+`nix.extraOptions post-build-hook` for local rebuilds).
 
 **Source:** `docs/STORAGE.md` §2.
 

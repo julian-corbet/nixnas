@@ -103,19 +103,14 @@ clean).
 **Status:** open — hardware spike, VM already showed the negative half of this result.
 
 <a id="004"></a>
-## 004 — The TPM2-NV anti-rollback counter: no implementation, no version policy yet
+## 004 — TPM2-NV anti-rollback — rejected by scope
 
-**Question:** `docs/ARCHITECTURE.md` §9 item 4 lists this as entirely open:
-"The anti-rollback counter — TPM2-NV implementation + the version policy." No module
-implements it; `modules/crypto/tpm2.nix` only covers store-unlock PCR binding.
+The fleet policy reserves TPM for the SSH-channel identity, so TPM2-NV is not an
+authorized anti-rollback mechanism. Secure Boot does not by itself reject an older still-signed
+UKI; the current design therefore claims bounded exact-release reconciliation, not cryptographic
+signed-version anti-rollback.
 
-**Hypothesis:** none stated yet — this is pre-design, not a default awaiting
-validation.
-
-**Method sketch:** define what "rollback" means to prevent here (an attacker
-re-flashing an older, vulnerable signed UKI within its still-valid signature
-window), then decide the TPM2-NV counter increment policy (every generation? every
-security-relevant update only?) before writing code.
+**Status:** rejected by scope.
 
 **Status:** open, unimplemented. (`docs/ARCHITECTURE.md` §9.4)
 
@@ -147,27 +142,14 @@ checks nor exhausts stick space mid-build.
 **Status:** open, undesigned. (`docs/ARCHITECTURE.md` §9.2, `modules/options.nix` autoUpgrade.flake)
 
 <a id="006"></a>
-## 006 — PCR 11 (measured/signed UKI) binding — deferred "phase-2 hardening"
+## 006 — PCR 11 disk binding — closed by simplification
 
-**Question:** `modules/options.nix`'s `crypto.tpm2.pcrs` option defaults to `[ 7 ]`
-only (Secure Boot state). Its description notes:
+The TPM-bound LUKS design was removed. Every disk now requires a passphrase and TPM is
+reserved for the initrd-SSH host identity. That credential remains on PCR 7 so normal signed
+UKI updates do not require per-release resealing. Exact release acceptance is handled by
+nixrescue/nixdeploy, not by a TPM disk-unlock policy.
 
-> *Signed PCR 11 (the measured UKI) is added as phase-2 hardening.*
-
-Today neither the store unlock nor the sealed initrd-SSH host key
-(`modules/boot/remote-unlock.nix`, also PCR 7 only) is bound to the actual measured
-UKI contents — only to the Secure Boot on/off state.
-
-**Hypothesis:** none stated — a roadmap line, not a reasoned default awaiting
-measurement. Binding to PCR 11 would tighten the evil-maid model (a different
-signed-but-unauthorized UKI could otherwise still unseal) at the cost of a reseal on
-every kernel/UKI update (PCR 7 is deliberately update-stable; PCR 11 is not).
-
-**Method sketch:** N/A yet — this needs a design decision (which PCR 11 measurement
-convention, reseal-on-every-update cost accepted or not) before there's anything to
-test.
-
-**Status:** open, unimplemented. (`modules/options.nix` crypto.tpm2.pcrs)
+**Status:** closed by redesign.
 
 <a id="007"></a>
 ## 007 — Doc drift: the ~80 MiB-per-generation ESP-cost figure is now contradicted by a cited measurement

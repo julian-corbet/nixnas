@@ -24,7 +24,6 @@ nixnas/
 │   │   ├── kernel.nix         # the CachyOS kernel (pkgs.cachyosKernels) + zfs_cachyos + lantian cache
 │   │   └── nixboot.nix        # bridge: appliance facts -> nixboot-owned boot stance
 │   ├── crypto/
-│   │   ├── tpm2.nix           # TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`
 │   │   └── recovery-escrow.nix # break-glass recovery keyslot → Vaultwarden (hub tool + box status)
 │   ├── storage/
 │   │   └── connect.nix       # POST-boot data unlock: nixnas-unlock + nixnas-storage.target
@@ -35,7 +34,6 @@ nixnas/
 │       ├── persist-enforce.nix # build-time gate: every StateDirectory service persisted or explicitlyEphemeral
 │       ├── ssh.nix            # headless admin sshd (key-only root)
 │       ├── auto-upgrade.nix   # deprecated trigger overlap; delivery migrates to nixdeploy
-│       ├── rescue-maintain.nix # deprecated rescue materialisation overlap; migrates to nixdeploy
 │       ├── switch.nix         # deprecated activation overlap; migrates to nixdeploy outcomes
 │       └── optimizations.nix  # appliance defaults: journald→RAM, no disk swap, store.preload;
 │                              #   memory subsystem delegated to nixram (nixram.*)
@@ -47,7 +45,7 @@ nixnas/
 │
 ├── test/                     # boot-vm.sh (QEMU+OVMF+swtpm); seal-2boot-test.sh (power-cycle:
 │   │                         #   seal→unseal→initrd-SSH→unlock, + --tamper wrong-TPM fail-closed);
-│   │                         #   DEV self-checks baked into the demo: verify-image / verify-tpm2 /
+│   │                         #   DEV self-checks baked into the demo: verify-image /
 │   │                         #   verify-sealed-hostkey / verify-recovery / verify-writes; ssh/ (demo keys)
 │   └── …
 └── tui/                      # the Rust TUI: build the image locally + flash (caligula)
@@ -67,9 +65,8 @@ nixnas-config/
 ├── nixnas.config             # the TUI's own TOML: flake_dir + the SB-PKI sops file to inject
 └── secrets/                  # sops+age: Tailscale authkey, Vaultwarden escrow creds, the Secure
                               #   Boot PKI tar. (The LUKS passphrase is NOT stored — the TUI
-                              #   prompts + shreds it. The initrd unlock host key is not stored
-                              #   either — it is generated + TPM-sealed on the box's first boot;
-                              #   only a no-TPM box git-tracks a plaintext hostKeyPath key.)
+                              #   prompts + shreds it. The initrd unlock host key is generated
+                              #   after boot and exists only as a TPM-gated ESP credential.)
 ```
 
 ### The only file pairing the generic module with private literals
@@ -83,7 +80,7 @@ nixnas-config/
     boot.usb.device = "/dev/disk/by-id/usb-…";           # the ONLY device nixnas partitions
     storage.unlock.tank0           = "/dev/disk/by-id/ata-…";      # serials, private
     boot.secureBoot.enable = true;                       # + keysSops for a stable SB identity
-    crypto.tpm2.enable     = true;                       # sealed initrd host key rides on this
+    boot.remoteUnlock.enable = true;                     # TPM-gated SSH; false means console/IPMI only
     autoUpgrade.flake      = "github:you/nas-config#nas";
     # all BEHAVIOUR comes from the public module; only DATA lives here.
     # k3s / GPU / Samba / VMs are plain NixOS you add ALONGSIDE — NOT nixnas.* (see SCOPE.md).

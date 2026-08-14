@@ -1,6 +1,5 @@
 # nixnas — break-glass recovery key: a SEPARATE high-entropy LUKS keyslot, escrowed
-# to Vaultwarden. Distinct from the daily TPM2 PIN and independent of any one box's TPM
-# (an AMD fTPM is wiped by a BIOS/NVRAM clear; the stick's passphrase can be forgotten).
+# to Vaultwarden. Distinct from the daily passphrase and independent of any one box's TPM.
 # This is the last-resort key that opens the store when everything else is gone.
 #
 # WHERE IT RUNS — the HUB, never the node (see the [build on hub] doctrine):
@@ -13,7 +12,7 @@
 #   Flow (`nixnas-escrow-recovery enroll`):
 #     1. generate a 256-bit recovery key (`/dev/urandom` → base64),
 #     2. `cryptsetup luksAddKey <store-part>` authorised by the daily passphrase — a new,
-#        distinct keyslot (never wipes the daily/TPM2 slots),
+#        distinct keyslot (never wipes the daily passphrase slot),
 #     3. upload {host, key} to Vaultwarden as a secure note (`bw` CLI, API-key auth),
 #     4. shred every plaintext copy on the hub.
 #   `--no-upload` does 1–2 + emits the key to `--recovery-out` (for offline escrow / tests);

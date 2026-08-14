@@ -6,8 +6,8 @@ runtime, storage layout and non-boot payload. Nixboot owns the booted
 kernel/initrd artifact and everything from firmware to `switch-root`. Nixdeploy owns every delivery path,
 including updates, activation outcomes, rescue materialisation and rollback.
 
-The current source still includes a local flash path, `autoUpgrade`,
-`nixnas-switch`, and a scheduled rescue maintainer. Those are deprecated
+The current source still includes a local flash path, `autoUpgrade`, and
+`nixnas-switch`. Those are deprecated
 ownership overlaps to remove as consumers migrate to nixdeploy, not evidence
 that the boundary above is already fully realised.
 
@@ -16,9 +16,9 @@ that the boundary above is already fully realised.
 | | `usb` (default) | `hot` |
 |---|---|---|
 | The OS `/nix` lives on | the stick (LUKS2+f2fs, runs from RAM) | your encrypted pool — unlimited system-wide installs |
-| The stick holds | the whole OS | the ESP + a self-contained **rescue** system |
-| Unlock at boot | TPM2 (PIN optional) | **you enter your key** in the initrd — never auto |
-| A dead pool means | the OS still boots | the rescue boots (repair shell + your own tools) |
+| The stick holds | the whole OS | the ESP; an independent boot role may own separate rescue slots |
+| Unlock at boot | **you enter your passphrase** | **you enter your passphrase** in the initrd |
+| A dead pool means | the OS still boots | the main cannot boot; use an independently delivered rescue role |
 | For | small appliances, max resilience | hub-class boxes that run a lot |
 
 - **`usb` mode boots into RAM** — the root is a tmpfs (impermanence); only `/nix`
@@ -29,18 +29,14 @@ that the boundary above is already fully realised.
   signed UKI; the bootloader menu is the guaranteed manual rollback, and boot-counting
   adds automatic fallback on top.
 - **Survives storage trouble**: in `usb` mode the OS is independent of your data storage —
-  the box boots even if a disk is degraded or missing (non-fatal import). In `hot` mode
-  that role moves to the **rescue** system: a small, self-contained NixOS on the stick that
-  boots with zero pools and carries the repair tools *plus whatever you want at 3 a.m. with
-  a dead pool* (`rescue.extraPackages` — an AI CLI, say). The running main maintains it
-  automatically (closure, GC, signed boot entry).
-- **Encrypted at rest, two independent layers**: in `usb` mode the on-stick store is LUKS2 +
-  f2fs (zstd-compressed), bound to the TPM2 (PIN optional — with it a powered-off box never
-  auto-decrypts; without it the box self-recovers from a power cut). In `hot` mode the OS
-  store shares your pool's encryption and **only your key opens it — entered in the initrd
-  over an authenticated channel (TPM-sealed initrd-SSH host key), never TPM-released**: a
-  stolen, powered-off box sits at the initrd forever. Your DATA is passphrase-only in both
-  modes — never TPM-bound, never keyfile-persisted: post-boot `nixnas-unlock` opens the
+  the box boots even if a disk is degraded or missing (non-fatal import). In `hot` mode,
+  recovery is deliberately a separate `nixrescue` artifact/delivery concern; nixnas neither
+  builds a per-host rescue nor writes its slots.
+- **Encrypted at rest, passphrase-only**: in `usb` mode the on-stick store is LUKS2 +
+  f2fs (zstd-compressed); in `hot` mode the OS store shares your pool's encryption. In both
+  cases **only your passphrase opens it**, locally/IPMI or through an authenticated
+  TPM-gated initrd-SSH channel. Your data is also passphrase-only — never TPM-bound, never
+  keyfile-persisted: post-boot `nixnas-unlock` opens the
   whole set with ONE passphrase. A seized disk (or box) reveals nothing, and a disk pulled
   into another machine still opens with the passphrase — no specific box's TPM required.
 - **Bring your own storage**: nixnas imports + unlocks whatever you already use — any Linux
@@ -50,14 +46,12 @@ that the boundary above is already fully realised.
   heavy state (container images, data) lives
   on your encrypted storage, never the stick.
 - **Evil-Maid hardened**: UEFI Secure Boot with *your own* keys (Microsoft keys not
-  enrolled), signed Unified Kernel Images, and LUKS bound to TPM2 + PIN. *(Roadmap: a
-  dm-verity/AEAD store hash sealed into the signed UKI.)*
-- **First boot needs no monitor and no IPMI**: the TPM-sealed initrd host key is generated
-  *on* the first boot, so that very first unlock serves initrd-SSH with a loudly-flagged
-  **ephemeral** RAM-only host key instead — the pre-auth banner warns that the fingerprint
-  is a throwaway and will change once the sealed identity exists (verify it against
-  `/boot/loader/credentials/nixnas-initrd-hostkey.pub` from boot #2 on, and expect a
-  one-time known-hosts warning then). A monitor still works in parallel: plug in a display
+  enrolled), signed Unified Kernel Images, mandatory disk passphrase, and a TPM-gated
+  remote prompt identity. Firmware remains an unavoidable trust boundary.
+- **First boot is fail-closed remotely**: initrd SSH stays down until a successful local/IPMI
+  boot has generated the TPM-sealed host credential. There is no ephemeral or TOFU fallback.
+  Verify subsequent SSH against the public key beside the credential on the ESP. A monitor
+  works in parallel: plug in a display
   + keyboard and the box asks for the store passphrase **on screen**
   (`nixnas.boot.consolePrimary = "video"`, the default). Serial/SOL stays fully supported
   and is one option away (`= "serial"` for IPMI/BMC boxes); both consoles always carry
@@ -65,10 +59,8 @@ that the boundary above is already fully realised.
   one is `/dev/console`.
 - **Headless**: ships sshd + Tailscale with a stable, stick-persisted identity (machine-id +
   pinned SSH host key — the channel you type the data passphrase into is authenticated), and
-  unlocks remotely: the data set over the running system's SSH (`nixnas-unlock`), and — when
-  the strict TPM2 PIN is on — the store's PIN prompt over SSH **in the initrd** (no console
-  needed on any boot — the very first boot uses a loudly-flagged ephemeral host key; see
-  the first-boot bullet above).
+  unlocks remotely: the data set over the running system's SSH (`nixnas-unlock`), and — after
+  the sealed identity exists — the store's passphrase prompt over SSH **in the initrd**.
 - **Current automated path**: the shipped source can build, sign, flash and
   self-update stage-only without self-reboot. Triggering, materialising and
   reporting those operations belong to nixdeploy in the target model.
@@ -118,7 +110,7 @@ stick carries plain, self-describing labels: partition **`boot`** (the ESP) and 
 (the encrypted store).
 
 **Access model — one passphrase, keys for remote.** There is exactly ONE interactive
-secret: the store passphrase. It unlocks the LUKS store at boot (and is the TPM2 PIN),
+secret: the store passphrase. It unlocks the LUKS store at boot,
 and it is also the **console login password** for `root` — and for the optional normal
 admin user (`nixnas.auth.adminUser`, wheel + sudo-with-password). No autologin, no second
 password to remember: the TUI derives a yescrypt hash from the passphrase at build time
@@ -147,10 +139,9 @@ external-store boot must reach login from a single operator key entry:
 - ✅ CachyOS kernel (x86-64-v3 + ThinLTO, `zfs_cachyos`) + impermanence (tmpfs root) +
   the LUKS2 **f2fs zstd:22** store, all from one disko-built image.
 - ✅ **Secure Boot** via lanzaboote (operator-owned keys, signed UKIs).
-- ✅ **TPM2** store unlock (PIN strict-by-default, auto-unlock optional), passphrase recovery
-  keyslot, first-boot `nixnas-enroll-tpm2` helper.
-- ✅ **Headless remote unlock** — initrd-SSH brings the NIC up and hands the passphrase to
-  the boot in the initrd (validated unlocking the box entirely over the network).
+- ✅ **Passphrase-only disk unlock** on every boot; TPM never receives a LUKS keyslot.
+- ✅ **Headless remote unlock** — initrd-SSH uses a per-device TPM-gated host identity and
+  hands the mandatory passphrase to the initrd. No TPM means console/IPMI only.
 - ✅ **Post-boot data unlock** — data members stay locked (`noauto`) until `nixnas-unlock`
   over SSH: one passphrase opens the set serially, imports the ZFS pools, and raises
   `nixnas-storage.target` for the gated mounts + services.
@@ -163,18 +154,15 @@ external-store boot must reach login from a single operator key entry:
 - ✅ **Hot mode** (`store.location = "hot"`) — the MAIN system boots with `/nix` on an
   external, operator-key-unlocked LUKS device: the initrd asks for YOUR key and proceeds
   only then (CI-proven in QEMU, including the serialised single-entry unlock — two LUKS
-  members, one passphrase entry). The stick carries a self-contained rescue; the main
-  currently maintains it (`rescue-maintain`: closure → stick, GC to current plus two predecessors, signed UKIs at
-  `EFI/Linux/nixnas-rescue.efi` — a name lanzaboote's ESP GC provably never prunes).
-  Scheduling and materialisation of that rescue role belong to nixdeploy in
-  the target model; the present maintainer has not yet been removed.
+  members, one passphrase entry). Recovery is an independent, fleet-generic nixrescue release;
+  the old per-host maintainer has been removed from nixnas.
   The hot-store-on-ZFS initrd path (legacy dataset mount + import-after-key) is
   design-verified but first runs on real hardware.
 
-Hardware spikes remaining (a real UEFI box, not the VM): the boot-counting **bless** loop
-(auto-clear on a good boot; the manual menu is the fallback meanwhile), the firmware setup
-password, and the TPM2-NV anti-rollback counter. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §9.
+Hardware gates remaining (a real UEFI box, not the VM): Secure Boot owner-key enrollment,
+firmware setup-password enforcement, physical TPM credential bootstrap, and main/rescue boots.
+Signed-version anti-rollback is not claimed; TPM is reserved for SSH identity. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## License
 

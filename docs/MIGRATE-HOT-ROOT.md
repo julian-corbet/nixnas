@@ -1,8 +1,7 @@
 # nixnas — MIGRATE-HOT-ROOT.md: moving a LIVE `hot`-mode host onto a persistent root
 
-**This is a runbook, not a tool.** No automation exists for this — `nixnas-install-hot`
-(`modules/appliance/install-hot.nix`) only targets a **blank** root device via the rescue
-environment; it has no notion of "a box that is already running, right now, on a tmpfs
+**This is a runbook, not a tool.** No automation exists for this. The removed legacy blank-root
+installer never handled "a box that is already running, right now, on a tmpfs
 root, and must keep its identity across the switch." This document is what a human follows
 by hand. It is deliberately **not executed by an agent**: the final step is a reboot, and a
 reboot of a live `hot`-mode host is its own separate, explicit human decision — no amount of

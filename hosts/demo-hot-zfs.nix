@@ -39,7 +39,6 @@
     fsType = "zfs";
     zpool = "qapool";
   };
-  nixnas.rescue.enable = false;
 
   # Hot mode enters the store key in the initrd — keep remote-unlock (initrd-SSH) on.
   nixnas.boot.remoteUnlock.enable = true;

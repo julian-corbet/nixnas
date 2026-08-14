@@ -20,12 +20,12 @@
     hostName = "nas";
 
     admin.authorizedKeys = [ "ssh-ed25519 AAAA… you@laptop" ];
-    boot.usb.device = "/dev/disk/by-id/usb-Your_Stick_…";        # the ONLY device nixnas partitions
+    boot.usb.device = "/dev/disk/by-id/usb-Your_Stick_…"; # the ONLY device nixnas partitions
     boot.secureBoot.enable = true;
-    crypto.tpm2.enable = true;   # sealHostKey=true default: the initrd-SSH key is TPM-sealed on first boot
-    kernel.march = "x86_64-v3";                                  # your CPU's baseline
+    # TPM protects only the initrd-SSH identity; every LUKS volume still requires a passphrase.
+    kernel.march = "x86_64-v3"; # your CPU's baseline
     tailscale.enable = true;
-    persist.overlayClients = [ "tailscale" ];   # add other overlay/mesh clients (e.g. netbird) the same way
+    persist.overlayClients = [ "tailscale" ]; # add other overlay/mesh clients (e.g. netbird) the same way
     autoUpgrade.flake = "github:you/nas-config#nas";
 
     # The store's LUKS passphrase is injected by the TUI at image-build time
@@ -37,16 +37,16 @@
     # just another entry — no special handling. Passphrase-only by design: a seized
     # disk reveals nothing, a disk in another machine opens with the passphrase alone.
     storage.unlock = {
-      fast0     = "/dev/disk/by-id/ata-SSD_A-part1";   # fast pool (SSD) member
-      fast1     = "/dev/disk/by-id/ata-SSD_B-part1";   # fast pool (SSD) member (mirror)
-      bulk0     = "/dev/disk/by-id/ata-HDD_A-part1";   # bulk pool (HDD) member
-      bulk1     = "/dev/disk/by-id/ata-HDD_B-part1";   # bulk pool (HDD) member
-      archive0  = "/dev/disk/by-id/ata-HDD_ARCHIVE";   # whole-disk-LUKS XFS archive drive
+      fast0 = "/dev/disk/by-id/ata-SSD_A-part1"; # fast pool (SSD) member
+      fast1 = "/dev/disk/by-id/ata-SSD_B-part1"; # fast pool (SSD) member (mirror)
+      bulk0 = "/dev/disk/by-id/ata-HDD_A-part1"; # bulk pool (HDD) member
+      bulk1 = "/dev/disk/by-id/ata-HDD_B-part1"; # bulk pool (HDD) member
+      archive0 = "/dev/disk/by-id/ata-HDD_ARCHIVE"; # whole-disk-LUKS XFS archive drive
     };
     # Storage, step 2: IMPORT the ZFS pools — nixnas-import-<pool> services, pulled in
     # by nixnas-storage.target. Datasets self-mount at their `mountpoint` properties on
     # import (`fast` → /fast, `bulk/media` → /bulk/media, …) — nothing to declare for them.
-    storage.zfsPools = [ "fast" "bulk" ];   # the fast (SSD) + bulk (HDD) pools
+    storage.zfsPools = [ "fast" "bulk" ]; # the fast (SSD) + bulk (HDD) pools
   };
 
   ## ── Storage, step 3: MOUNT the non-ZFS pieces — native NixOS, hooked to the target ──
@@ -54,8 +54,8 @@
   # once nixnas-unlock has opened the member. Nesting under an imported pool's tree works:
   # systemd orders the mount after its parent path exists.
   fileSystems."/bulk/media/archive" = {
-    device  = "/dev/mapper/archive0";      # the stable mapper from storage.unlock
-    fsType  = "xfs";
+    device = "/dev/mapper/archive0"; # the stable mapper from storage.unlock
+    fsType = "xfs";
     options = [ "noauto" "nofail" "x-systemd.wanted-by=nixnas-storage.target" "noatime" "inode64" "logbsize=256k" ];
   };
 
@@ -79,7 +79,7 @@
   ## ── Your actual workloads — plain NixOS, GATED on the unlock. ─────────────────
   # Anything whose state sits on the pools must start with nixnas-storage.target, not
   # multi-user.target — before the unlock its data simply is not there.
-  services.k3s.enable = true;              # or docker/podman, nomad, …
+  services.k3s.enable = true; # or docker/podman, nomad, …
   systemd.services.k3s = {
     wantedBy = lib.mkForce [ "nixnas-storage.target" ];
     after = [ "var-lib-rancher.mount" ];

@@ -94,7 +94,7 @@ in
         };
         opromPolicy = mkOption {
           type = types.enum [ "tpm-eventlog" "microsoft" "none" ];
-          default = "tpm-eventlog";
+          default = "none";
           description = ''
             How `nixnas-enroll-sb` (the operator-run firmware key enrollment, see
             modules/boot/secureboot.nix) treats Option ROMs.
@@ -108,7 +108,7 @@ in
             the boot chain: the firmware refuses its own peripherals' ROMs at POST
             (dead GPU output at best, no POST at worst).
 
-              "tpm-eventlog" (default): operator keys AND the CHECKSUMS of the
+              "tpm-eventlog": operator keys AND the CHECKSUMS of the
                 OpROMs the firmware actually loaded this boot, as recorded in the
                 TPM event log (`sbctl enroll-keys --tpm-eventlog`). This is the
                 no-Microsoft mandate without bricking the boot chain: no vendor CA
@@ -122,7 +122,7 @@ in
                 evil-maid story: anything Microsoft ever signed (shims, older
                 Windows boot managers) boots on this box again.
 
-              "none": operator keys ONLY, strictest posture. `nixnas-enroll-sb`
+              "none" (default): operator keys ONLY, strictest posture. `nixnas-enroll-sb`
                 runs a plain `sbctl enroll-keys`, which itself REFUSES when it
                 detects OpROMs in the TPM event log. On such a board the operator
                 must consciously bypass it by hand (`sbctl enroll-keys
@@ -136,52 +136,14 @@ in
           type = types.bool;
           default = true;
           description = ''
-            initrd-SSH for the headless store unlock (MANDATORY by default): the box has
-            no console, so the in-initrd PIN/passphrase prompt is reached over SSH. The NIC
-            comes up in the initrd; you `ssh root@<box>` (keys in `admin.authorizedKeys`)
-            and hand the secret to the password agent. Keep it LAN/tailnet-only — the initrd
-            host key sits on the plaintext ESP. Where IPMI-SOL exists, that channel can
-            replace this (set false). ARCHITECTURE §6.
-          '';
-        };
-        sealHostKey = mkOption {
-          type = types.bool;
-          default = true;
-          description = ''
-            TPM-seal the initrd-SSH host key (to PCR 7) instead of shipping it plaintext on
-            the ESP. On first boot the key is generated and sealed to this box's TPM; every
-            boot the initrd unseals it before sshd — a tampered boot chain (PCR mismatch)
-            can't recover it, so a stolen stick can't impersonate the box's unlock prompt.
-            PCR 7 (Secure Boot state) is stable across kernel/UKI updates (no reseal), but the
-            one-time Secure Boot key ENROLLMENT at provisioning DOES change it — the seal is
-            self-healing and re-seals on the next boot (the initrd host-key fingerprint changes
-            once, expect a single known-hosts warning). This is independent of
-            `crypto.tpm2.enable`: it protects the SSH identity, not any LUKS keyslot. Set false
-            to fall back to the plaintext `hostKeyPath`.
-          '';
-        };
-        tpm2.enable = mkOption {
-          type = types.bool;
-          default = config.nixnas.crypto.tpm2.enable;
-          defaultText = literalExpression "config.nixnas.crypto.tpm2.enable";
-          description = ''
-            Whether this host's TPM2 seals the initrd-SSH host key. This defaults to the
-            data-unlock TPM setting for existing appliance configurations, but is deliberately
-            overrideable: an initrd SSH identity can be TPM-sealed while every LUKS volume still
-            requires the operator passphrase. That is the rescue-system posture.
+            TPM-gated initrd SSH for a headless passphrase unlock. The NIC comes up in the
+            initrd; you `ssh root@<box>` with a key from `admin.authorizedKeys` and hand the
+            disk passphrase to the password agent. The SSH host identity is a per-device
+            encrypted systemd credential sealed to TPM PCR 7. It is created only after a
+            successful local/IPMI boot and never has an ephemeral or plaintext fallback.
 
-            This controls only the host-key credential consumed by `nixboot.remoteUnlock`; it
-            never enrolls, unlocks, or otherwise changes a data TPM2 keyslot.
-          '';
-        };
-        hostKeyPath = mkOption {
-          type = types.nullOr types.path;
-          default = null;
-          description = ''
-            Plaintext initrd-SSH host key (a BUILD-MACHINE Nix path), used only when
-            `sealHostKey = false` (no TPM, or IPMI-SOL boxes). It is embedded in the initrd
-            and lands on the plaintext ESP — hence LAN/tailnet-only. With `sealHostKey = true`
-            (the default) this is ignored; the key is generated + TPM-sealed on first boot.
+            A machine without a usable TPM must set this false and unlock through its local
+            console or IPMI serial channel. TPM is never used for a LUKS keyslot.
           '';
         };
       };
@@ -237,9 +199,9 @@ in
           default = null;
           description = ''
             Path INSIDE the image-builder VM of the file holding the store's LUKS
-            passphrase, used ONCE to `luksFormat` the store at image-build time (it becomes
-            the recovery keyslot; the TPM2+PIN keyslot is enrolled later on the real
-            hardware). Null (the default) means the conventional path
+            passphrase, used ONCE to `luksFormat` the store at image-build time. It remains
+            the mandatory boot keyslot; no TPM disk token is enrolled. Null (the default)
+            means the conventional path
             `/tmp/nixnas-luks.key`, which the TUI injects into the builder VM with
             `imageScript --pre-format-files` — the passphrase never touches the Nix store,
             and a build WITHOUT the injected file FAILS (fail-closed: no silent fallback).
@@ -310,36 +272,8 @@ in
       };
     };
 
-    ## ── Crypto: single passphrase = TPM2 PIN (only the stick binds to the TPM) ──
+    ## ── Crypto: passphrase-only data; TPM is reserved for SSH identity ──
     crypto = {
-      tpm2 = {
-        enable = mkEnableOption "bind LUKS unlock to TPM2 + PIN (the single passphrase IS the PIN, required every boot)";
-        requirePin = mkOption {
-          type = types.bool;
-          default = true;
-          description = ''
-            STRICT (default): the TPM2 unlock also needs the PIN on EVERY boot — a
-            powered-off box never auto-decrypts (max evil-maid resistance), but every
-            boot needs an operator to enter the PIN (headless ⇒ over the remote-unlock
-            channel). The alternative (false) is TPM2 PCR-only auto-unlock: the box
-            self-recovers after a power cut and only demands the recovery key on TAMPER
-            (PCR mismatch), trading some resistance for unattended resilience. ARCH §6.
-          '';
-        };
-        pcrs = mkOption {
-          type = types.listOf types.ints.unsigned;
-          default = [ 7 ];
-          description = ''
-            TPM2 PCRs the unlock policy is bound to. PCR 7 (Secure Boot state) is the
-            baseline: it is stable across UKI/generation updates, so a normal update
-            needs no reseal. NOTE: the one-time Secure Boot key ENROLLMENT at provisioning
-            DOES change PCR 7 — after it, re-run `nixnas-enroll-tpm2` (idempotent via
-            `--wipe-slot=tpm2`) to re-bind the store keyslot to the new value; the store
-            still opens via the passphrase keyslot until then. Signed PCR 11 (the measured
-            UKI) is added as phase-2 hardening.
-          '';
-        };
-      };
       recovery = {
         vaultwardenUrl = mkOption {
           type = types.nullOr types.str;
@@ -347,9 +281,9 @@ in
           example = "https://vault.example.com";
           description = ''
             Vaultwarden/Bitwarden base URL to escrow a SEPARATE high-entropy recovery key to
-            at provision time. This key is a distinct LUKS keyslot (break-glass) — independent
-            of the daily TPM2 PIN and of any specific box's TPM (an AMD fTPM is wiped by a
-            BIOS/NVRAM clear). Null = no escrow (the passphrase keyslot is then the only recovery).
+            at provision time. This key is a distinct LUKS keyslot (break-glass), independent
+            of the daily passphrase and of any specific box's TPM. Null = no escrow (the
+            passphrase keyslot is then the only recovery).
           '';
         };
         credsSops = mkOption {
@@ -606,58 +540,12 @@ in
           off when done.
         '';
       };
-    };
-
-    ## ── Rescue system (hot mode only): the self-contained system on the stick ──
-    rescue = {
-      enable = mkOption {
-        type = types.bool;
-        default = config.nixnas.store.location == "hot";
-        description = ''
-          Whether the MAIN (hot) system maintains a RESCUE system on the stick (builds it,
-          copies its closure to the stick store, and keeps its signed UKI on the ESP current
-          — see modules/appliance/rescue-maintain.nix). Defaults on in `hot` mode; there is no
-          rescue in `usb` mode (the whole OS already lives on the stick).
-        '';
-      };
-      flakeAttr = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        example = "nixnas-rescue";
-        description = ''
-          SELF-UPGRADING boxes: the `nixosConfigurations.<attr>` name of the RESCUE system — a
-          SECOND, minimal `usb`-mode nixnas (sharing this host's appliance identity: kernel/pin,
-          admin keys, Secure Boot keys). The MAIN system's maintainer builds it from the SAME
-          flake ref as `autoUpgrade.flake` (i.e. the LATEST pulled revision, so it never goes
-          stale after a main update) and from the same nixpkgs pin (load-bearing — the rescue's
-          ZFS/kernel must always import the live pool). Set exactly ONE of `flakeAttr` (needs
-          `autoUpgrade.flake`) or `toplevel`.
-        '';
-      };
-      toplevel = mkOption {
-        type = types.nullOr types.package;
-        default = null;
-        example = literalExpression "self.nixosConfigurations.nixnas-rescue.config.system.build.toplevel";
-        description = ''
-          HUB-BUILT boxes (autoUpgrade off; closures pushed by deploy-rs or similar): the RESCUE
-          system's toplevel, passed as a derivation from the SAME flake evaluation as the main.
-          The maintainer script references it, so the rescue closure rides along with every main
-          deploy (into the hot store — no stick/budget cost) and can never go stale or skew pins.
-          No on-box flake pulls needed. Set exactly ONE of `flakeAttr` or `toplevel`.
-        '';
-      };
       extraPackages = mkOption {
         type = types.listOf types.package;
         default = [ ];
-        example = literalExpression "[ pkgs.claude-code pkgs.git ]";
         description = ''
-          Extra packages for a STICK-RESIDENT system — set this ON the `hot`-mode RESCUE host
-          (which is a small usb-mode nixnas) to carry the operator's own tools, e.g. an AI CLI
-          you want available EXACTLY when you are debugging a broken pool. The rescue always
-          has the repair essentials (zfs, cryptsetup, tpm2, sshd, a shell); these ride the
-          stick's f2fs store, update when the rescue is rebuilt, and count against the stick
-          budget. Consumed in `usb` mode (appliance/base.nix); a hot-mode MAIN ignores it
-          (its own config lists packages normally, on the unlimited hot store).
+          Extra packages for a USB-resident nixnas appliance. Fleet recovery belongs to the
+          separate nixrescue boot role; this option does not create or maintain one.
         '';
       };
     };

@@ -17,8 +17,8 @@
 #
 #   no-tpm <image.raw> [--pass PASS]
 #     Boot the demo image with NO TPM device exposed to the guest.  The LUKS store
-#     must still surface the passphrase prompt on serial (graceful degradation — no TPM
-#     hard dependency) and unlock when the passphrase is fed.
+#     must surface the mandatory passphrase prompt on serial and unlock when it is fed.
+#     Initrd SSH is unavailable because its identity is intentionally TPM-gated.
 #     PASS == passphrase prompt observed + demo login: reached.
 #
 # Needs root only for power-cut-mid-write (via the swtpm + writable scratch disk in a
@@ -424,19 +424,14 @@ cmd_no_tpm() {
   # Boot the demo image WITHOUT any TPM device (no -chardev/-tpmdev/-device tpm-crb).
   #
   # What the initrd will do:
-  #   systemd-cryptsetup tries the enrolled TPM2 token on the LUKS store partition → no
-  #   TPM device present → token probe fails → cryptsetup falls back to the passphrase
-  #   keyslot → systemd-ask-password surfaces the prompt on the serial console.
-  #
-  # On a fresh demo image (no prior TPM enrollment) this is always the path regardless of
-  # hardware.  With a previously enrolled image and no TPM the same fallback fires.
-  # Either way: the prompt MUST appear and the passphrase MUST unlock the store.
+  #   systemd-cryptsetup has only the passphrase keyslot, so systemd-ask-password surfaces
+  #   the prompt on the serial console. Missing TPM disables only the initrd-SSH identity.
   ACCEL=""
   [ -e /dev/kvm ] && ACCEL=",accel=kvm"
   CPU="max"
   [ -e /dev/kvm ] && CPU="host"
   echo ">> [no-tpm] booting demo image WITHOUT any TPM device …"
-  echo "   (expecting the LUKS passphrase prompt on serial; no TPM hard dependency)"
+  echo "   (expecting the mandatory LUKS passphrase prompt on serial; initrd SSH unavailable)"
   qemu-system-x86_64 \
     -machine "q35,smm=on${ACCEL}" -cpu "$CPU" -smp 2 -m 2048 \
     -global ICH9-LPC.disable_s3=1 \
@@ -482,7 +477,7 @@ cmd_no_tpm() {
   if [ "$ok" = 1 ] && [ "$prompted" -ge 1 ]; then
     echo "PASS — with NO TPM device the initrd surfaced the LUKS passphrase prompt on serial;"
     echo "       the passphrase unlocked the store and the system reached login."
-    echo "       Confirmed: TPM is NOT a hard boot dependency (graceful degradation)."
+    echo "       Confirmed: TPM is only an SSH-channel dependency, not a disk-unlock dependency."
     exit 0
   fi
 
@@ -491,11 +486,10 @@ cmd_no_tpm() {
     tail -40 "$LOG"; exit 1
   fi
 
-  # ok=1 but prompted=0: reached login without a passphrase prompt. Should not happen on a
-  # TPM-less boot with a fresh image — something else unlocked the store.
+  # ok=1 but prompted=0: reached login without the mandatory passphrase prompt.
   echo "FAIL — login reached but NO passphrase prompt was observed on serial."
   echo "       The store was unlocked without the expected passphrase fallback."
-  echo "       This suggests a TPM or auto-unlock path fired despite no TPM device."
+  echo "       This suggests an unintended non-passphrase unlock path exists."
   echo "       serial extract:"
   grep -aiE 'passphrase|cryptsetup|tpm|unlock|nixnas' "$LOG" | head -20
   exit 1

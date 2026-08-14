@@ -120,8 +120,8 @@ zfs create -o mountpoint=legacy qapool/system/root
 ROOT="$WORK/root"; MNT="$ROOT/nix"; mkdir -p "$MNT"
 mount -t zfs qapool/system/nix "$MNT"
 echo ">> copying the toplevel closure onto the ZFS store (nix copy → chroot store) …"
-# $ROOT is a chroot store root (store at $ROOT/nix/store) — the same shape rescue-maintain
-# uses; the pool's mountpoint=legacy dataset provides the /nix layer.
+# $ROOT is a chroot store root (store at $ROOT/nix/store); the pool's
+# mountpoint=legacy dataset provides the /nix layer.
 nix copy --no-check-sigs --to "$ROOT" "$TOP" \
   || { echo "!! nix copy to the ZFS chroot store failed" >&2; exit 1; }
 sync

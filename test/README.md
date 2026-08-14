@@ -15,7 +15,7 @@ The split mirrors the product: **build on the capable machine, boot in a small V
 ## Why a VM at all
 
 We need to exercise the *real* boot chain — UEFI → (Secure Boot) → signed UKI → initrd →
-LUKS/TPM2 unlock → f2fs `/nix` → impermanence — and, above all, the **rollback** behaviour
+passphrase-only LUKS unlock → f2fs `/nix` → impermanence — and, above all, the **rollback** behaviour
 (boot-counting × lanzaboote), which is the load-bearing, still-UNVERIFIED piece
 (`docs/ARCHITECTURE.md` §9). A VM lets us force boot failures and watch recovery safely and
 repeatably. It needs almost no resources: the appliance must run on small boxes anyway.

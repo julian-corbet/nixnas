@@ -46,11 +46,9 @@ in
       };
     };
 
-    # rescue.extraPackages: the operator's own tools on a STICK-RESIDENT system — set on the
-    # hot-mode RESCUE host (a usb-mode nixnas), where they must be present exactly when the
-    # pool is dead. usb-gated: a hot-mode MAIN puts tools in its (unlimited) own config.
+    # Optional tools for a USB-resident appliance. The independent nixrescue role owns recovery.
     environment.systemPackages =
-      lib.optionals (cfg.store.location == "usb") cfg.rescue.extraPackages;
+      lib.optionals (cfg.store.location == "usb") cfg.store.extraPackages;
 
     services.tailscale = mkIf cfg.tailscale.enable ({
       enable = true;

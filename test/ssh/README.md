@@ -5,10 +5,8 @@ Two throwaway ed25519 keys, committed on purpose — exactly like the demo LUKS 
 
 - `demo_key` / `.pub` — the **client** key that logs into the demo image (initrd
   remote-unlock + the running sshd); its public half is in `nixnas.admin.authorizedKeys`.
-- `demo_initrd_host_ed25519_key` / `.pub` — a plaintext initrd sshd **host** key for the
-  Path-B fallback (`sealHostKey = false` + `boot.remoteUnlock.hostKeyPath`). The demo host
-  does NOT use it — it exercises the default TPM-sealed path, where the host key is
-  generated + sealed on first boot; this pair exists for testing the no-TPM fallback.
+- The initrd sshd **host** key is deliberately absent from this repository. It is generated
+  after a successful boot and stored only as a TPM-gated encrypted credential on the ESP.
 
 **Never use this key on real hardware.** A real host lists the operator's own public keys
 in `nixnas.admin.authorizedKeys` (private overlay) and its private key never enters this

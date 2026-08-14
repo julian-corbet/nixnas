@@ -38,7 +38,7 @@ There are therefore **two separable wins**, and only the first is free:
 | Win | How | Cost |
 |---|---|---|
 | **Less wear + faster boot** | mount options only — physical blocks written/read are compressed | none (no extra machinery) |
-| **Density** (`df` reflects the real, smaller size → more generations fit) | a **release pass**: `f2fs_io release_cblocks` over `/nix/store` after each build | a little plumbing + the released-file semantics below — **LANDED** (`modules/lib/f2fs-release-cblocks.nix`): the image build (an activationScript in `disk.nix`), `rescue-maintain`'s foreign-store `nix copy`, and ongoing local rebuilds (`nix.extraOptions post-build-hook`, `optimizations.nix`) all call it. Confirmed on a real deployment (2026-07-04): a store that had never run this pass released ~824 MiB (55%→40% used) the first time it ran. |
+| **Density** (`df` reflects the real, smaller size → more generations fit) | a **release pass**: `f2fs_io release_cblocks` over `/nix/store` after each build | a little plumbing + the released-file semantics below — **LANDED** (`modules/lib/f2fs-release-cblocks.nix`): the image build and ongoing local rebuilds (`nix.extraOptions` post-build hook) call it. Confirmed on a real deployment (2026-07-04): a store that had never run this pass released ~824 MiB (55%→40% used) the first time it ran. |
 
 **The release pass does not get in Nix's way.** `F2FS_IOC_RELEASE_COMPRESS_BLOCKS` returns the
 reserved-but-unused blocks and sets the f2fs-internal flag **`FI_COMPRESS_RELEASED`** — which,

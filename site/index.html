@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>nixnas &mdash; your declarative NixOS, secure and RAM-resident, on a USB stick</title>
-  <meta name="description" content="nixnas packages your own declarative NixOS into a secure, RAM-resident USB appliance: Secure Boot with your keys, TPM2+PIN unlock, headless over SSH, a tuned CachyOS kernel, self-updating with rollback. Bring your config and your storage — a local TUI writes your image.">
+  <meta name="description" content="nixnas packages your declarative NixOS into a secure USB appliance: Secure Boot with your keys, mandatory passphrase unlock, TPM-gated initrd SSH, and rollback. Bring your config and storage.">
   <meta name="theme-color" content="#0b1120" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta property="og:title" content="nixnas">
-  <meta property="og:description" content="Your declarative NixOS, on a USB stick — secure, RAM-resident, self-updating. Secure Boot + TPM2 PIN, headless unlock, CachyOS-tuned. Bring your config and your storage; a local TUI writes your image.">
+  <meta property="og:description" content="Your declarative NixOS on a USB stick: owner Secure Boot keys, mandatory passphrase, TPM-gated remote unlock, and rollback.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nixnas.corbet.ch">
   <meta name="twitter:card" content="summary">
@@ -77,7 +77,7 @@
 
 <span class="prompt">$</span> <span class="output"># boots reachable, data still locked — one passphrase over SSH:</span>
 <span class="output">$ ssh root@box nixnas-unlock   🔐 passphrase: ********</span>
-<span class="ok">[  OK  ]</span><span class="output"> store: TPM2 · /nix on f2fs zstd:22 · root = tmpfs (RAM)
+<span class="ok">[  OK  ]</span><span class="output"> store: passphrase-only · /nix on f2fs zstd:22 · root = tmpfs (RAM)
 [  OK  ] your storage unlocked + imported + mounted — never formatted</span>
 box login: _</code></pre>
     </div>
@@ -103,7 +103,7 @@ box login: _</code></pre>
       <div class="step">
         <div class="step-num">3</div>
         <h3>Boot from RAM</h3>
-        <p>Encrypted, headless, running entirely in RAM. The stick unlocks via TPM2; your data waits for ONE passphrase over SSH (<code>nixnas-unlock</code>). A bad update? Boot the previous generation from the menu.</p>
+        <p>Encrypted, headless, with a tmpfs root. Every disk needs your passphrase; TPM protects only the initrd SSH identity. A bad update? Boot the previous generation from the menu.</p>
       </div>
     </div>
   </div>
@@ -122,12 +122,12 @@ box login: _</code></pre>
         <p><strong>lanzaboote</strong> signs every Unified Kernel Image with your own PK/KEK/db. The Microsoft CA is not enrolled &mdash; no unsigned kernel runs. Paired with a firmware password and measured boot, it's evil-maid hardened.</p>
       </div>
       <div class="feature">
-        <h3>TPM2 store unlock</h3>
-        <p>The store key is released only when the boot chain measures clean &mdash; optionally <em>plus</em> a PIN on every boot (strict default; auto-unlock is the unattended-NAS choice). A mandatory recovery keyslot is the fallback.</p>
+        <h3>Passphrase-only disks</h3>
+        <p>The operator supplies a passphrase on every boot. No TPM token or auto-unlock path can release a disk key.</p>
       </div>
       <div class="feature">
         <h3>Headless remote unlock</h3>
-        <p>No console? The box boots reachable with the data locked; <code>nixnas-unlock</code> over SSH opens everything. With the strict PIN, the initrd itself runs sshd &mdash; validated unlocking the box entirely over the network.</p>
+        <p>No console? A per-device TPM-gated initrd SSH identity authenticates the channel for the mandatory passphrase. With no TPM, unlock locally or through IPMI.</p>
       </div>
       <div class="feature">
         <h3>Tuned for speed</h3>
@@ -139,7 +139,7 @@ box login: _</code></pre>
       </div>
       <div class="feature">
         <h3>Self-update, never self-reboots</h3>
-        <p><code>autoUpgrade</code> stages the next generation and stops &mdash; it activates on your next PIN-unlocked reboot, so a headless box is never stuck at an unlock prompt.</p>
+        <p><code>autoUpgrade</code> stages the next generation and stops &mdash; it activates on your next operator-unlocked reboot, so a headless box is never abandoned at a passphrase prompt.</p>
       </div>
       <div class="feature">
         <h3>Bring your own storage</h3>
@@ -151,7 +151,7 @@ box login: _</code></pre>
       </div>
       <div class="feature">
         <h3>Portable disks</h3>
-        <p>Only the stick binds to the TPM. Your data carries a plain passphrase keyslot, so a disk pulled into any machine still opens &mdash; no specific box's TPM required.</p>
+        <p>Every disk carries a passphrase keyslot, so a disk pulled into another machine still opens. TPM protects only the remote unlock identity.</p>
       </div>
       <div class="feature">
         <h3>One passphrase, all your data</h3>
@@ -172,7 +172,7 @@ box login: _</code></pre>
      ESP     signed UKIs        -  Secure Boot (your keys) + rollback
      store   LUKS2 + f2fs-zstd  -  the nix store = your OS
        |
-       |  unlock once:  TPM2 + PIN  (headless, over SSH in the initrd)
+       |  unlock once:  passphrase  (local/IPMI or TPM-gated initrd SSH)
        v
    root = tmpfs (RAM)  -  /nix warmed into compressed RAM
        |
@@ -219,7 +219,7 @@ box login: _</code></pre>
       </div>
     </div>
     <div class="status-note">
-      <p><strong>Status.</strong> Built and validated end to end in a VM (QEMU / OVMF / swtpm): the CachyOS kernel, impermanence, the LUKS f2fs-zstd store, lanzaboote Secure Boot, TPM2 + PIN, headless initrd-SSH unlock, rollback and self-update all boot in one image. Hardware bring-up &mdash; Secure-Boot key enrolment on real UEFI, the boot-counting bless loop, the firmware password and the TPM2-NV anti-rollback counter &mdash; is the next step. See the <a href="https://github.com/julian-corbet/nixnas/blob/main/docs/ARCHITECTURE.md">architecture notes</a>.</p>
+      <p><strong>Status.</strong> The passphrase-only LUKS image, TPM-gated initrd SSH identity, rollback, and update paths are VM-tested. Real-hardware gates remain: owner-key Secure Boot enrollment, firmware setup-password enforcement, TPM credential bootstrap, and physical main/rescue boots. Signed-version anti-rollback is not claimed. See the <a href="https://github.com/julian-corbet/nixnas/blob/main/docs/ARCHITECTURE.md">architecture notes</a>.</p>
     </div>
   </div>
 </section>

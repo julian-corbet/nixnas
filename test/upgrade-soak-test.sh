@@ -23,9 +23,9 @@
 #   (which could invalidate switch-to-configuration's assumptions).
 #
 # BOOT SEQUENCE (6 boots total):
-#   Boot 0 — setup: serial passphrase, TPM2 enrolment (verify-tpm2) + host-key seal
+#   Boot 0 — setup: serial passphrase + TPM-sealed SSH host-key credential
 #             (nixnas-seal-hostkey), nix copy, record baseline, stage cycle 1.
-#   Boots 1-5 — one per cycle: initrd-SSH (sealed host key) → deliver PIN over SSH,
+#   Boots 1-5 — one per cycle: initrd-SSH (sealed host key) → deliver passphrase over SSH,
 #               wait for running system, assert, record du, stage next cycle.
 #
 # Needs no root on the host: the VM runs as the current user (KVM group access is enough).
@@ -153,11 +153,11 @@ for g in $(seq 2 $((N + 1))); do
 done
 
 # ── 2. BOOT 0: setup boot ─────────────────────────────────────────────────────────────
-# The first boot uses the plain passphrase slot (no TPM2 token yet). verify-tpm2.nix
-# (baked into the demo image) enrols the TPM2+PIN keyslot at multi-user. nixnas-seal-
-# hostkey seals the initrd-SSH host key so boots 1-5 can use initrd-SSH for PIN delivery.
+# Every boot uses the passphrase-only LUKS slot. `nixboot-seal-hostkey` creates the
+# TPM-gated initrd-SSH identity after boot 0, so boots 1-5 can deliver that same passphrase
+# through an authenticated remote channel.
 LOG0="$WORK/boot0.log"; FIFO0="$WORK/in0"; mkfifo "$FIFO0"
-echo ">> BOOT 0: serial passphrase, TPM2 enrolment + host-key seal, nix copy ..."
+echo ">> BOOT 0: serial passphrase + host-key seal, nix copy ..."
 start_swtpm
 run_qemu < "$FIFO0" > "$LOG0" 2>&1 &
 VM0=$!
@@ -229,7 +229,7 @@ for cycle in $(seq 1 "$N"); do
   exec 4> "$FIFO_C"
 
   # Try initrd-SSH first (sealed host key from boot 0). If it comes up within 60s,
-  # deliver the PIN via systemd-tty-ask-password-agent so LUKS opens headlessly.
+  # deliver the passphrase via systemd-tty-ask-password-agent so LUKS opens headlessly.
   # Unconditionally also queue a serial feed after a longer delay as a fallback — the
   # serial passphrase is harmless if LUKS is already open (input lands on the login prompt).
   ( sleep 32; printf '%s\n' "$PASS" >&4 ) &   # serial fallback — harmless if redundant
@@ -245,8 +245,8 @@ for cycle in $(seq 1 "$N"); do
     # Is this initrd-SSH or the running-system sshd? Check whether /boot is mounted.
     on_running=$("${SSH[@]}" -o BatchMode=yes "test -d /boot/EFI/Linux && echo yes || echo no" 2>/dev/null || echo no)
     if [ "$on_running" = "no" ]; then
-      # initrd-SSH is up; deliver the PIN to the password agent.
-      echo "   cycle ${cycle}: initrd-SSH up — delivering PIN via password agent"
+      # initrd-SSH is up; deliver the LUKS passphrase to the password agent.
+      echo "   cycle ${cycle}: initrd-SSH up — delivering passphrase via password agent"
       printf '%s\n' "$PASS" | "${SSH[@]}" -tt 'systemd-tty-ask-password-agent --query' 2>/dev/null || true
     fi
   fi

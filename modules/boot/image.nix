@@ -4,7 +4,7 @@
 # boot-counting, console ordering) moved to nixboot (`nixboot.*`, see ./nixboot.nix — this
 # appliance's own bridge from `nixnas.boot.*` into nixboot's option surface). What stays HERE
 # is the GEOMETRY nixboot explicitly disclaims owning: `boot.initrd.systemd.enable` (the initrd
-# init system TPM2-LUKS unlock and lanzaboote both need — nixboot deliberately leaves this to
+# init system, remote passphrase agent, and lanzaboote need — nixboot deliberately leaves this to
 # whoever composes its own remote-unlock/LUKS wiring, see its own module header), the finding-the
 # -USB-stick mechanism (`nixboot.media.usb.enable`, deliberately independent of `nixboot.enable`
 # — see that option's own doc), and the kernel modules the initrd needs to see the operator's
@@ -17,7 +17,7 @@ let
 in
 {
   config = lib.mkIf cfg.enable {
-    # systemd in the initrd — the supported path for the TPM2-LUKS unlock + lanzaboote.
+    # systemd in the initrd — the supported path for remote passphrase unlock + lanzaboote.
     # DELIBERATELY NOT owned by nixboot (its own header: "boot.initrd.systemd.enable is
     # DELIBERATELY NOT ported here... if a host's own crypto/appliance config needs systemd in
     # the initrd, that host sets it itself, the same way it will declare its own LUKS members
@@ -34,8 +34,12 @@ in
     # image auto-detects none, so without these the f2fs store's OWN backing disk is
     # invisible to early userspace and boot hangs waiting for the root device.
     boot.initrd.availableKernelModules = [
-      "ahci" "nvme" "sd_mod"                    # SATA / NVMe (data pools on real hardware)
-      "virtio_blk" "virtio_pci" "virtio_scsi"   # VM testing
+      "ahci"
+      "nvme"
+      "sd_mod" # SATA / NVMe (data pools on real hardware)
+      "virtio_blk"
+      "virtio_pci"
+      "virtio_scsi" # VM testing
     ];
     # f2fs (+ its crc32 dep) must be in the initrd to mount the store.
     boot.initrd.kernelModules = [ "f2fs" "crc32" ];

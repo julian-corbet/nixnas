@@ -11,7 +11,7 @@
 # runs the installer in a throwaway VM, then drops the `.raw`. The store is the only
 # device nixnas ever formats — the operator's data pools are import-only.
 #
-# The store is LUKS2-encrypted (single passphrase = the future TPM2 PIN). `passwordFile`
+# The store is LUKS2-encrypted with a mandatory passphrase. `passwordFile`
 # (not settings.keyFile) gives an INTERACTIVE runtime unlock prompt — correct here, because a
 # keyfile would live INSIDE the encrypted store and so be unavailable at unlock time.
 #
@@ -34,9 +34,7 @@ let
   # and consumed here as plain data, never vendored. See nixfs's lib/catalogue.nix
   # (filesystems.f2fs.compression) for the per-flag rationale; `nixfsCatalogue` reaches this
   # module as a plain, partially-applied argument (see the header above), not a config read,
-  # because a recipe is a constant, not a per-host fact. SHARED with rescue-maintain (hot mode
-  # re-mounts this store with the identical mount options) — one source, so the compression
-  # config cannot drift.
+  # because a recipe is a constant, not a per-host fact.
   f2fsRecipe = nixfsCatalogue.filesystems.f2fs.compression;
 in
 {
@@ -131,7 +129,7 @@ in
             };
             nixos = {
               # The store partition's GPT label (else disko auto-names it `disk-main-nixos`).
-              # Load-bearing: crypto/{tpm2,recovery-escrow}.nix find the store by this partlabel,
+              # Load-bearing: crypto/recovery-escrow.nix finds the store by this partlabel,
               # and disko wires the initrd LUKS unlock by-partlabel too — so a stick's label must
               # match the image it was built from (rename ⇒ rebuild+reflash, never in place).
               label = "nixnas";
@@ -139,8 +137,8 @@ in
               content = {
                 type = "luks";
                 name = "cryptstore";
-                # Format-time passphrase (becomes the recovery keyslot; TPM2+PIN is enrolled
-                # later on hardware). The path is read INSIDE the image-builder VM: the TUI
+                # Format-time passphrase remains the mandatory boot keyslot. The path is read
+                # INSIDE the image-builder VM: the TUI
                 # places the real passphrase at the conventional path via
                 # `--pre-format-files`; a build without it FAILS (fail-closed). The demo host
                 # sets an explicit store-path demo passphrase instead.
@@ -149,17 +147,17 @@ in
                   then cfg.boot.usb.luksPassphraseFile
                   else "/tmp/nixnas-luks.key";
                 content = {
-                type = "filesystem";
-                format = "f2fs";
-                mountpoint = "/nix";
-                # zstd:22, 16 KiB cluster, compress everything, exclude the Nix sqlite DB, plus
-                # the flash-friendly + RAM-cache flags -- the full per-flag rationale (incl. the
-                # 8-char F2FS_EXTENSION_LEN trap that caps the sqlite exclusion to the main DB
-                # file only) now lives at the recipe's own home, nixfs's lib/catalogue.nix
-                # (filesystems.f2fs.compression) -- see STORAGE.md §4 / OPTIMIZATIONS.md §3 for
-                # this appliance's own account of why each flag earns its place.
-                extraArgs = [ "-O" f2fsRecipe.mkfsFeatures ];
-                mountOptions = f2fsRecipe.mountOptions;
+                  type = "filesystem";
+                  format = "f2fs";
+                  mountpoint = "/nix";
+                  # zstd:22, 16 KiB cluster, compress everything, exclude the Nix sqlite DB, plus
+                  # the flash-friendly + RAM-cache flags -- the full per-flag rationale (incl. the
+                  # 8-char F2FS_EXTENSION_LEN trap that caps the sqlite exclusion to the main DB
+                  # file only) now lives at the recipe's own home, nixfs's lib/catalogue.nix
+                  # (filesystems.f2fs.compression) -- see STORAGE.md §4 / OPTIMIZATIONS.md §3 for
+                  # this appliance's own account of why each flag earns its place.
+                  extraArgs = [ "-O" f2fsRecipe.mkfsFeatures ];
+                  mountOptions = f2fsRecipe.mountOptions;
                 };
               };
             };
@@ -181,7 +179,7 @@ in
     # later gens. Idempotent: an already-released file's ioctl is a cheap no-op. Confirmed
     # load-bearing on a real deployment (2026-07-04): a store that never ran this pass stayed at
     # its pre-compression size (55% used; 40% after one manual pass). Same async pattern as
-    # rescue-maintain (the first instance of this defect class fixed).
+    # other slow boot-media maintenance work.
     systemd.services.nixnas-f2fs-release-cblocks = {
       description = "f2fs compression release pass over the on-stick /nix/store (density reclaim)";
       serviceConfig = {

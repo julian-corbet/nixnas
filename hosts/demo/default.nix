@@ -25,18 +25,15 @@
     # Throwaway DEMO key (test/ssh/demo_key) — for the test VM only. A real host lists the
     # operator's own keys here; they authorise BOTH the initrd remote-unlock and admin sshd.
     admin.authorizedKeys = [ (lib.fileContents ../../test/ssh/demo_key.pub) ];
-    # sealHostKey = true (default) + crypto.tpm2.enable = true → the initrd-SSH host key is
-    # generated and TPM2-sealed on first boot; no plaintext key needed here. A real host gets
-    # the same behaviour automatically. The bootstrap caveat (the FIRST unlock happens at the
-    # machine — monitor with the "video" console default, or serial/IPMI-SOL) is documented
-    # in modules/boot/remote-unlock.nix.
+    # The initrd-SSH host key is generated and TPM2-sealed after the first successful local
+    # boot; no plaintext key or TPM-backed disk key exists. The first unlock therefore happens
+    # at the machine (monitor by default, serial/IPMI-SOL in CI).
 
     # Reference-box kernel tuning (a generic adopter would leave march at the x86_64-v1
     # default; we build for a known x86-64-v3 CPU). variant=latest, lto=thin, eevdf are defaults.
     kernel.march = "x86_64-v3";
 
     boot.secureBoot.enable = true;
-    crypto.tpm2.enable = true;
 
     # CI/QEMU: the test suites observe (and drive) the VM ONLY through the serial
     # port, so ttyS0 must stay /dev/console here — systemd status lines, the

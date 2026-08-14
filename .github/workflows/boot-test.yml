@@ -162,7 +162,7 @@ jobs:
   # Matrix eval: cheap eval-only proof of six operator-persona variants (no builds, no QEMU).
   # Confirms option wiring, assertion guards, and module interactions across the matrix.
   matrix-eval:
-    name: matrix variant eval checks (no-tpm / stick-4/16/32g / hot-ext4 / pin-strict / persist-nested)
+    name: matrix variant eval checks (stick-4/16/32g / hot-ext4 / hot-zfs-property / persist-nested)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

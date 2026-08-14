@@ -13,8 +13,7 @@
 # this file tests, is the initrd unlock-external-devices + mount-/nix-and-/ step.
 #
 # The disk carries THREE LUKS members: `nixstore-demo` (ext4, pre-populated with the toplevel
-# closure via `nix copy` to a chroot store — the SAME primitive rescue-maintain uses, so this
-# doubly validates that path), `nixstore-demo2` (no filesystem — proves the serialised
+# closure via `nix copy` to a chroot store), `nixstore-demo2` (no filesystem — proves the serialised
 # single-entry unlock), and `nixroot-demo` (ext4, matching hosts/demo-hot.nix's
 # store.root.unlock) — freshly `mkfs.ext4`'d and otherwise EMPTY: NixOS activation populates
 # /etc, users, and every service's /var/lib on first boot exactly the same way whether root is
@@ -126,8 +125,7 @@ mkfs.ext4 -q -L nixroot /dev/mapper/nixroot-demo
 cryptsetup close nixroot-demo; MAPPER_ROOT=""
 echo -n "$PASS" | cryptsetup open "$part" nixstore-demo -; MAPPER=1
 mkfs.ext4 -q -L nixstore /dev/mapper/nixstore-demo
-# Mount at $ROOT/nix so $ROOT is a chroot-store root (store at $ROOT/nix/store) — exactly the
-# shape rescue-maintain copies into.
+# Mount at $ROOT/nix so $ROOT is a chroot-store root (store at $ROOT/nix/store).
 ROOT="$WORK/root"; MNT="$ROOT/nix"; mkdir -p "$MNT"
 mount /dev/mapper/nixstore-demo "$MNT"
 echo ">> copying BOTH toplevel closures onto the ext4 store (nix copy → chroot store) …"

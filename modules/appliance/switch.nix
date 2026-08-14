@@ -58,11 +58,11 @@ let
   switchTool = pkgs.writeShellApplication {
     name = "nixnas-switch";
     runtimeInputs = with pkgs; [
-      systemd     # systemd-run, systemctl, journalctl
-      coreutils   # id, readlink, date, cat, mkdir, rm, sleep
-      util-linux  # flock — probes the SAME flock(2) switch-to-configuration-ng takes
-      procps      # pgrep — liveness check before cleaning the lock
-      psmisc      # fuser — reports who holds the orphaned lock fd
+      systemd # systemd-run, systemctl, journalctl
+      coreutils # id, readlink, date, cat, mkdir, rm, sleep
+      util-linux # flock — probes the SAME flock(2) switch-to-configuration-ng takes
+      procps # pgrep — liveness check before cleaning the lock
+      psmisc # fuser — reports who holds the orphaned lock fd
     ];
     text = ''
       # ── arguments ──────────────────────────────────────────────────────────
@@ -210,7 +210,7 @@ let
 in
 {
   # Expose the tool UNCONDITIONALLY so CI can build it (writeShellApplication runs
-  # shellcheck at build time — the cheap guard; same pattern as rescue-maintain).
+  # shellcheck at build time — the cheap guard used for every shipped shell application).
   config = lib.mkMerge [
     { system.build.nixnasSwitch = switchTool; }
 

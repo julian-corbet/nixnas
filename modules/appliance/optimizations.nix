@@ -14,8 +14,8 @@ in
     # ── f2fs compression release pass, ongoing case (modules/lib/f2fs-release-cblocks.nix):
     #    LOCAL builds (auto-upgrade's `nixos-rebuild`) run on this box's OWN nix-daemon, so
     #    Nix's post-build-hook fires per new output — no full-store rescan needed here, unlike
-    #    the image-build (disk.nix) and rescue-maintain (foreign-store `nix copy`) call sites,
-    #    which this hook can never see. usb-mode only: a hot-mode MAIN's /nix is never f2fs.
+    #    the image-build (disk.nix) call site, which this hook can never see. usb-mode only: a
+    #    hot-mode MAIN's /nix is never f2fs.
     nix.extraOptions = lib.mkIf (cfg.store.location == "usb") ''
       post-build-hook = ${pkgs.writeShellScript "nixnas-release-post-build-hook" ''
         #!/bin/sh
@@ -31,13 +31,16 @@ in
     services.journald.storage = if cfg.store.persistLogs then "persistent" else "volatile";
     systemd.tmpfiles.rules = lib.mkIf cfg.store.persistLogs [ "d /nix/nixnas/journal 0700 root root - -" ];
     fileSystems."/var/log/journal" = lib.mkIf cfg.store.persistLogs {
-      device = "/nix/nixnas/journal"; fsType = "none"; options = [ "bind" ]; neededForBoot = true;
+      device = "/nix/nixnas/journal";
+      fsType = "none";
+      options = [ "bind" ];
+      neededForBoot = true;
     };
-    systemd.coredump.settings.Coredump.Storage = "none";   # don't spool coredumps
-    boot.tmp.useTmpfs = true;                            # /tmp in RAM
-    documentation.enable = lib.mkDefault false;          # smaller closure → fewer bytes per update
+    systemd.coredump.settings.Coredump.Storage = "none"; # don't spool coredumps
+    boot.tmp.useTmpfs = true; # /tmp in RAM
+    documentation.enable = lib.mkDefault false; # smaller closure → fewer bytes per update
     documentation.nixos.enable = lib.mkDefault false;
-    systemd.services.systemd-networkd-wait-online.enable = lib.mkDefault false;  # no boot stall on link-up
+    systemd.services.systemd-networkd-wait-online.enable = lib.mkDefault false; # no boot stall on link-up
 
     # ── No disk swap. The memory subsystem itself belongs to nixram ──────────
     # `swapDevices` stays here because "this appliance has no disk swap" is a

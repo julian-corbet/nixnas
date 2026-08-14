@@ -3,7 +3,7 @@
 Every entry is a lesson from a REAL boot on REAL hardware, not a speculative feature.
 Items graduate out of this file when they land as code + a test. (The first real-hardware
 deployment produced the console flip, the 5s menu, the grow-unit removal, the auth
-module, the failed-units CI gate, and the ephemeral first-boot SSH key — this file
+module, the failed-units CI gate, and the first-boot SSH bootstrap problem — this file
 tracks what that session surfaced but did not yet land.)
 
 ## 1. networkd everywhere (drop dhcpcd in stage 2) — LANDED
@@ -54,8 +54,8 @@ killed mid-flight when the network flapped — getty had already restarted but u
 activation had not run yet: a HALF-activated system (login rejects everyone). The fix
 in the field was re-running the switch under `systemd-run` (detached, session-immune).
 **Fix:** ship `nixnas-switch` (a thin wrapper: `systemd-run --unit=… switch-to-
-configuration <mode>` + result reporting) and use it in docs/auto-upgrade/
-rescue-maintain paths; document "never run activation through a droppable session".
+configuration <mode>` + result reporting) and use it in activation paths; document "never run
+activation through a droppable session".
 **Landed:** `modules/appliance/switch.nix` ships
 `nixnas-switch [switch|boot|test] [--generation <store-path>]` on both usb and hot
 systems: detached activation via `systemd-run --no-block --collect` (PID-1-owned —
@@ -66,37 +66,13 @@ reports success even for a failed run), refusal while any nixnas-switch unit is
 loaded, and stale `/run/nixos/switch-to-configuration.lock` cleanup ONLY when the
 lock is flock'd but no switch process is alive (the exit-11 retry blocker: an
 orphaned inherited fd — deleting the file gives stc a fresh inode). auto-upgrade and
-rescue-maintain already run inside systemd units, i.e. detached by construction; the
 README now says "never run activation through a droppable session".
 
-## 5. Rescue firmware posture (document, not change)
-**Evidence:** the rescue boots a discrete GPU host with `amdgpu … Fatal error during
-GPU init` (no firmware on the stick). Correct for the rescue (closure budget; BMC
-graphics is the console) but it LOOKS alarming on the console and cost triage time.
-**Fix:** docs (HOT-MODE/README): the rescue is deliberately firmware-lean; GPU errors
-on its console are expected on dGPU hosts; the MAIN host config carries
-`hardware.enableRedistributableFirmware`.
+## 5–7. Legacy per-host rescue/install path — REMOVED
 
-## 6. install-hot needs nix-command enabled (field-hit)
-**Evidence:** `nixnas-install-hot` runs `nix copy --to "$target"` (a nix-command call), but the
-rescue's nix.conf did not have `experimental-features = nix-command` — so the install aborted
-`error: experimental Nix feature 'nix-command' is disabled`. Worked around with
-`NIX_CONFIG='experimental-features = nix-command flakes' nixnas-install-hot …`.
-**Fix:** either the rescue (usb-mode) nix config enables `nix-command` by default (it ships
-`nixnas-install-hot`, which requires it), or install-hot invokes `nix copy` with
-`--extra-experimental-features nix-command` itself. The latter is more robust (self-contained).
-
-## 7. install-hot must place the console auth hash on the hot store (field-hit)
-**Evidence:** the MAIN's install warned `password file '/nix/nixnas/auth/passphrase.hash' does
-not exist` — the auth module points root/admin at that runtime file (modules/appliance/auth.nix),
-but only the TUI image build writes it (usb images); install-hot never seeds it onto the hot
-store, so the MAIN's CONSOLE login is fail-closed locked (SSH-key still works). Worked around by
-writing the yescrypt hash to `hot/system/nix` `…/nixnas/auth/passphrase.hash` (0600) by hand
-before the reboot.
-**Fix:** install-hot should seed the auth hash onto the hot store the same way it seeds the SB
-PKI (step 3) — either copy the operator-provided hash, or (cleaner) let the MAIN config carry an
-inline `hashedPassword` for the hot mode where the TUI file mechanism doesn't apply. Reconcile
-the auth module (hashedPasswordFile) vs an inline hashedPassword so hot systems aren't locked.
+The old firmware-lean per-host rescue, its maintainer, and the blank-root installer were removed.
+Fleet recovery is now the separate, broadly compatible nixrescue role; these historical field
+issues are no longer actionable nixnas backlog.
 
 ## 8. TPM seal must survive SB key enrollment (self-heal) — LANDED
 **Evidence (first real deployment):** the initrd-SSH host key is sealed on first
@@ -108,8 +84,8 @@ brick:
      — it keyed off the file merely EXISTING, so a stale, undecryptable `.cred` permanently
      blocked the one code path that could re-bind the key to the new PCR 7. It **never re-sealed**;
   2. the initrd sshd (`Restart=on-failure` by nixpkgs default) retried its failed credential
-     setup, each retry firing another TPM2 unseal; together with the store keyslot's own failed
-     PCR-7 unseal this hammered the AMD fTPM into **dictionary-attack lockout** (`inLockout=1` →
+     setup, each retry firing another TPM2 unseal. This hammered the AMD fTPM into
+     **dictionary-attack lockout** (`inLockout=1` →
      `TPM_RC_LOCKOUT`/0x921), which then failed `systemd-tpm2-setup`'s SRK provisioning.
   Manual field remedy was: `tpm2_dictionarylockout --clear-lockout`, `rm` the stale `.cred`, and
   `systemctl start nixnas-seal-hostkey` to re-seal against the new PCR 7.
@@ -130,12 +106,6 @@ comment (remote-unlock.nix, options.nix ×2, ARCHITECTURE §6) is corrected to n
 as the one PCR 7 delta. `modules/boot/remote-unlock.nix`; covered by the existing
 `test/seal-2boot-test.sh` (boot #2 re-runs the seal: valid cred self-tests OK → skip → stable
 fingerprint) and `test/verify-sealed-hostkey.nix`.
-**Follow-up (store keyslot parity):** the STORE LUKS keyslot (`modules/crypto/tpm2.nix`,
-`tpm2-device=auto`, PCR 7) has the identical staleness — after SB enrollment its TPM2 unseal
-also fails (store still opens via the passphrase slot, but it feeds the same DA counter each
-boot). `nixnas-enroll-tpm2` is already idempotent (`--wipe-slot=tpm2`), so the fix is to RE-RUN
-it after enrollment + reboot; this is now documented in `options.nix` and the `nixnas-enroll-sb`
-success message. A box-side read-only warning unit (analogous to `nixnas-recovery-status`) that
-flags a store keyslot that no longer unseals is the remaining not-yet-landed piece — untestable
-in the keyless demo (no TPM2 store slot is enrolled there), so it is tracked here rather than
-shipped blind.
+**Root simplification:** nixnas no longer supports a TPM-bound LUKS keyslot. TPM is reserved for
+this SSH identity; every disk always requires the operator's passphrase. Consequently a stale
+credential can only remove remote unlock for one boot, never interfere with disk decryption.

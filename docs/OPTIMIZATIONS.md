@@ -40,7 +40,7 @@ never let an impermanence misconfig silently start persisting onto them.
 ## 2. Faster boot
 
 - ⬢ `boot.initrd.systemd.enable = true;` — parallel, dependency-ordered initrd; also the
-  supported path for TPM2-LUKS unlock + lanzaboote. (`modules/boot/image.nix`)
+  supported path for the remote passphrase agent + lanzaboote. (`modules/boot/image.nix`)
 - ◇ `boot.kernelParams = [ "quiet" "loglevel=3" "udev.log_level=3" "rd.udev.log_level=3" ];`
   `boot.consoleLogLevel = 3;` — kill console/serial log I/O (slow on a VT, dominates on serial).
   DEFERRED while the appliance is in its bring-up phase: serial output is the debugging channel

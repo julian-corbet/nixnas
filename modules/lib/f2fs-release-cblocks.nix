@@ -13,14 +13,11 @@
 # the behavior scripts/verify-f2fs-store.sh proves safe (hardlink-to-released, unlink-and-GC,
 # fsck-clean).
 #
-# ONE script, THREE call sites — because release only happens where NEW files land on an
-# f2fs-backed nix store, and none of those sites overlap:
+# ONE script, TWO call sites — because release only happens where NEW files land on an
+# f2fs-backed nix store:
 #   1. Image build (modules/boot/disk.nix, an activationScript): covers gen-1, written once
 #      by the disko installer inside the builder VM.
-#   2. rescue-maintain (modules/appliance/rescue-maintain.nix): its `nix copy --to $mnt`
-#      writes into a MOUNTED-ELSEWHERE store from the MAIN's own daemon — a foreign-store
-#      write that no local nix-daemon hook ever sees.
-#   3. Ongoing local rebuilds (modules/appliance/optimizations.nix, nix.extraOptions
+#   2. Ongoing local rebuilds (modules/appliance/optimizations.nix, nix.extraOptions
 #      post-build-hook): auto-upgrade's `system.autoUpgrade` runs as a LOCAL build on the
 #      box's own daemon, so Nix's post-build-hook fires per new path automatically — no
 #      explicit call needed there, just this registration.
@@ -32,8 +29,7 @@ pkgs.writeShellApplication {
   runtimeInputs = [ pkgs.f2fs-tools pkgs.findutils ];
   text = ''
     # One or more roots to sweep: "/nix/store" for a full local pass (disk.nix's install-time
-    # hook), a mounted-elsewhere chroot store root's "$mnt/nix/store" (rescue-maintain), or the
-    # individual $OUT_PATHS Nix's post-build-hook hands us (word-split by the caller — the
+    # hook), or the individual $OUT_PATHS Nix's post-build-hook hands us (word-split by the caller — the
     # common ongoing case, one path per newly-built derivation output, no full-store rescan).
     if [ "$#" -eq 0 ]; then
       echo "usage: nixnas-f2fs-release-cblocks <store-root>..." >&2

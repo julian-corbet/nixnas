@@ -23,16 +23,15 @@
 {
   nixnas.store.location = "hot";
   nixnas.store.hot = {
-    device  = "/dev/mapper/nixstore-matrix";
-    fsType  = "ext4";
+    device = "/dev/mapper/nixstore-matrix";
+    fsType = "ext4";
     unlock.nixstore-matrix = "/dev/disk/by-partlabel/nixstore-matrix";
   };
   nixnas.store.root = {
-    device  = "/dev/mapper/nixroot-matrix";
-    fsType  = "ext4";
+    device = "/dev/mapper/nixroot-matrix";
+    fsType = "ext4";
     unlock.nixroot-matrix = "/dev/disk/by-partlabel/nixroot-matrix";
   };
-  nixnas.rescue.enable = false;
   # hot mode enters the store key in the initrd — remote-unlock keeps initrd-SSH on.
   nixnas.boot.remoteUnlock.enable = true;
 

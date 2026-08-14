@@ -46,11 +46,8 @@
     # (`nixboot.extraEntries`, `nixboot.media.usb.enable`, `nixboot.secureBoot.*`,
     # `nixboot.remoteUnlock.*`, `nixboot.generations.keep`, `nixboot.bootCounting.tries`,
     # `nixboot.loader.*`, `nixboot.console.*`). `nixboot.enable = true` on every nixnas host;
-    # modules/boot/nixboot.nix is the bridge that reads `nixnas.boot.*` /
-    # `nixnas.crypto.tpm2.*` / `nixnas.admin.authorizedKeys` (this repo's own public option
-    # surface) and writes nixboot's own `nixboot.*` options -- see that file's own header for
-    # the boundary and for the one thing (the data-store TPM2 re-enrollment reminder) that
-    # stays nixnas's alone because nixboot has no data-unlock concept at all.
+    # modules/boot/nixboot.nix is the bridge that reads `nixnas.boot.*` and
+    # `nixnas.admin.authorizedKeys` and writes nixboot's own `nixboot.*` options.
     nixboot = {
       url = "github:julian-corbet/nixboot-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -139,8 +136,8 @@
         # application, closing over the value before it ever becomes a module argument at all,
         # rules the collision out by construction. modules/default.nix takes `nixfsCatalogue` as
         # a plain function argument (not `{ config, lib, pkgs, ... }:`) and threads it through to
-        # the three files that actually read it (boot/kernel.nix, boot/disk.nix,
-        # appliance/rescue-maintain.nix) the same way, so `import ./modules { ... }` below is
+        # the two files that actually read it (boot/kernel.nix and boot/disk.nix) the same way,
+        # so `import ./modules { ... }` below is
         # fully applied before the module system ever sees the result — a plain attrset, never a
         # function it would try to call with the standard module args. A consumer building a real
         # host from `nixosModules.nixnas` still never has to know nixfs exists, let alone follow
@@ -187,11 +184,10 @@
           self.nixosModules.nixnas
           lanzabootePackageModule
           ./hosts/demo
-          ./test/verify-image.nix          # DEV self-check (f2fs compression report on the console)
-          ./test/verify-tpm2.nix           # DEV self-check (TPM2+PIN enrollment against swtpm)
+          ./test/verify-image.nix # DEV self-check (f2fs compression report on the console)
           ./test/verify-sealed-hostkey.nix # DEV self-check (TPM2-sealed initrd SSH host key)
-          ./test/verify-recovery.nix       # DEV self-check (break-glass recovery keyslot, loopback LUKS)
-          ./test/verify-writes.nix         # DEV self-check (USB stick write-isolation)
+          ./test/verify-recovery.nix # DEV self-check (break-glass recovery keyslot, loopback LUKS)
+          ./test/verify-writes.nix # DEV self-check (USB stick write-isolation)
           # The CachyOS kernel set (pkgs.cachyosKernels); modules/boot/kernel.nix reads it.
           { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
           # Build the throwaway image-builder VM from stable nixpkgs (see inputs above).
@@ -204,10 +200,12 @@
           {
             disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
             disko.imageBuilder.kernelPackages =
-              let sp = nixpkgs-stable.legacyPackages.x86_64-linux;
-              # `linuxPackages.zfs` is a throw in 25.05 — use the canonical module attr
-              # (sp.zfs.kernelModuleAttribute, e.g. "zfs_2_3") the nixpkgs error points to.
-              in sp.linuxPackages.extend (_: _: {
+              let
+                sp = nixpkgs-stable.legacyPackages.x86_64-linux;
+                # `linuxPackages.zfs` is a throw in 25.05 — use the canonical module attr
+                # (sp.zfs.kernelModuleAttribute, e.g. "zfs_2_3") the nixpkgs error points to.
+              in
+              sp.linuxPackages.extend (_: _: {
                 zfs_cachyos = sp.linuxPackages.${sp.zfs.kernelModuleAttribute};
               });
           }
@@ -275,47 +273,6 @@
         ];
       };
 
-      # Hot mode + a PINNED rescue toplevel — proves the nixboot.extraEntries wiring end to end
-      # in CI: `system.build.extraEntryMaintainers.rescue` must actually build (shellcheck
-      # clean) from a REAL toplevel, and `nixnas-rescue-maintain` must be wired to call it (see
-      # the `rescue-uki-pipeline-equivalence` check below). Reuses the demo's OWN toplevel as
-      # the "rescue" toplevel purely to exercise the wiring cheaply — it is already built by the
-      # demo-toplevel check above, so this adds no new closure to build — NOT a template for a
-      # real host, which points rescue.toplevel at an actual minimal rescue nixosConfiguration
-      # (see modules/options.nix's own rescue.toplevel doc). A separate hot-mode host (not
-      # demo-hot.nix, which turns rescue off outright) so this file can set rescue.toplevel
-      # without colliding with demo-hot.nix's own `rescue.enable = false`.
-      nixosConfigurations.demo-hot-rescue-pinned = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = [
-          disko.nixosModules.disko
-          lanzaboote.nixosModules.lanzaboote
-          impermanence.nixosModules.impermanence
-          # Composed here, not inside nixosModules.nixnas — see that module's own comment
-          # on why nixluks stays in the same per-nixosConfiguration camp as the three
-          # modules just above, rather than risking a double-import at a real consumer.
-          nixluks.nixosModules.nixluks
-          nixluks.nixosModules.initrd
-          self.nixosModules.nixnas
-          lanzabootePackageModule
-          ./hosts/demo
-          ./hosts/demo-hot-rescue-pinned.nix
-          {
-            nixnas.rescue.enable = true;
-            nixnas.rescue.toplevel = self.nixosConfigurations.demo.config.system.build.toplevel;
-          }
-          { nixpkgs.overlays = [ nix-cachyos-kernel.overlays.pinned ]; }
-          {
-            disko.imageBuilder.pkgs = nixpkgs-stable.legacyPackages.x86_64-linux;
-            disko.imageBuilder.kernelPackages =
-              let sp = nixpkgs-stable.legacyPackages.x86_64-linux;
-              in sp.linuxPackages.extend (_: _: {
-                zfs_cachyos = sp.linuxPackages.${sp.zfs.kernelModuleAttribute};
-              });
-          }
-        ];
-      };
-
       # Upgrade-soak variant: N=5 generation cycles to prove lzbt keepGenerations pruning.
       # keepGenerations=3 so cycles 3-5 exercise the UKI eviction path. The 5 specialisations
       # (soak-gen-2..6) are pre-built here and nix-copied into the VM — no in-VM Nix eval.
@@ -348,10 +305,6 @@
 
       # Matrix: cheap eval-level variants — one per real-operator persona.
       # Each is demo-base + the variant overlay; no image build, no QEMU needed.
-      nixosConfigurations.matrix-no-tpm = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = matrixBase ++ [ ./hosts/matrix/no-tpm.nix ];
-      };
       nixosConfigurations.matrix-stick-4g = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = matrixBase ++ [ ./hosts/matrix/stick-4g.nix ];
@@ -372,10 +325,6 @@
         system = "x86_64-linux";
         modules = matrixBase ++ [ ./hosts/matrix/hot-zfs-property.nix ];
       };
-      nixosConfigurations.matrix-pin-strict = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = matrixBase ++ [ ./hosts/matrix/pin-strict.nix ];
-      };
       nixosConfigurations.matrix-persist-nested = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = matrixBase ++ [ ./hosts/matrix/persist-nested.nix ];
@@ -388,38 +337,6 @@
         demo-closure-budget = self.nixosConfigurations.demo.config.system.build.storeClosureBudget;
         # hot mode builds (location.nix + the hot wiring) …
         demo-hot-toplevel = self.nixosConfigurations.demo-hot.config.system.build.toplevel;
-        # … and the rescue maintainer's shell passes shellcheck (writeShellApplication build).
-        demo-rescue-maintainer = self.nixosConfigurations.demo.config.system.build.rescueMaintainer;
-        # … and the hot installer's shell too (ships on usb systems — the rescue's install role).
-        demo-hot-installer = self.nixosConfigurations.demo.config.system.build.hotInstaller;
-        # The pinned-rescue + nixboot wiring: the whole host evaluates+builds (exercises every
-        # assertion in rescue-maintain.nix, including the espFileName/timer equivalence checks)…
-        demo-hot-rescue-pinned-toplevel = self.nixosConfigurations.demo-hot-rescue-pinned.config.system.build.toplevel;
-        # … and nixboot's OWN per-entry maintainer — built from a REAL toplevel — shellchecks
-        # clean, proving `nixboot.extraEntries.rescue` is wired to something real, not a
-        # dangling declaration.
-        demo-hot-rescue-pinned-uki-maintainer = self.nixosConfigurations.demo-hot-rescue-pinned.config.system.build.extraEntryMaintainers.rescue;
-        # A build-level (no VM needed) content proof that the pinned path actually calls
-        # nixboot's maintainer, under the SAME ESP filename the original inline pipeline used —
-        # the concrete "same ESP filename discipline" / "same rotation" equivalence check.
-        rescue-uki-pipeline-equivalence =
-          let pkgs = pkgsFor system; in
-          pkgs.runCommand "nixnas-rescue-uki-pipeline-equivalence" { } ''
-            script=${self.nixosConfigurations.demo-hot-rescue-pinned.config.system.build.rescueMaintainer}/bin/nixnas-rescue-maintain
-            grep -q 'nixnas-rescue.efi' "$script" || {
-              echo "FAIL: espFileName discipline — 'nixnas-rescue.efi' not found in the maintainer script" >&2
-              exit 1
-            }
-            grep -q 'nixnas-rescue-prev-2.efi' "$script" || {
-              echo "FAIL: the third protected rescue UKI is absent from the maintainer script" >&2
-              exit 1
-            }
-            grep -q 'nixboot-extra-entry-rescue' "$script" || {
-              echo "FAIL: the pinned branch does not invoke nixboot's built maintainer (nixboot-extra-entry-rescue) — it may have silently fallen back to (or never left) the inline pipeline" >&2
-              exit 1
-            }
-            echo "PASS: pinned rescue-maintain keeps all three rescue UKI slots and hands off to nixboot-extra-entry-rescue" > "$out"
-          '';
         # The TUI compiles cleanly.
         tui-build = self.packages.${system}.tui;
         # ZFS hot-mode topology builds (ZFS initrd + LUKS vdevs).
@@ -427,13 +344,11 @@
         # Soak specialisations evaluate and the host config is structurally valid.
         demo-upgrade-soak-toplevel = self.nixosConfigurations.demo-upgrade-soak.config.system.build.toplevel;
         # Matrix variant toplevels — prove all six personas evaluate and build.
-        matrix-no-tpm-toplevel     = self.nixosConfigurations.matrix-no-tpm.config.system.build.toplevel;
-        matrix-stick-4g-toplevel   = self.nixosConfigurations.matrix-stick-4g.config.system.build.toplevel;
-        matrix-stick-16g-toplevel  = self.nixosConfigurations.matrix-stick-16g.config.system.build.toplevel;
-        matrix-stick-32g-toplevel  = self.nixosConfigurations.matrix-stick-32g.config.system.build.toplevel;
-        matrix-hot-ext4-toplevel   = self.nixosConfigurations.matrix-hot-ext4.config.system.build.toplevel;
+        matrix-stick-4g-toplevel = self.nixosConfigurations.matrix-stick-4g.config.system.build.toplevel;
+        matrix-stick-16g-toplevel = self.nixosConfigurations.matrix-stick-16g.config.system.build.toplevel;
+        matrix-stick-32g-toplevel = self.nixosConfigurations.matrix-stick-32g.config.system.build.toplevel;
+        matrix-hot-ext4-toplevel = self.nixosConfigurations.matrix-hot-ext4.config.system.build.toplevel;
         matrix-hot-zfs-property-toplevel = self.nixosConfigurations.matrix-hot-zfs-property.config.system.build.toplevel;
-        matrix-pin-strict-toplevel = self.nixosConfigurations.matrix-pin-strict.config.system.build.toplevel;
         # persist-enforce must recognize a StateDirectory nested under a bind-mounted
         # ancestor as persisted (modules/appliance/persist-enforce.nix ancestor walk) —
         # regression guard for a real production incident where a nested-persist ACME
@@ -447,44 +362,44 @@
       # (the path the TUI uses, since it can inject the LUKS key via --pre-format-files).
       packages = forAllSystems (system:
         let pkgs = pkgsFor system; in {
-        image = self.nixosConfigurations.demo.config.system.build.diskoImages;
-        imageScript = self.nixosConfigurations.demo.config.system.build.diskoImagesScript;
-        # The hub-side break-glass escrow tool (`nix run .#escrow-recovery -- enroll ...`).
-        # Built per-host by the TUI; this demo build is for discovery/inspection.
-        escrow-recovery = self.nixosConfigurations.demo.config.system.build.nixnasEscrowRecovery;
-        # The guided TUI: `nix run .#tui` (or `nix build .#tui`).
-        tui = pkgs.rustPlatform.buildRustPackage {
-          pname = "nixnas-tui";
-          version = (pkgs.lib.importTOML ./tui/Cargo.toml).package.version;
-          src = ./tui;
-          cargoLock.lockFile = ./tui/Cargo.lock;
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-          # The TUI shells out. `nix`/`sops`/`ssh` intentionally come from the operator's
-          # OWN PATH (their flake, their keys), so we PREFIX (not replace) with only the
-          # small, always-required device tools it can't assume are installed: gptfdisk
-          # (sgdisk — the grow-to-fill partition extend), util-linux (blockdev/lsblk —
-          # the exact byte-size read + device listing), cryptsetup + f2fs-tools (the
-          # workbench grow: open the LUKS store, offline resize.f2fs, close), and
-          # mkpasswd (the console-auth yescrypt hash the build injects). Without this,
-          # the workbench grow degrades to a non-fatal warning and the build's auth-hash
-          # step fails with an actionable message on hosts lacking the tools.
-          postInstall = ''
-            wrapProgram $out/bin/nixnas \
-              --prefix PATH : ${pkgs.lib.makeBinPath [
-                pkgs.gptfdisk
-                pkgs.util-linux
-                pkgs.cryptsetup
-                pkgs.f2fs-tools
-                pkgs.mkpasswd
-              ]}
-          '';
-          meta = {
-            description = "nixnas — guided TUI to configure, build, and flash a nixnas USB stick.";
-            license = pkgs.lib.licenses.asl20;
-            mainProgram = "nixnas";
+          image = self.nixosConfigurations.demo.config.system.build.diskoImages;
+          imageScript = self.nixosConfigurations.demo.config.system.build.diskoImagesScript;
+          # The hub-side break-glass escrow tool (`nix run .#escrow-recovery -- enroll ...`).
+          # Built per-host by the TUI; this demo build is for discovery/inspection.
+          escrow-recovery = self.nixosConfigurations.demo.config.system.build.nixnasEscrowRecovery;
+          # The guided TUI: `nix run .#tui` (or `nix build .#tui`).
+          tui = pkgs.rustPlatform.buildRustPackage {
+            pname = "nixnas-tui";
+            version = (pkgs.lib.importTOML ./tui/Cargo.toml).package.version;
+            src = ./tui;
+            cargoLock.lockFile = ./tui/Cargo.lock;
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            # The TUI shells out. `nix`/`sops`/`ssh` intentionally come from the operator's
+            # OWN PATH (their flake, their keys), so we PREFIX (not replace) with only the
+            # small, always-required device tools it can't assume are installed: gptfdisk
+            # (sgdisk — the grow-to-fill partition extend), util-linux (blockdev/lsblk —
+            # the exact byte-size read + device listing), cryptsetup + f2fs-tools (the
+            # workbench grow: open the LUKS store, offline resize.f2fs, close), and
+            # mkpasswd (the console-auth yescrypt hash the build injects). Without this,
+            # the workbench grow degrades to a non-fatal warning and the build's auth-hash
+            # step fails with an actionable message on hosts lacking the tools.
+            postInstall = ''
+              wrapProgram $out/bin/nixnas \
+                --prefix PATH : ${pkgs.lib.makeBinPath [
+                  pkgs.gptfdisk
+                  pkgs.util-linux
+                  pkgs.cryptsetup
+                  pkgs.f2fs-tools
+                  pkgs.mkpasswd
+                ]}
+            '';
+            meta = {
+              description = "nixnas — guided TUI to configure, build, and flash a nixnas USB stick.";
+              license = pkgs.lib.licenses.asl20;
+              mainProgram = "nixnas";
+            };
           };
-        };
-      });
+        });
 
       # The build-hub toolchain (sign / seal / escrow run here, never on the node).
       devShells = forAllSystems (system:

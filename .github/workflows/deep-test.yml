@@ -1,9 +1,8 @@
-# Long-running boot-chain integration tests — lifecycle, failure-injection, and upgrade-soak.
+# Long-running boot-chain integration tests — failure-injection and upgrade-soak.
 # These tests each take 45-120 minutes and run on a separate schedule so they do not block
 # every push. They also run on workflow_dispatch and on push/PR paths that touch test/** so
 # a developer who edits a test script can trigger them explicitly.
 #
-#   lifecycle      — three-boot install-hot flow (rescue → install → main boot → rescue-only)
 #   failure-*      — power-cut f2fs recovery, pool-absent initrd stall, no-TPM passphrase fallback
 #   upgrade-soak   — N=5 generation cycles, UKI pruning + store-growth table
 name: deep-test
@@ -18,62 +17,6 @@ on:
     paths: [ 'test/**' ]
 
 jobs:
-  # ── lifecycle: rescue → nixnas-install-hot → main boot → rescue-only ─────────────────
-  lifecycle:
-    name: full install-hot lifecycle (rescue → install → main → rescue-only)
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-
-      # Gate: a test script with a syntax error must fail the job HERE, loudly — not
-      # leave it silently dead. (Runs before any expensive setup.)
-      - name: Syntax-check test scripts (bash -n) before running them
-        run: |
-          rc=0
-          for f in test/*.sh; do
-            if bash -n "$f"; then
-              echo "ok: $f"
-            else
-              echo "::error file=$f::bash -n failed — syntax error in $f"
-              rc=1
-            fi
-          done
-          exit "$rc"
-
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          large-packages: true
-          docker-images: true
-          swap-storage: false
-
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Install QEMU + swtpm + OVMF + disk tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 swtpm ovmf gdisk cryptsetup-bin e2fsprogs
-
-      - uses: cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-          extra_nix_config: |
-            accept-flake-config = true
-            extra-substituters = https://attic.xuyh0120.win/lantian
-            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
-            extra-sandbox-paths = /dev/kvm
-
-      - name: Full lifecycle proof (rescue → install-hot → main boot → rescue-only)
-        run: test/lifecycle-test.sh
-
   # ── failure-injection: power-cut f2fs recovery ────────────────────────────────────────
   failure-power-cut:
     name: failure-injection — power-cut mid-write (f2fs recovery)

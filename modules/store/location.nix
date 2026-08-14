@@ -145,8 +145,7 @@ in
         }
       ];
 
-      # The ESP: the MAIN shares the stick's ESP with the rescue (lanzaboote installs the
-      # main's UKIs; rescue-maintain drops EFI/Linux/nixnas-rescue.efi). Mount it by the label
+      # The ESP may also carry independently reconciled boot roles. Mount it by the label
       # disk.nix stamps on the stick ESP, so it's found regardless of device path.
       fileSystems."/boot" = {
         device = "/dev/disk/by-label/ESP";

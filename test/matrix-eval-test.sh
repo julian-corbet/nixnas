@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
 # test/matrix-eval-test.sh — cheap eval-level coverage of the nixnas matrix variants.
 #
-# WHAT IS UNDER TEST: eight nixosConfigurations defined in the integrator-provided flake
+# WHAT IS UNDER TEST: six nixosConfigurations defined in the integrator-provided flake
 # snippet (see the return value of this script's authorship task), each proving a distinct
 # real-operator configuration evaluates without error AND propagates option values into
 # the expected NixOS config attributes:
 #
-#   matrix-no-tpm      — sealHostKey=false + plaintext hostKeyPath (Path B remote-unlock)
 #   matrix-stick-4g    — 4 GiB stick: imageSizeGiB=4, espSizeMiB=512 + budget math
 #   matrix-stick-16g   — 16 GiB stick: imageSizeGiB=16, espSizeMiB=2048 + budget math
 #   matrix-stick-32g   — 32 GiB stick: imageSizeGiB=32, espSizeMiB=2048 + budget math
 #   matrix-hot-ext4    — hot mode, fsType=ext4: initrd MUST carry NO "zfs" filesystem
 #   matrix-hot-zfs-property — mixed mount shapes: root=property (zfsutil) beside
 #                            /nix=legacy (no zfsutil); both directions asserted at once
-#   matrix-pin-strict  — requirePin=true explicit + pcrs=[7,11] → crypttab has tpm2-pin=yes
 #   matrix-persist-nested — StateDirectory nested under a bind-mounted ancestor must evaluate
 #                            (persist-enforce ancestor walk; 2026-07-24 acme incident guard)
 #
@@ -120,26 +118,20 @@ budget_check() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────────────
-# VARIANT 1: matrix-no-tpm
+# INVARIANT: remote unlock is TPM-gated or disabled; no plaintext identity
 # ──────────────────────────────────────────────────────────────────────────────────────
 echo ""
-echo "── matrix-no-tpm (sealHostKey=false + plaintext hostKeyPath) ──"
-check_drv "no-tpm" "matrix-no-tpm"
+echo "── remote unlock identity (TPM-gated, no plaintext fallback) ──"
+check_drv "demo" "demo"
 
-v=$(nix_eval "nixosConfigurations.matrix-no-tpm.config.nixnas.crypto.tpm2.enable" --json)
-check_eq "no-tpm: crypto.tpm2.enable = false" "$v" "false"
+v=$(nix_eval "nixosConfigurations.demo.config.boot.initrd.network.ssh.hostKeys" --json)
+check_eq "remote unlock: initrd embeds no plaintext host key" "$v" "[]"
 
-v=$(nix_eval "nixosConfigurations.matrix-no-tpm.config.nixnas.boot.remoteUnlock.sealHostKey" --json)
-check_eq "no-tpm: remoteUnlock.sealHostKey = false" "$v" "false"
+v=$(nix_eval "nixosConfigurations.demo.config.boot.initrd.systemd.services.sshd.serviceConfig.LoadCredentialEncrypted" --json)
+check_contains "remote unlock: sshd loads the encrypted credential" "$v" '"nixboot-initrd-hostkey"'
 
-# With sealHostKey=false the initrd must carry a plaintext host key (Path B).
-# boot.initrd.network.ssh.hostKeys is a list of key paths — must be non-empty.
-v=$(nix_eval "nixosConfigurations.matrix-no-tpm.config.boot.initrd.network.ssh.hostKeys" --json)
-check_absent "no-tpm: ssh.hostKeys list is not empty" "$v" "[]"
-
-# The sealed-credential LoadCredentialEncrypted must NOT be present (Path A is inactive).
-v=$(nix_eval "nixosConfigurations.matrix-no-tpm.config.boot.initrd.systemd.services.sshd.serviceConfig" --json 2>/dev/null || echo "{}")
-check_absent "no-tpm: initrd sshd has no LoadCredentialEncrypted (Path A inactive)" "$v" "LoadCredentialEncrypted"
+v=$(nix_eval "nixosConfigurations.demo.config.boot.initrd.availableKernelModules" --json)
+check_contains "remote unlock: TPM driver is in the initrd" "$v" '"tpm_crb"'
 
 # ──────────────────────────────────────────────────────────────────────────────────────
 # VARIANT 2: matrix-stick-4g
@@ -256,26 +248,7 @@ v=$(nix_eval 'nixosConfigurations.matrix-hot-zfs-property.config.fileSystems."/n
 check_absent "hot-zfs-property: /nix mount options do NOT carry zfsutil" "$v" '"zfsutil"'
 
 # ──────────────────────────────────────────────────────────────────────────────────────
-# VARIANT 6: matrix-pin-strict
-# ──────────────────────────────────────────────────────────────────────────────────────
-echo ""
-echo "── matrix-pin-strict (requirePin=true explicit, pcrs=[7,11], crypttab has tpm2-pin=yes) ──"
-check_drv "pin-strict" "matrix-pin-strict"
-
-v=$(nix_eval "nixosConfigurations.matrix-pin-strict.config.nixnas.crypto.tpm2.requirePin" --json)
-check_eq "pin-strict: crypto.tpm2.requirePin = true" "$v" "true"
-
-v=$(nix_eval "nixosConfigurations.matrix-pin-strict.config.nixnas.crypto.tpm2.pcrs" --json)
-check_eq "pin-strict: crypto.tpm2.pcrs = [7,11]" "$v" "[7,11]"
-
-# The critical end-to-end check: requirePin must propagate into the initrd LUKS
-# crypttab extras that systemd-cryptsetup reads at unlock time.
-v=$(nix_eval "nixosConfigurations.matrix-pin-strict.config.boot.initrd.luks.devices.cryptstore.crypttabExtraOpts" --json)
-check_contains "pin-strict: crypttabExtraOpts contains tpm2-device=auto" "$v" '"tpm2-device=auto"'
-check_contains "pin-strict: crypttabExtraOpts contains tpm2-pin=yes"     "$v" '"tpm2-pin=yes"'
-
-# ──────────────────────────────────────────────────────────────────────────────────────
-# VARIANT 7: matrix-persist-nested
+# VARIANT 6: matrix-persist-nested
 # ──────────────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "── matrix-persist-nested (StateDirectory nested under a bind-mounted ancestor) ──"

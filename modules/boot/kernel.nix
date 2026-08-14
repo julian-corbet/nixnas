@@ -29,12 +29,11 @@
 let
   cfg = config.nixnas;
   f2fsRequiredKernel = nixfsCatalogue.filesystems.f2fs.compression.requiredKernel;
-  # f2fs is actually used, under this recipe, whenever this host formats the stick's own store
-  # with it (`usb` mode, always — modules/boot/disk.nix) or re-mounts a rescue slot with it
-  # (`hot` mode with the rescue maintained — modules/appliance/rescue-maintain.nix). A `hot`-mode
+  # f2fs is actually used under this recipe whenever this host formats its USB store
+  # (`usb` mode, always — modules/boot/disk.nix). A `hot`-mode
   # MAIN's own /nix (modules/store/location.nix) is a separate, operator-chosen filesystem and is
   # deliberately not covered here — it never applies this compression recipe at all.
-  f2fsInUse = cfg.store.location == "usb" || (cfg.store.location == "hot" && cfg.rescue.enable);
+  f2fsInUse = cfg.store.location == "usb";
   # The flake exposes pre-built variants as attributes named
   #   linuxPackages-cachyos-<variant>[-lto][-<march>]
   # (eevdf is the default cpusched, baked into every variant).

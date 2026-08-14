@@ -20,7 +20,7 @@
     # prompts; the second must open silently from the kernel-keyring cache; the test feeds
     # the passphrase exactly once and the boot must still complete).
     unlock = {
-      nixstore-demo  = "/dev/disk/by-partlabel/nixstore-demo";
+      nixstore-demo = "/dev/disk/by-partlabel/nixstore-demo";
       nixstore-demo2 = "/dev/disk/by-partlabel/nixstore-demo2";
     };
   };
@@ -31,7 +31,6 @@
     fsType = "ext4";
     unlock.nixroot-demo = "/dev/disk/by-partlabel/nixroot-demo";
   };
-  nixnas.rescue.enable = false;
 
   # Hot mode enters the store key in the initrd — keep remote-unlock (initrd-SSH) on.
   nixnas.boot.remoteUnlock.enable = true;

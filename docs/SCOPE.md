@@ -17,8 +17,8 @@ boot mechanisms that now have dedicated owners.
 
 Plus the generic capability those two imply:
 
-3. **An encrypted, robust, RAM-booted runtime.** A TPM2-bound OS store,
-   passphrase-only data members, recovery tooling, and non-fatal connection of
+3. **An encrypted, robust, RAM-booted runtime.** A passphrase-only OS store and
+   data members, recovery tooling, and non-fatal connection of
    the operator's already-built encrypted data pools.
 
 Nixboot owns loader selection, UKIs, Secure Boot integration, boot-generation
@@ -34,7 +34,6 @@ nixnas = {
   enable = true;
   hostName = "nas";
   boot.secureBoot.enable = true;
-  crypto.tpm2.enable = true;
   storage.unlock = { tank0 = "/dev/disk/by-id/…"; };   # LUKS members; mount natively (fileSystems)
   storage.zfsPools = [ "hot" ];                        # optional: import this ZFS pool
 };
@@ -63,7 +62,6 @@ Under `modules/` (all built + VM-validated unless noted):
 | `boot/nixboot.nix` | Bridge from appliance facts to nixboot's boot-owned option surface. |
 | `boot/impermanence.nix` | tmpfs root — only `/nix` + the ESP persist. |
 | `boot/kernel.nix` | Current appliance-local kernel selection; its requirements remain nixnas facts while selection/packaging of the booted kernel migrates to nixboot. |
-| `crypto/tpm2.nix` | TPM2+PIN store unlock (crypttab) + first-boot `nixnas-enroll-tpm2`. |
 | `crypto/recovery-escrow.nix` | break-glass recovery keyslot escrowed to Vaultwarden (hub tool + box status). |
 | `storage/connect.nix` | POST-boot data unlock: `nixnas-unlock` + `nixnas-storage.target` (serial one-passphrase LUKS opens, per-pool ZFS import). Mounting is native. |
 | `appliance/base.nix` | Stable host identity + Tailscale. |
@@ -71,11 +69,10 @@ Under `modules/` (all built + VM-validated unless noted):
 | `appliance/persist-enforce.nix` | **`usb` mode only.** Build-time gate: every `StateDirectory`-bearing systemd service must be persisted (any `fileSystems` entry) or listed in `persist.explicitlyEphemeral` — else the build fails. Inert in `hot` mode (nothing to enforce against a real root). |
 | `appliance/ssh.nix` | Headless admin sshd (key-only root). |
 | `appliance/auto-upgrade.nix` | Deprecated self-update trigger overlap; functional until removed in favor of nixdeploy. |
-| `appliance/rescue-maintain.nix` | Current rescue copy/materialisation scheduler; artifact mechanics compose nixboot, delivery ownership migrates to nixdeploy. |
 | `appliance/switch.nix` | Current activation wrapper; functional, marked for migration to nixdeploy outcomes. |
 | `appliance/optimizations.nix` | Appliance defaults: journald→RAM, no disk swap, store.preload. Composes **nixram** for the memory subsystem (zram/zswap/vm sysctls/oomd) — each host declares `nixram.level`. |
 
-**Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.{tpm2,recovery}`, `zfs.source`, `store.{preload,persistLogs}`, `storage.{unlock,zfsPools}`, `persist.{overlayClients,explicitlyEphemeral}`, `tailscale`, `autoUpgrade`. Mounting itself is native NixOS (`fileSystems`, `boot.zfs`), not a nixnas option.
+**Option surface (`nixnas.*`):** `enable`, `hostName`, `admin.authorizedKeys`, `boot.{tries,keepGenerations,secureBoot,remoteUnlock,usb}`, `kernel.*`, `crypto.recovery`, `zfs.source`, `store.{preload,persistLogs,extraPackages}`, `storage.{unlock,zfsPools}`, `persist.{overlayClients,explicitlyEphemeral}`, `tailscale`, `autoUpgrade`. Mounting itself is native NixOS (`fileSystems`, `boot.zfs`), not a nixnas option.
 
 **Thin by construction.** The option surface carries NO `compute.*`
 (k3s/GPU/VMs). Nixnas owns appliance/storage geometry, crypto integration,
@@ -100,7 +97,6 @@ nixnas = {
   enable = true;
   hostName = "nas";
   boot.secureBoot = { enable = true; keysSops = ./secrets/sb-db.key; };
-  crypto.tpm2.enable = true;
   storage.unlock   = { tank0 = "/dev/disk/by-id/…"; bulk0 = "/dev/disk/by-id/…"; };
   storage.zfsPools = [ "hot" "bulk" ];
   tailscale.enable = true;

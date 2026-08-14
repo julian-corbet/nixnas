@@ -15,27 +15,24 @@
     # At least one key is REQUIRED — password login is off.
     admin.authorizedKeys = [ "ssh-ed25519 AAAA… you@host" ];
 
-    # initrd-SSH host key: with the defaults (secureBoot + tpm2 below, sealHostKey=true)
-    # the key is generated + TPM2-SEALED on first boot — nothing to provide here. Only a
-    # box WITHOUT a TPM sets `boot.remoteUnlock.sealHostKey = false` and supplies a
-    # plaintext key via `boot.remoteUnlock.hostKeyPath` (generate once, `git add -f` it in
-    # THIS private repo; it lands on the plaintext ESP — LAN/tailnet-only).
+    # The initrd-SSH host key is generated and TPM2-sealed after the first successful local
+    # boot. A box without a usable TPM sets `boot.remoteUnlock.enable = false` and uses its
+    # local console or IPMI-SOL. Disk unlock is always passphrase-only.
 
     # The USB stick nixnas partitions. This is the ONLY device nixnas ever touches.
     boot.usb.device = "/dev/disk/by-id/usb-…";
 
     boot.secureBoot.enable = true;
-    crypto.tpm2.enable = true;
 
     # Your LUKS members as name → device (any FS on top — ZFS/btrfs/xfs). Each opens at
     # /dev/mapper/<name>, POST-boot: the box boots reachable with the data locked, then
     # `nixnas-unlock` (over SSH) opens the whole set with ONE passphrase. nixnas never
     # formats. You MOUNT them natively below. (A fully worked example: examples/host.nix.)
     storage.unlock = {
-      poolmember0 = "/dev/disk/by-id/ata-…-part1";  # a member of your ZFS pool
-      archive0    = "/dev/disk/by-id/ata-…";        # a whole-disk-LUKS archive drive, etc.
+      poolmember0 = "/dev/disk/by-id/ata-…-part1"; # a member of your ZFS pool
+      archive0 = "/dev/disk/by-id/ata-…"; # a whole-disk-LUKS archive drive, etc.
     };
-    storage.zfsPools = [ "fast" "bulk" ];  # optional: import these ZFS pools (skip for non-ZFS)
+    storage.zfsPools = [ "fast" "bulk" ]; # optional: import these ZFS pools (skip for non-ZFS)
 
     # Set to your box's CPU micro-architecture for a tuned build; default x86_64-v1 boots anywhere.
     kernel.march = "x86_64-v3";

@@ -1,6 +1,6 @@
 //! The `nixnas.config` model — the TUI's OWN settings (where the operator's flake
 //! lives and how to build/flash it). The machine's actual configuration (hostname,
-//! pools, unlock members, Secure Boot, TPM2) is Nix — declared in the operator's
+//! pools, unlock members, Secure Boot, TPM-gated SSH) is Nix — declared in the operator's
 //! host overlay, NOT here. This file holds only what the TUI itself consumes.
 
 use anyhow::{Context, Result};
@@ -39,7 +39,7 @@ pub struct Config {
     pub image_attr: String,
 
     /// The `nixosConfigurations.<name>` attribute of the host whose stick image to build
-    /// (e.g. "nixnas-rescue"). Setting this enables the DEVICE-SIZED build paths: because
+    /// (e.g. "my-appliance"). Setting this enables the DEVICE-SIZED build paths: because
     /// disko bakes `disk.imageSize` into `qemu-img create` and exposes no runtime size flag,
     /// the TUI re-evaluates this config with `extendModules` overriding
     /// `nixnas.boot.usb.imageSizeGiB`, so the built `.raw` is sized to the target — exact-fit

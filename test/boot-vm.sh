@@ -24,7 +24,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --mem) MEM="${2:?}"; shift ;;
   --smp) SMP="${2:?}"; shift ;;
   --ssh) SSHFWD="$2"; shift ;;
-  --passphrase) PASS="$2"; shift ;;        # type this on the serial after the LUKS/TPM2 prompt
+  --passphrase) PASS="$2"; shift ;;        # type this on the serial after the LUKS prompt
   --pass-delay) PASS_DELAY="$2"; shift ;;  # seconds to wait before typing it (default 28)
   *) echo "unknown arg: $1" >&2; exit 2 ;;
 esac; shift; done
@@ -56,7 +56,7 @@ trap cleanup EXIT
 # writable per-run copy of the UEFI variable store (holds SB keys / boot entries)
 cp "$OVMF_VARS_TMPL" "$WORK/OVMF_VARS.fd"
 
-# --- software TPM2 (for TPM2-with-PIN unlock + measured boot) ---
+# --- software TPM2 (for the gated initrd-SSH identity + measured boot) ---
 mkdir -p "$WORK/tpm"
 swtpm socket --tpm2 --tpmstate dir="$WORK/tpm" \
   --ctrl type=unixio,path="$WORK/tpm/sock" \
@@ -88,7 +88,7 @@ QEMU=(
   -nographic
 )
 if [ -n "$PASS" ]; then
-  # Feed the LUKS/TPM2 passphrase to the guest serial once the unlock prompt is up.
+  # Feed the mandatory LUKS passphrase to the guest serial once the unlock prompt is up.
   echo ">> will type the passphrase on serial after ${PASS_DELAY}s"
   { sleep "$PASS_DELAY"; printf '%s\n' "$PASS"; sleep 100000; } | "${QEMU[@]}" -serial mon:stdio
 else
