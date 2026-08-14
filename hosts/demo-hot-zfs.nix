@@ -13,7 +13,7 @@
 # hot-mode contract: one passphrase, one prompt, ZFS sees plaintext block devices.
 #
 # rescue.enable is OFF: the keyless demo has no Secure Boot db key to sign a rescue UKI with,
-# and the rescue story is already covered by test/seal-2boot-test.sh. See docs/HOT-MODE.md.
+# and the rescue story is already covered by test/seal-3boot-test.sh. See docs/HOT-MODE.md.
 { lib, ... }:
 {
   nixnas.store.location = "hot";

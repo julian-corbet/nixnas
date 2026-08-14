@@ -83,6 +83,14 @@ let
 in
 {
   config = mkIf cfg.enable (mkMerge [
+    {
+      # Adopt the post-26.11 safe stance explicitly even for hosts retaining an older
+      # system.stateVersion: forcing a root-pool import bypasses ZFS's active-elsewhere
+      # safeguard and can turn a stale import into corruption. An uncleanly exported pool is
+      # recovered deliberately from the rescue environment, never force-imported on every boot.
+      boot.zfs.forceImportRoot = false;
+    }
+
     (mkIf (cfg.storage.unlock != { }) {
       environment.etc."crypttab".text = crypttab + "\n";
       environment.systemPackages = [ nixnas-unlock ];

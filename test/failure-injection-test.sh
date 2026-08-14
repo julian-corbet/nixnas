@@ -41,7 +41,7 @@ shift
 # NIXNAS_FAILED_UNITS_ALLOWLIST (default empty).
 . "$(cd "$(dirname "$0")" && pwd)/assert-no-failed-units.sh"
 
-# ── portable OVMF firmware detection (same logic as seal-2boot-test.sh + boot-vm.sh) ──
+# ── portable OVMF firmware detection (same logic as seal-3boot-test.sh + boot-vm.sh) ──
 find_fw() { # find_fw "name1 name2 …" → first existing path under the known dirs
   local d n
   for d in /usr/share/edk2-ovmf/x64 /usr/share/edk2/x64 /usr/share/OVMF /usr/share/ovmf/x64 /usr/share/qemu; do
@@ -114,8 +114,10 @@ cmd_power_cut_mid_write() {
   cp --sparse=always "$IMG" "$SCRATCH"
   chmod u+rw "$SCRATCH"   # nix store images are 0444
   cp "$OVMF_VARS_TMPL" "$WORK/OVMF_VARS.fd"
+  chmod u+w "$WORK/OVMF_VARS.fd"
 
   SSH=(ssh -i "$KEY" -p "$PORT"
+       -o IdentitiesOnly=yes
        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
        -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR
        -o ConnectTimeout=4 root@127.0.0.1)
@@ -165,7 +167,7 @@ cmd_power_cut_mid_write() {
     kill -0 "$VM1" 2>/dev/null || { echo "!! boot #1 VM exited early"; break; }
     # Confirm the TPM-sealed initrd host-key credential was written (= multi-user reached).
     if "${SSH[@]}" -o BatchMode=yes \
-         'test -f /boot/loader/credentials/nixnas-initrd-hostkey.cred' 2>/dev/null; then
+         'test -f /boot/loader/credentials/nixboot-initrd-hostkey.cred' 2>/dev/null; then
       sealed=1; break
     fi
     sleep 4
@@ -202,13 +204,14 @@ cmd_power_cut_mid_write() {
 
   # ── wait for boot-#1 port to drain, then pick a fresh port for boot #2 ───────────────
   # After kill -9 the kernel may retain the listen socket (or TIME_WAIT from the boot-#1
-  # SSH probes) for a moment.  Drain it with the same pattern as seal-2boot-test.sh's
+  # SSH probes) for a moment.  Drain it with the same pattern as seal-3boot-test.sh's
   # cleanup.  Then bump to PORT+1 so a stale connection from boot #1 can never produce a
   # false-positive hit in the boot-#2 SSH probe — the SSH array is rebuilt to target only
   # the new VM's port.
   for _ in $(seq 1 30); do ss -ltn 2>/dev/null | grep -q ":${PORT} " || break; sleep 0.3; done
   PORT=$((PORT + 1))
   SSH=(ssh -i "$KEY" -p "$PORT"
+       -o IdentitiesOnly=yes
        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
        -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR
        -o ConnectTimeout=4 root@127.0.0.1)
@@ -418,6 +421,7 @@ cmd_no_tpm() {
   trap cleanup EXIT
 
   cp "$OVMF_VARS_TMPL" "$WORK/OVMF_VARS.fd"
+  chmod u+w "$WORK/OVMF_VARS.fd"
   LOG="$WORK/serial.log"
   FIFO="$WORK/in"; mkfifo "$FIFO"
 

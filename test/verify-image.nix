@@ -30,24 +30,4 @@
       echo "=== NIXNAS-VERIFY-END ==="
     '';
   };
-
-  # Boot-counting BLESS half: runs as part of reaching boot-complete.target (after
-  # systemd-bless-boot), so the UKI name here reflects the post-bless state — the `+N`
-  # counter is gone once this boot was assessed good.
-  systemd.services.nixnas-verify-bless = {
-    description = "DEV: report the boot-counting state after blessing";
-    wantedBy = [ "boot-complete.target" ];
-    after = [ "systemd-bless-boot.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      StandardOutput = "journal+console";
-      StandardError = "journal+console";
-    };
-    path = [ pkgs.coreutils ];
-    script = ''
-      echo "=== NIXNAS-BLESS-START ==="
-      echo "[UKIs post-bless] $(ls -1 /boot/EFI/Linux/ 2>/dev/null | tr '\n' ' ')"
-      echo "=== NIXNAS-BLESS-END ==="
-    '';
-  };
 }

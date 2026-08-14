@@ -43,15 +43,16 @@ done
 
 WORK="$(mktemp -d /tmp/nixnas-hot-zfs.XXXXXX)"
 DISK="$WORK/nix.raw"
-LOOP=""; MAPPER0=""; MAPPER1=""; POOL=""; MNT=""
+LOOP=""; MAPPER0=""; MAPPER1=""; POOL=""; MNT=""; VM_PIDS=()
 cleanup() {
+  local pid
+  for pid in "${VM_PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
   # Reverse order: unmount → export → close mappers → detach loop → reap qemu → rm tree.
   [ -n "$MNT"     ] && umount "$MNT"                    2>/dev/null || true; MNT=""
   [ -n "$POOL"    ] && zpool export -f qapool            2>/dev/null || true; POOL=""
   [ -n "$MAPPER1" ] && cryptsetup close qapool-luks1     2>/dev/null || true; MAPPER1=""
   [ -n "$MAPPER0" ] && cryptsetup close qapool-luks0     2>/dev/null || true; MAPPER0=""
   [ -n "$LOOP"    ] && losetup -d "$LOOP"                2>/dev/null || true; LOOP=""
-  pkill -f "$DISK"                                       2>/dev/null || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -151,6 +152,7 @@ qemu-system-x86_64 \
   -netdev user,id=n0 -device virtio-net,netdev=n0 \
   -nographic -serial "mon:stdio" -no-reboot < "$FIFO" > "$LOG" 2>&1 &
 VM=$!
+VM_PIDS+=("$VM")
 exec 3> "$FIFO"   # hold the FIFO writer open so the serial stays live
 
 # Feed the passphrase EXACTLY ONCE. Two LUKS members are enrolled; the serialised unlock

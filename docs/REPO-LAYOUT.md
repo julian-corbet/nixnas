@@ -43,8 +43,8 @@ nixnas/
 │
 ├── templates/host/{flake,host}.nix   # scaffold a private overlay (the operator copies + fills in)
 │
-├── test/                     # boot-vm.sh (QEMU+OVMF+swtpm); seal-2boot-test.sh (power-cycle:
-│   │                         #   seal→unseal→initrd-SSH→unlock, + --tamper wrong-TPM fail-closed);
+├── test/                     # boot-vm.sh (QEMU+OVMF+swtpm); seal-3boot-test.sh (power-cycle:
+│   │                         #   enroll→seal→unseal→unlock, + --tamper wrong-TPM fail-closed);
 │   │                         #   DEV self-checks baked into the demo: verify-image /
 │   │                         #   verify-sealed-hostkey / verify-recovery / verify-writes; ssh/ (demo keys)
 │   └── …

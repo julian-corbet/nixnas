@@ -127,7 +127,9 @@ in
                 detects OpROMs in the TPM event log. On such a board the operator
                 must consciously bypass it by hand (`sbctl enroll-keys
                 --yes-this-might-brick-my-machine`) — nixnas never wraps the brick
-                flag. Safe on OpROM-free boards (typical headless/VM boxes).
+                flag. Safe only after confirming the board or VM boot chain is OpROM-free;
+                QEMU commonly records a virtual OptionROM and the demo therefore declares
+                "tpm-eventlog" explicitly.
           '';
         };
       };
@@ -659,8 +661,9 @@ in
         example = "github:you/nas-config#nas";
         description = ''
           The operator's flake (their config that `imports = [ nixnas ]`). Null = no
-          self-update. Private flakes need pull auth the operator supplies (deploy key /
-          netrc); that, and update-on-the-8 GiB-target, is the autoUpgrade spike (ARCH §9.2).
+          self-update. Private flakes need pull auth supplied by the operator (for example a
+          deploy key or netrc). This deprecated pull path remains functional only for
+          compatibility while authenticated artifact delivery moves to nixdeploy.
         '';
       };
       schedule = mkOption {

@@ -29,7 +29,7 @@ the core will be asked to move them out.
    toplevel + imageScript drvPath eval).
 2. **TUI**: in `tui/`, `cargo check --locked` and `cargo clippy --locked -- -D warnings`.
 3. **Boot behaviour**: changes to the boot chain / crypto / storage should be exercised in the
-   QEMU rig (`test/boot-vm.sh`, `test/seal-2boot-test.sh`) — it models UEFI + Secure Boot +
+   QEMU rig (`test/boot-vm.sh`, `test/seal-3boot-test.sh`) — it models UEFI + Secure Boot +
    swtpm + serial. Note what you ran in the PR.
 4. **Commit style**: imperative subject, a body that says *why*. No AI attribution lines.
 

@@ -29,12 +29,13 @@ and weekly, on GitHub's KVM-capable public runners, and the pass/fail criteria a
 concrete (a login prompt reached, or a login prompt deliberately *not* reached).
 
 **What is proven, on every push** (`.github/workflows/boot-test.yml`):
-- `test/seal-2boot-test.sh` (positive): the demo image boots twice against one
-  persistent swtpm state dir; boot #1 seals the initrd-SSH host key to the TPM
-  (PCR 7), boot #2's initrd unseals it, brings up initrd-SSH, and the store unlocks
-  over the network to a login prompt. This is a genuine two-boot power-cycle proof,
-  not a single-boot smoke test.
-- `test/seal-2boot-test.sh --tamper`: the same flow against a *fresh* swtpm (wrong
+- `test/seal-3boot-test.sh` (positive): the demo image boots three times against one
+  persistent swtpm state dir and Secure-Boot-capable OVMF. Boot #1 generates and enrolls
+  the appliance keys, boot #2 enforces those keys and seals the initrd-SSH host key to the
+  final PCR 7 state, and boot #3's initrd unseals it, brings up initrd-SSH, and unlocks the
+  store over the network to a login prompt. This is the genuine enrollment-to-unlock
+  power-cycle proof, not a single-boot smoke test.
+- `test/seal-3boot-test.sh --tamper`: the same flow against a *fresh* swtpm (wrong
   TPM) — the unseal must fail and sshd must never come up. Pass condition is a
   **non**-unlock; this is the fail-closed proof.
 - `test/hot-boot-test.sh`, twice (serial-primary and video-primary
@@ -69,18 +70,14 @@ concrete (a login prompt reached, or a login prompt deliberately *not* reached).
   stays bounded.
 
 **What none of the above can prove — QEMU/swtpm is not the target hardware:**
-- Real UEFI firmware behaviour: the firmware setup password and the
-  boot-counting **bless** step (see [`../experiments/README.md`](../experiments/README.md#003)
-  — the VM already showed bless running but *not* clearing the counter in the
-  SB-off OVMF case).
-- Real PCR values: `test/README.md` states this directly — "swtpm PCRs still differ
-  from real hardware — these prove the *mechanism*, not the production PCR policy."
+- Board-specific UEFI behaviour: the firmware setup password and vendor-specific variable
+  storage remain physical acceptance checks. Secure-Boot-capable OVMF covers the successful
+  boot-count publication and post-bless path; failed-try exhaustion and automatic selection of
+  the previous generation remain an explicit experiment.
+- Real PCR values: swtpm proves the declared PCR policy and lifecycle against the emulator,
+  not a particular physical board's measurements.
 - Real flash wear over time (the 60 KiB figure below is one measured snapshot, not
   a longevity soak — see study 004).
-- Own-Secure-Boot-key evil-maid testing: `test/README.md`'s "Known limits" section
-  notes `--secboot` today validates a signed chain boots using the *firmware's
-  default* key set — testing with nixnas's own enrolled PK/KEK/db is a documented
-  follow-up, not yet automated.
 
 **Source:** `.github/workflows/boot-test.yml`, `.github/workflows/deep-test.yml`,
 `test/README.md`, `test/*.sh` headers (each script documents its own "claim under
@@ -131,10 +128,6 @@ has been superseded by a dated, cited measurement in
 size the ESP for kernel versions and rescue images, not for generation count"
 (same option description) — a materially different sizing rule than the ~80 MiB/gen
 assumption it replaced.
-
-**Not yet done:** `docs/ARCHITECTURE.md` §9 item 5 and `README.md`'s "Hardware
-spikes remaining" line still quote the old ~80 MiB/generation figure — see
-[`../experiments/README.md`](../experiments/README.md#007) for that doc-sync gap.
 
 **Source:** `modules/options.nix` (`nixnas.boot.keepGenerations` description).
 

@@ -16,9 +16,9 @@ The split mirrors the product: **build on the capable machine, boot in a small V
 
 We need to exercise the *real* boot chain — UEFI → (Secure Boot) → signed UKI → initrd →
 passphrase-only LUKS unlock → f2fs `/nix` → impermanence — and, above all, the **rollback** behaviour
-(boot-counting × lanzaboote), which is the load-bearing, still-UNVERIFIED piece
-(`docs/ARCHITECTURE.md` §9). A VM lets us force boot failures and watch recovery safely and
-repeatably. It needs almost no resources: the appliance must run on small boxes anyway.
+(boot-counting × lanzaboote). A VM lets us force boot failures, inspect the firmware's
+`LoaderBootCountPath`, and require the post-bless verifier to pass safely and repeatably. It needs
+almost no resources: the appliance must run on small boxes anyway.
 
 ## Prerequisites (already present here)
 
@@ -54,28 +54,28 @@ test/boot-vm.sh nixnas.raw --mem 4096 --smp 4
 ## 3. The sealed initrd-SSH host key — real power-cycle proof
 
 `boot-vm.sh` uses `snapshot=on` + a fresh swtpm, so it cannot test anything that must survive a
-reboot. The TPM-sealed initrd-SSH host key does: it is sealed on boot #1 and must be **unsealed by
-the initrd on boot #2**. `seal-2boot-test.sh` gives it a *persistent* disk copy + a per-boot swtpm
-against one persistent TPM state dir (so PCR 7 matches across boots), and drives a genuine two-boot
-cycle:
+reboot. The TPM-sealed initrd-SSH host key does, and Secure Boot enrollment changes PCR 7 once.
+`seal-3boot-test.sh` gives it a *persistent* disk copy, Secure-Boot-capable OVMF variables, and a
+per-boot swtpm against one persistent TPM state dir. It drives the genuine three-boot lifecycle:
 
 ```sh
-test/seal-2boot-test.sh nixnas.raw            # boot#1 seals → boot#2 initrd unseals → initrd-SSH
-                                              #   comes up → store unlocked over SSH → login  (PASS)
-test/seal-2boot-test.sh nixnas.raw --tamper   # boot#2 on a FRESH/wrong TPM: unseal MUST fail,
-                                              #   sshd MUST NOT come up — fail-closed  (PASS = no unlock)
+test/seal-3boot-test.sh nixnas.raw            # boot#1 enrolls → boot#2 seals under enforcement
+                                              #   → boot#3 initrd unseals → network unlock (PASS)
+test/seal-3boot-test.sh nixnas.raw --tamper   # boot#3 on a FRESH/wrong TPM: unseal MUST fail,
+                                              #   sshd MUST NOT come up — fail-closed (PASS)
 ```
 
 The positive run proves the box unlocks headlessly with a host key that was never plaintext on the
 ESP; `--tamper` proves the key is genuinely bound to *this* box's TPM (a different SRK cannot unseal
-it). Both are deterministic. (swtpm PCRs still differ from real hardware — these prove the
-*mechanism*; the production PCR policy is a hardware spike, `docs/ARCHITECTURE.md` §9.)
+it). Both are deterministic. swtpm PCRs still differ in implementation from real hardware, but
+the test now proves the actual enrollment/enforcement transition and the declared PCR 7 policy.
 
 ## Known limits / next steps
 
-- **`--secboot` enforces signatures but with the firmware's default key set.** Testing
-  lanzaboote with *our own* Secure Boot keys needs those keys enrolled into the UEFI vars
-  (PK/KEK/db) first — a follow-up using lanzaboote's key-enrollment path. Until then `--secboot`
-  validates that a signed chain boots; own-key evil-maid testing is the next increment.
 - TPM2 is the swtpm emulator; PCR values differ from real hardware, so TPM2-sealing tests here
-  prove the *mechanism*, not the production PCR policy.
+  prove the declared PCR policy and lifecycle against the emulator, not a particular physical
+  board's measurements.
+- OVMF proves owner-key Secure Boot plus the successful boot-count publication and blessing path.
+  Exhausting a deliberately failed generation's tries and observing automatic previous-generation
+  selection is not yet automated. A physical board can also have firmware-specific variable-storage
+  or setup-password behaviour and needs its supervised acceptance boot.

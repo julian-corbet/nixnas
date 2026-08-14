@@ -9,7 +9,7 @@
 #
 # It DIRECT-KERNEL-BOOTS the demo-hot toplevel (-kernel/-initrd) rather than going through the
 # ESP/UKI/Secure-Boot chain — that chain is already proven by the usb boot-test (test/
-# seal-2boot-test.sh), and the rescue is itself a usb nixnas. What is NEW in hot mode, and all
+# seal-3boot-test.sh), and the rescue is itself a usb nixnas. What is NEW in hot mode, and all
 # this file tests, is the initrd unlock-external-devices + mount-/nix-and-/ step.
 #
 # The disk carries THREE LUKS members: `nixstore-demo` (ext4, pre-populated with the toplevel
@@ -45,13 +45,14 @@ done
 
 WORK="$(mktemp -d /tmp/nixnas-hot.XXXXXX)"
 DISK="$WORK/nix.raw"
-LOOP=""; MAPPER=""; MAPPER_ROOT=""; MNT=""
+LOOP=""; MAPPER=""; MAPPER_ROOT=""; MNT=""; VM_PIDS=()
 cleanup() {
+  local pid
+  for pid in "${VM_PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
   [ -n "$MNT" ] && umount "$MNT" 2>/dev/null
   [ -n "$MAPPER_ROOT" ] && cryptsetup close nixroot-demo 2>/dev/null
   [ -n "$MAPPER" ] && cryptsetup close nixstore-demo 2>/dev/null
   [ -n "$LOOP" ] && losetup -d "$LOOP" 2>/dev/null
-  pkill -f "$DISK" 2>/dev/null   # reap any qemu bound to THIS run's unique disk path
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -154,6 +155,7 @@ qemu-system-x86_64 \
   -netdev user,id=n0 -device virtio-net,netdev=n0 \
   -nographic -serial "mon:stdio" -no-reboot < "$FIFO" > "$LOG" 2>&1 &
 VM=$!
+VM_PIDS+=("$VM")
 exec 3> "$FIFO"                        # hold the FIFO writer open so the serial stays live
 
 # Feed the passphrase EXACTLY ONCE. THREE LUKS members are enrolled (nixroot-demo,
@@ -178,6 +180,7 @@ for _ in $(seq 1 20); do
 done
 exec 3>&-
 kill "$VM" 2>/dev/null; wait "$VM" 2>/dev/null
+VM_PIDS=()
 
 if [ "$ok" != 1 ]; then
   echo "================ RESULT ================"
@@ -207,6 +210,7 @@ qemu-system-x86_64 \
   -netdev user,id=n0 -device virtio-net,netdev=n0 \
   -nographic -serial "mon:stdio" -no-reboot < "$FIFO_V" > "$LOG_V" 2>&1 &
 VMV=$!
+VM_PIDS+=("$VMV")
 exec 3> "$FIFO_V"
 
 # Feed once, but trigger ONLY on the password agent's actual ask line ('please enter' /

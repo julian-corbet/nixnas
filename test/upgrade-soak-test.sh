@@ -24,7 +24,7 @@
 #
 # BOOT SEQUENCE (6 boots total):
 #   Boot 0 — setup: serial passphrase + TPM-sealed SSH host-key credential
-#             (nixnas-seal-hostkey), nix copy, record baseline, stage cycle 1.
+#             (nixboot-seal-hostkey), nix copy, record baseline, stage cycle 1.
 #   Boots 1-5 — one per cycle: initrd-SSH (sealed host key) → deliver passphrase over SSH,
 #               wait for running system, assert, record du, stage next cycle.
 #
@@ -35,7 +35,7 @@ set -uo pipefail
 FLAKE="${FLAKE:-.}"
 PASS="${PASS:-nixnas-demo}"
 IMG="${1:?usage: upgrade-soak-test.sh <image.raw> [--port PORT]}"; shift || true
-PORT=2224     # SSH forward; default avoids clash with seal-2boot-test.sh (2222)
+PORT=2224     # SSH forward; default avoids clash with seal-3boot-test.sh (2222)
 while [ $# -gt 0 ]; do case "$1" in
   --port) PORT="$2"; shift ;;
   *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -50,7 +50,7 @@ N=5          # upgrade cycles
 KEEP=3       # must match nixnas.boot.keepGenerations in hosts/demo-upgrade-soak.nix
 STORE_GROWTH_LIMIT_MIB=200   # per-cycle /nix/store delta bound (trivial toplevel delta)
 
-# ── OVMF firmware detection — portable across distros (copied from seal-2boot-test.sh) ──
+# ── OVMF firmware detection — portable across distros (copied from seal-3boot-test.sh) ──
 find_fw() { # find_fw "name1 name2 …" → prints first existing path under the known dirs
   local d n
   for d in /usr/share/edk2-ovmf/x64 /usr/share/edk2/x64 /usr/share/OVMF /usr/share/ovmf/x64 /usr/share/qemu; do
@@ -77,11 +77,12 @@ KEY="$WORK/demo_key"
 install -m600 "$HERE/ssh/demo_key" "$KEY"
 SCRATCH="$WORK/disk.raw"
 SWTPM_PID=""
+VM_PIDS=()
 
 # shellcheck disable=SC2329  # invoked by trap EXIT
 cleanup() {
-  # Reap any QEMU bound to THIS run's unique scratch path.
-  pkill -f "$SCRATCH" 2>/dev/null || true
+  local pid
+  for pid in "${VM_PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
   [ -n "$SWTPM_PID" ] && kill "$SWTPM_PID" 2>/dev/null || true
   for _ in $(seq 1 30); do ss -ltn 2>/dev/null | grep -q ":${PORT} " || break; sleep 0.3; done
   rm -rf "$WORK"
@@ -92,6 +93,7 @@ echo ">> preparing writable scratch (original image untouched) ..."
 cp --sparse=always "$IMG" "$SCRATCH"
 chmod u+rw "$SCRATCH"
 cp "$OVMF_VARS_TMPL" "$WORK/OVMF_VARS.fd"   # persistent UEFI vars across all boots
+chmod u+w "$WORK/OVMF_VARS.fd"
 mkdir -p "$WORK/tpm"
 
 start_swtpm() { # start_swtpm [statedir]  — fresh process, same persistent tpmstate
@@ -106,12 +108,14 @@ start_swtpm() { # start_swtpm [statedir]  — fresh process, same persistent tpm
 }
 
 SSH=(ssh -i "$KEY" -p "$PORT"
+     -o IdentitiesOnly=yes
      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
      -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR
      -o ConnectTimeout=4 root@127.0.0.1)
 
 run_qemu() { # (reads stdin; caller attaches a FIFO or /dev/null; redirects stdout to the log)
-  qemu-system-x86_64 \
+  # The caller backgrounds this function; exec makes $! QEMU itself for exact cleanup.
+  exec qemu-system-x86_64 \
     -machine q35,smm=on,accel=kvm -cpu host -smp 2 -m 4096 \
     -global ICH9-LPC.disable_s3=1 \
     -global driver=cfi.pflash01,property=secure,value=on \
@@ -161,6 +165,7 @@ echo ">> BOOT 0: serial passphrase + host-key seal, nix copy ..."
 start_swtpm
 run_qemu < "$FIFO0" > "$LOG0" 2>&1 &
 VM0=$!
+VM_PIDS+=("$VM0")
 exec 3> "$FIFO0"
 ( sleep 32; printf '%s\n' "$PASS" >&3 ) &   # feed once the LUKS prompt appears
 FEED0=$!
@@ -172,7 +177,7 @@ exec 3>&-
 sealed=0
 for _ in $(seq 1 15); do
   "${SSH[@]}" -o BatchMode=yes \
-    'test -f /boot/loader/credentials/nixnas-initrd-hostkey.cred' 2>/dev/null \
+    'test -f /boot/loader/credentials/nixboot-initrd-hostkey.cred' 2>/dev/null \
     && { sealed=1; break; }
   sleep 4
 done
@@ -180,7 +185,7 @@ done
 
 # nix copy the soak toplevel (and therefore all 5 specialisation closures) into the VM.
 echo ">> nix copy soak specialisations into VM ..."
-NIX_SSHOPTS="-i ${KEY} -p ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+NIX_SSHOPTS="-i ${KEY} -p ${PORT} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 export NIX_SSHOPTS
 nix copy --no-check-sigs --to "ssh://root@127.0.0.1" "$SOAK_TOP" \
   || { echo "!! nix copy failed" >&2; exit 1; }
@@ -202,6 +207,7 @@ echo ">> staging soak-gen-2 (generation 2) for first cycle reboot ..."
 "${SSH[@]}" "systemctl poweroff" 2>/dev/null || true
 for _ in $(seq 1 30); do kill -0 "$VM0" 2>/dev/null || break; sleep 2; done
 kill "$VM0" 2>/dev/null || true; wait "$VM0" 2>/dev/null || true
+VM_PIDS=()
 
 echo "   baseline: store=${store_mib_base} MiB, UKIs=${uki_count_base}, bootctl_entries=${bootctl_count_base}"
 
@@ -226,6 +232,7 @@ for cycle in $(seq 1 "$N"); do
   start_swtpm
   run_qemu < "$FIFO_C" > "$LOG_C" 2>&1 &
   VM_C=$!
+  VM_PIDS+=("$VM_C")
   exec 4> "$FIFO_C"
 
   # Try initrd-SSH first (sealed host key from boot 0). If it comes up within 60s,
@@ -338,6 +345,7 @@ for cycle in $(seq 1 "$N"); do
   "${SSH[@]}" "systemctl poweroff" 2>/dev/null || true
   for _ in $(seq 1 30); do kill -0 "$VM_C" 2>/dev/null || break; sleep 2; done
   kill "$VM_C" 2>/dev/null || true; wait "$VM_C" 2>/dev/null || true
+  VM_PIDS=()
 done
 
 # ── 4. Results ────────────────────────────────────────────────────────────────────────

@@ -93,8 +93,10 @@ A failed kernel/ZFS update must never throw the box off the rails. Two independe
   is caught here: **boot-counting × lanzaboote** auto-reverts after repeated boot failure, and the
   **generation menu** is the guaranteed manual fallback. This makes "the CachyOS ZFS may fail to compile
   from time to time" a non-event: the build fails on the *build machine* (caught before flash), or a bad
-  pull rolls back. ⚠️ **boot-counting × lanzaboote is still UNVERIFIED** (ARCHITECTURE.md §9) — it is the
-  **load-bearing spike**; the real engineering is making this bulletproof, not choosing upstream-vs-fork.
+  pull can roll back. The OVMF boot-chain suite checks the firmware boot-count path and requires
+  the post-bless verifier to pass under enforced operator-owned Secure Boot keys. Exhausting a
+  deliberately failed generation's tries and observing automatic selection of the previous one
+  remains an explicit experiment; the generation menu is the proven fallback today.
 - **Pool — scrub + snapshots + backups.** Rollback protects the OS, **not data already written to the
   pool**. The only risk class it can't undo is *silent on-disk corruption* — low-probability for a
   *compat* fork (its patches are kernel-API shims, not ZIO/on-disk-format changes; ZFS's historical

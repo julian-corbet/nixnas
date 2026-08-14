@@ -34,6 +34,10 @@
     kernel.march = "x86_64-v3";
 
     boot.secureBoot.enable = true;
+    # QEMU's virtual boot chain advertises an OptionROM in the TPM event log. The demo test
+    # enrolls that exact measured image rather than Microsoft vendor certificates; production
+    # hosts keep the strict "none" default unless the operator makes this same explicit choice.
+    boot.secureBoot.opromPolicy = "tpm-eventlog";
 
     # CI/QEMU: the test suites observe (and drive) the VM ONLY through the serial
     # port, so ttyS0 must stay /dev/console here — systemd status lines, the

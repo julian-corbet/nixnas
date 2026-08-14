@@ -1,8 +1,8 @@
 # Heavy boot-chain verification — for FREE, on GitHub's KVM-capable public runners.
 # Builds the zero-secrets demo image and boots it in QEMU + OVMF + swtpm to prove the
 # REAL boot chain end to end:
-#   * the TPM-sealed initrd-SSH host key survives a genuine power-cycle (seal on boot #1,
-#     the initrd unseals it on boot #2 → initrd-SSH → store unlocked over the network → login),
+#   * firmware keys are enrolled in boot #1, the TPM-sealed initrd-SSH identity is sealed
+#     under enforcement in boot #2, and boot #3 unseals it → initrd-SSH → network unlock → login,
 #   * and is genuinely bound to THIS box's TPM (--tamper: a fresh/wrong TPM must NOT unseal —
 #     a non-unlock is the pass, the fail-closed proof).
 # swtpm is a full TPM2 and OVMF does real UEFI, so this needs no physical hardware. The only
@@ -97,11 +97,11 @@ jobs:
           fi
           find -L result -name '*.raw' -printf '%s bytes  %p\n'
 
-      - name: Boot #1 seals → boot #2 initrd unseals → unlock over SSH → login
-        run: test/seal-2boot-test.sh "$(find -L result -name '*.raw' | head -1)"
+      - name: Enroll → seal under Secure Boot → initrd unseal → network unlock
+        run: test/seal-3boot-test.sh "$(find -L result -name '*.raw' | head -1)"
 
       - name: Fail-closed — a wrong TPM must NOT unseal the host key (--tamper)
-        run: test/seal-2boot-test.sh "$(find -L result -name '*.raw' | head -1)" --tamper
+        run: test/seal-3boot-test.sh "$(find -L result -name '*.raw' | head -1)" --tamper
 
   # HOT mode: prove the MAIN boots its /nix from an EXTERNAL, operator-key-unlocked LUKS
   # device (modules/store/location.nix). Builds the demo-hot toplevel (a full build check),

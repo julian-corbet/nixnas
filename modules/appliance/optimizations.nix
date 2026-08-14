@@ -80,6 +80,16 @@ in
       # command -- a build failure, never a silently-wrong tuning.
     };
 
+    # nixram's zswap guard is ordered before systemd-zram-setup@zram0, which belongs to the
+    # early swap/sysinit transaction. Its upstream unit currently retains systemd's default
+    # After=basic.target edge, closing a cycle back through swap.target and run-wrappers.mount.
+    # The cycle is timing-dependent at switch-root and PID 1 may resolve it by discarding core
+    # sysinit jobs (tmpfiles, privileged wrappers, NSS, and SSH). This guard only touches a
+    # built-in kernel sysfs knob and needs no basic-target facilities, so make its declared
+    # early ordering real. Keep the override conditional: other nixram modes do not define it.
+    systemd.services.nixram-zswap-disable.unitConfig.DefaultDependencies =
+      lib.mkIf (config.nixram.enable && config.nixram.mode == "zram") false;
+
     # ── store.preload: warm the booted closure into the (compress-)cache, so runtime
     #    reads come from RAM and the slow stick is untouched — copytoram done right.
     #    Field-proven (first real deployment, 2026-07-04): right after boot/switch on a

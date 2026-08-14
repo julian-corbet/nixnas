@@ -17,7 +17,7 @@
 #
 # Each config is probed with `nix eval` only — no builds, no QEMU. This is intentionally
 # cheap: the goal is eval-correctness coverage (option wiring, assertion guards, module
-# interactions), not boot-chain proof (that is hot-boot-test.sh / seal-2boot-test.sh).
+# interactions), not boot-chain proof (that is hot-boot-test.sh / seal-3boot-test.sh).
 #
 # Usage: [FLAKE=.] test/matrix-eval-test.sh
 set -uo pipefail
@@ -29,7 +29,7 @@ for c in nix; do
 done
 
 # ── portable OVMF firmware finder (available if this script is extended to boot tests) ──
-# Copied verbatim from test/seal-2boot-test.sh so both scripts share the same detection
+# Copied verbatim from test/seal-3boot-test.sh so both scripts share the same detection
 # logic — single authoritative source for distro path variants.
 find_fw() { # find_fw "name1 name2 ..." → prints first existing path under the known dirs
   local d n
@@ -189,6 +189,28 @@ check_eq "stick-32g: keepGenerations = 8"           "$keep_gens"  "8"
 check_eq "stick-32g: maxClosureBytes = 5 GiB"       "$max_bytes"  "$(( 5 * 1024 * 1024 * 1024 ))"
 budget_check "stick-32g: budget arithmetic" \
   "$image_gib" "$esp_mib" "$max_bytes" "$keep_gens"
+
+# USB mode switches from a systemd initrd into a freshly empty tmpfs root. The distinct
+# stage-2 tmpfiles pass must exist there (and only there), so its oneshot state cannot be
+# inherited from the initrd's systemd-tmpfiles-setup.service.
+v=$(nix_eval "nixosConfigurations.demo.config.systemd.services.nixnas-stage2-tmpfiles.wantedBy" --json)
+check_contains "usb: stage-2 tmpfiles pass is pulled into sysinit" "$v" '"sysinit.target"'
+
+v=$(nix_eval "nixosConfigurations.demo.config.systemd.services.nixnas-stage2-tmpfiles.after" --json)
+check_eq "usb: stage-2 pass does not reconnect the initrd tmpfiles unit" "$v" '["local-fs.target"]'
+
+v=$(nix_eval "nixosConfigurations.demo-hot.config.systemd.services.nixnas-stage2-tmpfiles.wantedBy" --json)
+check_eq "hot: no tmpfs-root stage-2 pass" "$v" ""
+
+# nixram orders this zswap guard before the early zram setup service. It must not inherit
+# After=basic.target, which closes a cycle back through swap.target and sysinit.
+v=$(nix_eval "nixosConfigurations.demo.config.systemd.services.nixram-zswap-disable.unitConfig.DefaultDependencies" --json)
+check_eq "zram: early zswap guard has no basic-target dependency" "$v" "false"
+
+# Do not inherit the pre-26.11 compatibility default that force-imports a ZFS root pool and
+# bypasses the active-elsewhere safeguard. This is explicit even on older stateVersion hosts.
+v=$(nix_eval "nixosConfigurations.demo.config.boot.zfs.forceImportRoot" --json)
+check_eq "zfs: root-pool imports are never forced" "$v" "false"
 
 # ──────────────────────────────────────────────────────────────────────────────────────
 # VARIANT 5: matrix-hot-ext4

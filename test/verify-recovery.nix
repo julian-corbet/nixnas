@@ -49,23 +49,29 @@
       echo "[enroll] device now has $slots1 keyslot(s); recovery key is $(wc -c < "$rkey") bytes"
 
       # 2. Break-glass: opens with the RECOVERY key alone.
+      recovery_ok=0
       if cryptsetup open --key-file "$rkey" "$img" rectest; then
         echo "[break-glass] OK: store opens with the recovery key alone"; cryptsetup close rectest
+        recovery_ok=1
       else
         echo "[break-glass] FAILED: recovery key does not open the store"
       fi
 
       # 3. Rescue path: STILL opens with the daily passphrase alone (no TPM) — same as data pools.
+      daily_ok=0
       if cryptsetup open --key-file "$daily" "$img" rectest; then
         echo "[rescue] OK: store still opens with the daily passphrase alone (no TPM needed)"; cryptsetup close rectest
+        daily_ok=1
       else
         echo "[rescue] FAILED: daily passphrase no longer opens the store"
       fi
 
-      if [ "''${slots0:-0}" = 1 ] && [ "''${slots1:-0}" = 2 ]; then
+      if [ "''${slots0:-0}" = 1 ] && [ "''${slots1:-0}" = 2 ] \
+        && [ "$recovery_ok" = 1 ] && [ "$daily_ok" = 1 ]; then
         echo "[verdict] PASS — recovery added a distinct keyslot (1 → 2); both keys open the store"
       else
-        echo "[verdict] FAIL — expected 1 → 2 keyslots, got ''${slots0:-?} → ''${slots1:-?}"
+        echo "[verdict] FAIL — slots ''${slots0:-?} → ''${slots1:-?}; recovery=$recovery_ok daily=$daily_ok"
+        exit 1
       fi
       echo "=== NIXNAS-RECOVERY-END ==="
     '';

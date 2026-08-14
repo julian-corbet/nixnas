@@ -80,7 +80,7 @@ boot with `systemd-creds encrypt --tpm2-pcrs=7`, but Secure Boot key enrollment
 (`nixnas-enroll-sb`, a deliberate MANUAL step) runs AFTER that seal and **changes PCR 7**. On
 the next boot the sealed `.cred` no longer decrypts. Two things then compounded into a hard
 brick:
-  1. the seal service's only idempotency gate was `ConditionPathExists=!…/nixnas-initrd-hostkey.cred`
+  1. the seal service's only idempotency gate was `ConditionPathExists=!…/nixboot-initrd-hostkey.cred`
      — it keyed off the file merely EXISTING, so a stale, undecryptable `.cred` permanently
      blocked the one code path that could re-bind the key to the new PCR 7. It **never re-sealed**;
   2. the initrd sshd (`Restart=on-failure` by nixpkgs default) retried its failed credential
@@ -88,8 +88,8 @@ brick:
      **dictionary-attack lockout** (`inLockout=1` →
      `TPM_RC_LOCKOUT`/0x921), which then failed `systemd-tpm2-setup`'s SRK provisioning.
   Manual field remedy was: `tpm2_dictionarylockout --clear-lockout`, `rm` the stale `.cred`, and
-  `systemctl start nixnas-seal-hostkey` to re-seal against the new PCR 7.
-**Fix (LANDED):** `nixnas-seal-hostkey` is now **self-healing** — it runs every boot with no
+  `systemctl start nixboot-seal-hostkey` to re-seal against the new PCR 7.
+**Fix (LANDED):** `nixboot-seal-hostkey` is now **self-healing** — it runs every boot with no
 `ConditionPathExists` gate and decides in-script via a real **decrypt self-test**
 (`systemd-creds decrypt … "$cred" - >/dev/null`): valid → do nothing (fingerprint unchanged);
 missing OR undecryptable → (re)generate + (re)seal, overwriting `.cred`/`.pub` and printing the
@@ -104,7 +104,7 @@ still there), and stage-2 re-seals for the next boot. Anti-downgrade semantics u
 no ephemeral fallback for a delivered cred). The misleading "PCR 7 is update-stable; no reseal"
 comment (remote-unlock.nix, options.nix ×2, ARCHITECTURE §6) is corrected to name SB enrollment
 as the one PCR 7 delta. `modules/boot/remote-unlock.nix`; covered by the existing
-`test/seal-2boot-test.sh` (boot #2 re-runs the seal: valid cred self-tests OK → skip → stable
+`test/seal-3boot-test.sh` (boot #3 re-runs the seal: valid cred self-tests OK → skip → stable
 fingerprint) and `test/verify-sealed-hostkey.nix`.
 **Root simplification:** nixnas no longer supports a TPM-bound LUKS keyslot. TPM is reserved for
 this SSH identity; every disk always requires the operator's passphrase. Consequently a stale

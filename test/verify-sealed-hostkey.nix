@@ -2,7 +2,8 @@
 #
 # Proves the TPM2-sealed initrd SSH host key path end-to-end against the test VM's
 # software TPM (swtpm, provided by test/boot-vm.sh):
-#   1. Confirms /boot/nixnas/initrd-hostkey.cred was created by nixboot-seal-hostkey.
+#   1. Confirms loader/credentials/nixboot-initrd-hostkey.cred was created by
+#      nixboot-seal-hostkey.
 #   2. Confirms no plaintext private key was left on the ESP.
 #   3. Decrypts the credential using the SAME swtpm that sealed it (succeeds because
 #      swtpm is persisted for the whole boot-vm.sh run) to prove the mechanism is live.
@@ -40,12 +41,14 @@
       fi
 
       # ── 2. No plaintext key alongside the sealed credential ──────────────────────────
-      leaked=$(find /boot/loader/credentials -maxdepth 1 -type f ! -name '*.cred' 2>/dev/null | head -5)
+      leaked=$(find /boot/loader/credentials -maxdepth 1 -type f \
+        ! -name '*.cred' ! -name '*.pub' 2>/dev/null | head -5)
       if [ -n "$leaked" ]; then
-        echo "[plaintext] WARNING: non-credential files found alongside the sealed cred:"
+        echo "[plaintext] FAIL: unexpected non-credential/public files found on the ESP:"
         echo "$leaked" | sed 's/^/  /'
+        exit 1
       else
-        echo "[plaintext] OK: no plaintext key files under /boot/loader/credentials/"
+        echo "[plaintext] OK: only encrypted credentials and public metadata are present"
       fi
 
       # ── 3. Decrypt the credential (proves TPM2 round-trip against swtpm) ─────────────
@@ -65,6 +68,7 @@
       else
         echo "[decrypt] FAILED: cannot decrypt credential (TPM2 policy mismatch?)"
         rm -f "$tmpout"
+        exit 1
       fi
 
       echo "=== NIXNAS-SEALTEST-END ==="
