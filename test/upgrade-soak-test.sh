@@ -22,9 +22,12 @@
 #   nixpkgs in the store and/or network) and sounder than patching the toplevel tree
 #   (which could invalidate switch-to-configuration's assumptions).
 #
-# BOOT SEQUENCE (6 boots total):
-#   Boot 0 — setup: serial passphrase + TPM-sealed SSH host-key credential
-#             (nixboot-seal-hostkey), nix copy, record baseline, stage cycle 1.
+# BOOT SEQUENCE (7 boots total):
+#   Bootstrap — boot Secure-Boot-capable OVMF in Setup Mode, prove that the only
+#               expected red unit is the pre-enrollment Secure Boot verifier, enroll the
+#               appliance keys, discard the identity sealed against the old PCR 7, power off.
+#   Baseline  — boot with Secure Boot enforced, seal the SSH identity at the final PCR 7,
+#               wait for the write-isolation verifier, nix copy, record baseline, stage cycle 1.
 #   Boots 1-5 — one per cycle: initrd-SSH (sealed host key) → deliver passphrase over SSH,
 #               wait for running system, assert, record du, stage next cycle.
 #
@@ -50,7 +53,7 @@ N=5          # upgrade cycles
 KEEP=3       # must match nixnas.boot.keepGenerations in hosts/demo-upgrade-soak.nix
 STORE_GROWTH_LIMIT_MIB=200   # per-cycle /nix/store delta bound (trivial toplevel delta)
 
-# ── OVMF firmware detection — portable across distros (copied from seal-3boot-test.sh) ──
+# ── OVMF firmware detection — portable across distros (same contract as seal-3boot-test.sh) ──
 find_fw() { # find_fw "name1 name2 …" → prints first existing path under the known dirs
   local d n
   for d in /usr/share/edk2-ovmf/x64 /usr/share/edk2/x64 /usr/share/OVMF /usr/share/ovmf/x64 /usr/share/qemu; do
@@ -58,7 +61,7 @@ find_fw() { # find_fw "name1 name2 …" → prints first existing path under the
   done
   return 1
 }
-OVMF_CODE="${OVMF_CODE:-$(find_fw 'OVMF_CODE.4m.fd OVMF_CODE_4M.fd OVMF_CODE.fd')}" \
+OVMF_CODE="${OVMF_CODE:-$(find_fw 'OVMF_CODE.secboot.4m.fd OVMF_CODE_4M.secboot.fd OVMF_CODE.secboot.fd OVMF_CODE.4m.fd OVMF_CODE_4M.fd OVMF_CODE.fd')}" \
   || { echo "OVMF_CODE firmware not found (install edk2-ovmf / ovmf, or set \$OVMF_CODE)" >&2; exit 1; }
 OVMF_VARS_TMPL="${OVMF_VARS:-$(find_fw 'OVMF_VARS.4m.fd OVMF_VARS_4M.fd OVMF_VARS.fd')}" \
   || { echo "OVMF_VARS template not found (set \$OVMF_VARS)" >&2; exit 1; }
@@ -141,6 +144,36 @@ wait_running() { # wait_running <vm-pid> <label>
   [ "$ok" = 1 ] || { echo "!! ${label}: running-system SSH never came up" >&2; return 1; }
 }
 
+# Running-system SSH becomes reachable before the DEV oneshots necessarily finish. Starting
+# `nix copy` while nixnas-verify-writes samples /sys/block/vda/stat makes a correct verifier
+# fail. Wait for its success marker and for nixboot-verify to have exited before the harness
+# performs any guest writes or checks failed-unit state.
+wait_verifiers() { # wait_verifiers <label>
+  local label="$1"
+  if "${SSH[@]}" -o BatchMode=yes '
+    for _ in $(seq 1 90); do
+      write_done=0
+      boot_done=0
+      journalctl -b -u nixnas-verify-writes.service -o cat --no-pager 2>/dev/null \
+        | grep -Fq "=== NIXNAS-WRITES-END ===" && write_done=1
+      [ "$(systemctl show --value -p ExecMainCode nixboot-verify.service 2>/dev/null)" != 0 ] \
+        && boot_done=1
+      [ "$write_done" = 1 ] && [ "$boot_done" = 1 ] && exit 0
+      systemctl is-failed --quiet nixnas-verify-writes.service && exit 1
+      sleep 2
+    done
+    exit 1
+  '; then
+    return 0
+  fi
+  echo "!! ${label}: stage-2 verifiers did not finish successfully" >&2
+  "${SSH[@]}" -o BatchMode=yes '
+    systemctl status --no-pager -l nixnas-verify-writes.service nixboot-verify.service || true
+    journalctl -b --no-pager -u nixnas-verify-writes.service -u nixboot-verify.service || true
+  ' 2>&1 | sed 's/^/   /' || true
+  return 1
+}
+
 # ── 1. Build the soak specialisation toplevels on the test runner ─────────────────────
 echo ">> building demo-upgrade-soak toplevel (carries soak-gen-2..6 specialisations) ..."
 SOAK_TOP=$(nix build --no-link --print-out-paths \
@@ -156,12 +189,61 @@ for g in $(seq 2 $((N + 1))); do
   echo "   soak-gen-${g}: ${GEN_TOPS[$((g - 2))]}"
 done
 
-# ── 2. BOOT 0: setup boot ─────────────────────────────────────────────────────────────
-# Every boot uses the passphrase-only LUKS slot. `nixboot-seal-hostkey` creates the
-# TPM-gated initrd-SSH identity after boot 0, so boots 1-5 can deliver that same passphrase
-# through an authenticated remote channel.
+# ── 2. Enrollment bootstrap ─────────────────────────────────────────────────────────────────────────
+# The image deliberately ships with no firmware variables enrolled. Bootstrap in Setup Mode,
+# prove the one expected red verifier, enroll the keys, then reboot into enforcement.
+LOGE="$WORK/enroll.log"; FIFOE="$WORK/enroll.in"; mkfifo "$FIFOE"
+echo ">> ENROLLMENT: Setup Mode; serial unlock, verifier completion, key enrollment ..."
+start_swtpm
+run_qemu < "$FIFOE" > "$LOGE" 2>&1 &
+VME=$!
+VM_PIDS+=("$VME")
+exec 5> "$FIFOE"
+( sleep 32; printf '%s\n' "$PASS" >&5 ) &
+FEEDE=$!
+wait_running "$VME" "enrollment bootstrap" || { tail -30 "$LOGE"; exit 1; }
+kill "$FEEDE" 2>/dev/null || true
+wait_verifiers "enrollment bootstrap" || { tail -50 "$LOGE"; exit 1; }
+
+sbctl_json="$("${SSH[@]}" -o BatchMode=yes 'sbctl --disable-landlock status --json' 2>&1)"
+if ! grep -Eq '"setup_mode"[[:space:]]*:[[:space:]]*true' <<< "$sbctl_json" \
+  || ! grep -Eq '"secure_boot"[[:space:]]*:[[:space:]]*false' <<< "$sbctl_json"; then
+  echo "!! enrollment bootstrap is not Secure-Boot-capable firmware in Setup Mode. sbctl said:"
+  printf '%s\n' "$sbctl_json"
+  exit 1
+fi
+
+saved_allowlist="${NIXNAS_FAILED_UNITS_ALLOWLIST:-}"
+NIXNAS_FAILED_UNITS_ALLOWLIST="${saved_allowlist:+$saved_allowlist }nixboot-verify.service"
+assert_no_failed_units "enrollment bootstrap (pre-enrollment transition)" || exit 1
+NIXNAS_FAILED_UNITS_ALLOWLIST="$saved_allowlist"
+verify_log="$("${SSH[@]}" -o BatchMode=yes \
+  'journalctl -b -u nixboot-verify.service -o cat --no-pager' 2>/dev/null)"
+verify_fails="$(sed -n '/^FAIL  /p' <<< "$verify_log")"
+if [ -z "$verify_fails" ] \
+  || grep -Ev '^FAIL  secureBoot\.enable:' <<< "$verify_fails" >/dev/null; then
+  echo "!! enrollment bootstrap verifier did not fail solely for pre-enrollment Secure Boot:"
+  printf '%s\n' "$verify_fails"
+  exit 1
+fi
+
+echo ">> enrolling the generated appliance keys into OVMF ..."
+"${SSH[@]}" -o BatchMode=yes nixnas-enroll-sb \
+  || { echo "!! Secure Boot enrollment failed" >&2; exit 1; }
+# Enrollment changes PCR 7. Force the next boot to seal its identity under enforcement.
+"${SSH[@]}" -o BatchMode=yes \
+  'rm -f /boot/loader/credentials/nixboot-initrd-hostkey.cred /boot/loader/credentials/nixboot-initrd-hostkey.pub'
+"${SSH[@]}" -o BatchMode=yes 'systemctl poweroff' 2>/dev/null || true
+for _ in $(seq 1 30); do kill -0 "$VME" 2>/dev/null || break; sleep 2; done
+exec 5>&-
+kill "$VME" 2>/dev/null || true; wait "$VME" 2>/dev/null || true; rm -f "$FIFOE"
+VM_PIDS=()
+
+# ── 3. Post-enrollment baseline boot ─────────────────────────────────────────────────────────────
+# This baseline boot must enforce Secure Boot and seal the initrd-SSH identity against
+# final PCR 7, so boots 1-5 can deliver the passphrase through an authenticated channel.
 LOG0="$WORK/boot0.log"; FIFO0="$WORK/in0"; mkfifo "$FIFO0"
-echo ">> BOOT 0: serial passphrase + host-key seal, nix copy ..."
+echo ">> BASELINE: Secure Boot enforced; serial unlock and final host-key seal ..."
 start_swtpm
 run_qemu < "$FIFO0" > "$LOG0" 2>&1 &
 VM0=$!
@@ -169,9 +251,18 @@ VM_PIDS+=("$VM0")
 exec 3> "$FIFO0"
 ( sleep 32; printf '%s\n' "$PASS" >&3 ) &   # feed once the LUKS prompt appears
 FEED0=$!
-wait_running "$VM0" "boot 0" || { tail -30 "$LOG0"; exit 1; }
+wait_running "$VM0" "baseline" || { tail -30 "$LOG0"; exit 1; }
 kill "$FEED0" 2>/dev/null || true
+wait_verifiers "baseline" || { tail -50 "$LOG0"; exit 1; }
 exec 3>&-
+
+sbctl_json="$("${SSH[@]}" -o BatchMode=yes 'sbctl --disable-landlock status --json' 2>&1)"
+if ! grep -Eq '"setup_mode"[[:space:]]*:[[:space:]]*false' <<< "$sbctl_json" \
+  || ! grep -Eq '"secure_boot"[[:space:]]*:[[:space:]]*true' <<< "$sbctl_json"; then
+  echo "!! baseline did not boot with Secure Boot enforced. sbctl said:"
+  printf '%s\n' "$sbctl_json"
+  exit 1
+fi
 
 # Confirm the sealed host-key credential is present (needed for initrd-SSH on boots 1-5).
 sealed=0
@@ -181,7 +272,7 @@ for _ in $(seq 1 15); do
     && { sealed=1; break; }
   sleep 4
 done
-[ "$sealed" = 1 ] || echo "!! boot 0: sealed host-key credential not found — boots 1-5 will fall back to serial" >&2
+[ "$sealed" = 1 ] || { echo "!! baseline: sealed host-key credential not found" >&2; exit 1; }
 
 # nix copy the soak toplevel (and therefore all 5 specialisation closures) into the VM.
 echo ">> nix copy soak specialisations into VM ..."
@@ -196,9 +287,9 @@ store_mib_base=$("${SSH[@]}" "du -s /nix/store | awk '{print int(\$1/1024)}'")
 uki_count_base=$("${SSH[@]}" "find /boot/EFI/Linux -name 'nixos-generation-*.efi' | wc -l")
 bootctl_count_base=$("${SSH[@]}" "bootctl list 2>/dev/null | grep -c 'type:' || true")
 
-# CI quality gate: boot 0's fully-booted baseline system must have ZERO failed units
+# CI quality gate: the fully-booted, post-enrollment baseline must have ZERO failed units
 # before we start cycling (a broken oneshot would otherwise taint all five cycles).
-assert_no_failed_units "boot 0 (baseline)" || exit 1
+assert_no_failed_units "baseline (post-enrollment running system)" || exit 1
 
 # Stage cycle 1: install soak-gen-2 as the next boot.
 echo ">> staging soak-gen-2 (generation 2) for first cycle reboot ..."
@@ -211,7 +302,7 @@ VM_PIDS=()
 
 echo "   baseline: store=${store_mib_base} MiB, UKIs=${uki_count_base}, bootctl_entries=${bootctl_count_base}"
 
-# ── 3. Cycle boots ────────────────────────────────────────────────────────────────────
+# ── 4. Cycle boots ────────────────────────────────────────────────────────────────────
 # Growth table state (parallel arrays).
 CYCLE_STORE_MIB=("$store_mib_base")
 CYCLE_UKIS=("$uki_count_base")
@@ -266,6 +357,10 @@ for cycle in $(seq 1 "$N"); do
   vm_booted="$cycle_ok"   # track boot success independently from assertion outcomes
 
   if [ "$cycle_ok" = 1 ]; then
+    # Do not race the failed-unit gate against either verifier, and do not stage the next
+    # generation while the write-isolation sample is still in progress.
+    wait_verifiers "cycle ${cycle}" || { cycle_ok=0; tail -50 "$LOG_C"; }
+
     # (a) boots newest: /etc/nixnas-soak-gen == expected generation number.
     actual_marker=$("${SSH[@]}" "cat /etc/nixnas-soak-gen 2>/dev/null || echo MISSING")
     if [ "$actual_marker" = "$gen" ]; then
@@ -348,7 +443,7 @@ for cycle in $(seq 1 "$N"); do
   VM_PIDS=()
 done
 
-# ── 4. Results ────────────────────────────────────────────────────────────────────────
+# ── 5. Results ────────────────────────────────────────────────────────────────────────
 echo ""
 echo "================ GROWTH TABLE ================"
 printf "%-7s %-12s %-10s %-16s %s\n" \
