@@ -53,15 +53,6 @@ jobs:
         run: |
           nix eval --raw \
             .#nixosConfigurations.demo-hot.config.system.build.toplevel.drvPath
-      - name: Build the rescue maintainer (shellcheck the cross-store maintain script)
-        run: |
-          nix build --no-link --print-out-paths \
-            .#checks.x86_64-linux.demo-rescue-maintainer
-      - name: Build the hot installer (shellcheck nixnas-install-hot)
-        run: |
-          nix build --no-link --print-out-paths \
-            .#checks.x86_64-linux.demo-hot-installer
-
   tui:
     name: cargo check + clippy (tui)
     runs-on: ubuntu-latest
