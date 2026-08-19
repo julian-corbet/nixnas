@@ -23,7 +23,11 @@ jobs:
   boot:
     name: build demo image + QEMU boot/seal/tamper
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
+    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 34m00 no longer
+    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
+    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
 
@@ -69,17 +73,15 @@ jobs:
       - uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
-          # Pull the CachyOS kernel from the maintainer's lantian cache (else it compiles from
-          # source — slow, RAM-heavy). accept-flake-config honours the flake's own substituters;
+          # This job builds a BOOT IMAGE, so only cache.nixos.org's signing key may hand it a
+          # store path: no third-party substituter, and no blanket accept of substituters a
+          # flake declares for itself. The CachyOS kernel is compiled from source as a result.
           # extra-sandbox-paths lets disko's image-builder VM reach /dev/kvm if it wants it.
           extra_nix_config: |
-            accept-flake-config = true
-            extra-substituters = https://attic.xuyh0120.win/lantian
-            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
             extra-sandbox-paths = /dev/kvm
 
       - name: Enforce the 8 GiB-stick closure budget (before the heavy image build)
-        run: nix build .#checks.x86_64-linux.demo-closure-budget --accept-flake-config --print-build-logs -L
+        run: nix build .#checks.x86_64-linux.demo-closure-budget --print-build-logs -L
 
       - name: Build the demo image (sandbox diskoImages → nixnas.raw, demo passphrase)
         run: |
@@ -88,7 +90,7 @@ jobs:
           echo "== free space =="; df -h / /mnt 2>/dev/null || df -h
           # The image is built by a disko VM (vmTools). On failure, dump the REAL builder
           # log (nix streams only the serial console with --print-build-logs).
-          if ! nix build .#image --accept-flake-config --print-build-logs 2>&1 | tee /tmp/build.log; then
+          if ! nix build .#image --print-build-logs 2>&1 | tee /tmp/build.log; then
             echo "===================== FULL BUILDER LOG ====================="
             drv=$(grep -oE '/nix/store/[a-z0-9]+-demo-disko-images\.drv' /tmp/build.log | head -1)
             [ -n "$drv" ] && nix log "$drv" 2>/dev/null | tail -120
@@ -113,7 +115,11 @@ jobs:
   hot-boot:
     name: hot mode — external LUKS /nix boot (serial-primary + video-primary consoles)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
+    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 21m36 no longer
+    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
+    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
       - name: Syntax-check test scripts (bash -n) before running them
@@ -149,9 +155,6 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
-            accept-flake-config = true
-            extra-substituters = https://attic.xuyh0120.win/lantian
-            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
             extra-sandbox-paths = /dev/kvm
       # sudo for losetup/cryptsetup/mount; preserve PATH (+sbin for the disk tools) + HOME so
       # `nix` (daemon client) works as root and cryptsetup/sgdisk/losetup are found.
@@ -164,7 +167,8 @@ jobs:
   matrix-eval:
     name: matrix variant eval checks (stick-4/16/32g / hot-ext4 / hot-zfs-property / persist-nested)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Eval-only (no kernel build, no QEMU): p95 is 2m20, so 3x lands under the 10-minute floor.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Syntax-check test scripts (bash -n) before running them
@@ -182,10 +186,6 @@ jobs:
       - uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
-          extra_nix_config: |
-            accept-flake-config = true
-            extra-substituters = https://attic.xuyh0120.win/lantian
-            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
       # No KVM, no OVMF, no disk tools needed — eval-only probes via nix eval.
       - name: Matrix variant eval checks
         run: FLAKE=. test/matrix-eval-test.sh
@@ -196,7 +196,11 @@ jobs:
   zfs-hot:
     name: ZFS hot mode — boot /nix from LUKS-encrypted ZFS pool (initrd import + keyring)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
+    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 14m03 no longer
+    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
+    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
       - name: Syntax-check test scripts (bash -n) before running them
@@ -233,9 +237,6 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
-            accept-flake-config = true
-            extra-substituters = https://attic.xuyh0120.win/lantian
-            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
             extra-sandbox-paths = /dev/kvm
       # sudo for losetup/cryptsetup/zpool/zfs/mount; preserve PATH + HOME for nix + disk tools.
       - name: Build the ZFS hot toplevel + boot /nix from LUKS-encrypted ZFS pool

@@ -21,7 +21,11 @@ jobs:
   failure-power-cut:
     name: failure-injection — power-cut mid-write (f2fs recovery)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
+    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 27m51 no longer
+    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
+    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
 
@@ -61,15 +65,16 @@ jobs:
       - uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
+          # These jobs build a BOOT IMAGE, so only cache.nixos.org's signing key may hand
+          # them a store path: no third-party substituter, and no blanket accept of
+          # substituters a flake declares for itself (same stance as boot-test.yml). The
+          # CachyOS kernel is compiled from source as a result.
           extra_nix_config: |
-            accept-flake-config = true
-            extra-substituters = https://attic.xuyh0120.win/lantian
-            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
             extra-sandbox-paths = /dev/kvm
 
       - name: Build the demo image
         run: |
-          nix build .#image --accept-flake-config --print-build-logs
+          nix build .#image --print-build-logs
           find -L result -name '*.raw' -printf '%s bytes  %p\n'
 
       - name: power-cut-mid-write — f2fs must recover after kill -9 mid-write
@@ -81,7 +86,11 @@ jobs:
   failure-pool-absent:
     name: failure-injection — pool-absent (HOT main must NOT reach login without store disk)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
+    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 9m34 no longer
+    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
+    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
 
@@ -114,16 +123,12 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
-            accept-flake-config = true
-            extra-substituters = https://attic.xuyh0120.win/lantian
-            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
             extra-sandbox-paths = /dev/kvm
 
       - name: Build demo-hot toplevel
         run: |
           TOP=$(nix build --no-link --print-out-paths \
-            .#nixosConfigurations.demo-hot.config.system.build.toplevel \
-            --accept-flake-config)
+            .#nixosConfigurations.demo-hot.config.system.build.toplevel)
           echo "DEMO_HOT_TOP=$TOP" >> "$GITHUB_ENV"
 
       - name: pool-absent — HOT main must NOT reach login without its store disk
@@ -134,7 +139,11 @@ jobs:
   failure-no-tpm:
     name: failure-injection — no-tpm (passphrase fallback, no TPM hard dependency)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
+    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 28m06 no longer
+    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
+    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
 
@@ -175,14 +184,11 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
-            accept-flake-config = true
-            extra-substituters = https://attic.xuyh0120.win/lantian
-            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
             extra-sandbox-paths = /dev/kvm
 
       - name: Build the demo image
         run: |
-          nix build .#image --accept-flake-config --print-build-logs
+          nix build .#image --print-build-logs
           find -L result -name '*.raw' -printf '%s bytes  %p\n'
 
       - name: no-tpm — passphrase fallback must work with no TPM device
@@ -194,7 +200,11 @@ jobs:
   upgrade-soak:
     name: upgrade soak — N=5 generation cycles (UKI pruning + store growth)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
+    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 37m33 no longer
+    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
+    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
 
@@ -235,14 +245,11 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
-            accept-flake-config = true
-            extra-substituters = https://attic.xuyh0120.win/lantian
-            extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc=
             extra-sandbox-paths = /dev/kvm
 
       - name: Build the demo image
         run: |
-          if ! nix build .#image --accept-flake-config --print-build-logs 2>&1 | tee /tmp/build.log; then
+          if ! nix build .#image --print-build-logs 2>&1 | tee /tmp/build.log; then
             echo "===================== FULL BUILDER LOG ====================="
             drv=$(grep -oE '/nix/store/[a-z0-9]+-demo-disko-images\.drv' /tmp/build.log | head -1)
             [ -n "$drv" ] && nix log "$drv" 2>/dev/null | tail -80
