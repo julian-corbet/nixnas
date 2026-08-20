@@ -36,6 +36,8 @@ jobs:
   eval:
     name: nix eval (demo host, all assertions)
     runs-on: ubuntu-latest
+    # Observed 76-108s across the last nine runs; 10 is the floor, ~5x headroom.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
@@ -56,6 +58,8 @@ jobs:
   tui:
     name: cargo check + clippy (tui)
     runs-on: ubuntu-latest
+    # Observed 20-26s across the last nine runs; 10 is the floor.
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: tui

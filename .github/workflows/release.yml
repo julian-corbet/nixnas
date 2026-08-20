@@ -27,6 +27,11 @@ jobs:
   build:
     name: build (x86_64-linux-musl)
     runs-on: ubuntu-latest
+    # No release has ever run, so there is no measured duration. Nearest proxy is
+    # ci.yml's tui job (same crate, 216 deps, cargo check + clippy in ~25s); a full
+    # --release musl build with codegen plus toolchain and musl-tools install is a
+    # few minutes. 20 bounds a hang without ever tripping a healthy release.
+    timeout-minutes: 20
     permissions:
       contents: read
     defaults:
@@ -79,6 +84,8 @@ jobs:
     name: create GitHub release
     needs: build
     runs-on: ubuntu-latest
+    # Artifact download, one sha256sum, one gh release create — seconds of work.
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
