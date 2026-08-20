@@ -23,11 +23,15 @@ jobs:
   boot:
     name: build demo image + QEMU boot/seal/tamper
     runs-on: ubuntu-latest
-    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
-    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 34m00 no longer
-    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
-    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
-    timeout-minutes: 300
+    # Measured, not guessed: compiling the CachyOS kernel from source took this job 4h32m36
+    # on a 4-core runner (run 32314629247/32314654357, 2026-08-20), against 34m00 back when a
+    # binary cache supplied the kernel. 3x that p95 is unreachable - GitHub caps a public-repo
+    # job at 360 minutes - so this is the platform ceiling less a margin: our own timeout fires
+    # with a clear signal instead of GitHub's, and the margin over the worst observed job
+    # (4h32m) is thin on purpose. A job that cannot be bounded tighter than 4.5 hours is the
+    # real argument for serving this kernel from a cache we control; see the commit that
+    # removed the third-party one.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -115,11 +119,15 @@ jobs:
   hot-boot:
     name: hot mode — external LUKS /nix boot (serial-primary + video-primary consoles)
     runs-on: ubuntu-latest
-    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
-    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 21m36 no longer
-    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
-    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
-    timeout-minutes: 300
+    # Measured, not guessed: compiling the CachyOS kernel from source took this job 2h33m53
+    # on a 4-core runner (run 32314629247/32314654357, 2026-08-20), against 21m36 back when a
+    # binary cache supplied the kernel. 3x that p95 is unreachable - GitHub caps a public-repo
+    # job at 360 minutes - so this is the platform ceiling less a margin: our own timeout fires
+    # with a clear signal instead of GitHub's, and the margin over the worst observed job
+    # (4h32m) is thin on purpose. A job that cannot be bounded tighter than 4.5 hours is the
+    # real argument for serving this kernel from a cache we control; see the commit that
+    # removed the third-party one.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - name: Syntax-check test scripts (bash -n) before running them
@@ -196,11 +204,15 @@ jobs:
   zfs-hot:
     name: ZFS hot mode — boot /nix from LUKS-encrypted ZFS pool (initrd import + keyring)
     runs-on: ubuntu-latest
-    # Ceiling, not an estimate: with the third-party kernel cache gone this job compiles the
-    # CachyOS kernel from source on a 4-core runner, so the pre-change p95 of 14m03 no longer
-    # bounds it. Provisional until the first from-source runs give a real p95 to take 3x of;
-    # it still fires well before GitHub's 6-hour default so a wedged build cannot idle a runner.
-    timeout-minutes: 300
+    # Measured, not guessed: compiling the CachyOS kernel from source took this job 3h44m03
+    # on a 4-core runner (run 32314629247/32314654357, 2026-08-20), against 14m03 back when a
+    # binary cache supplied the kernel. 3x that p95 is unreachable - GitHub caps a public-repo
+    # job at 360 minutes - so this is the platform ceiling less a margin: our own timeout fires
+    # with a clear signal instead of GitHub's, and the margin over the worst observed job
+    # (4h32m) is thin on purpose. A job that cannot be bounded tighter than 4.5 hours is the
+    # real argument for serving this kernel from a cache we control; see the commit that
+    # removed the third-party one.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - name: Syntax-check test scripts (bash -n) before running them
