@@ -33,6 +33,14 @@ the core will be asked to move them out.
    swtpm + serial. Note what you ran in the PR.
 4. **Commit style**: imperative subject, a body that says *why*. No AI attribution lines.
 
+## Contributor agreement
+
+By submitting a contribution, you agree to the
+[Individual Contributor License Agreement](https://github.com/corbet-labs/.github/blob/cla-v1.0/CLA.md).
+Include this exact affirmation in your pull request description:
+
+> I have read and agree to version 1.0 of the Individual Contributor License Agreement at https://github.com/corbet-labs/.github/blob/cla-v1.0/CLA.md.
+
 ## Reporting security issues
 
 Boot chain, crypto, or unlock-path issues: please disclose privately first (open a GitHub
