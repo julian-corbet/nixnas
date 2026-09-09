@@ -34,3 +34,12 @@ commands = [["nix", "eval", "--no-update-lock-file", "--raw", ".#nixosConfigurat
 [checks.tui]
 kind = "commands"
 commands = [["bash", "-ceu", "cd tui; cargo clippy --locked -- -D warnings"]]
+
+[checks.tui-secrets]
+kind = "commands"
+commands = [["cargo", "test", "--manifest-path", "tui/Cargo.toml", "--locked", "sudo::tests"]]
+
+# Explicit dependency maintenance; never selected by routine checks.
+[checks.tui-lockfile]
+kind = "commands"
+commands = [["bash", "-ceu", "cargo update --offline --manifest-path tui/Cargo.toml -p nixnas-tui; printf 'CCID_LOCKFILE_BEGIN\\n'; base64 -w0 tui/Cargo.lock; printf '\\nCCID_LOCKFILE_END\\n'"]]

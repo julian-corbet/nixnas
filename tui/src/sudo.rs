@@ -19,19 +19,20 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
+use zeroize::Zeroizing;
 
-/// A password held only for the lifetime of a privileged action, then zeroized. Not perfect (a
-/// `String` may have reallocated), but it overwrites the live buffer before free and never lands
-/// in a log, an env var, or a command line.
-pub struct Secret(String);
+/// A password held only for the lifetime of a privileged action, then zeroized with stores the
+/// compiler cannot remove. Earlier copies from input or reallocation are outside this buffer's
+/// lifetime; the live buffer never lands in a log, an env var, or a command line.
+pub struct Secret(Zeroizing<String>);
 
 impl Secret {
     pub fn new(s: String) -> Self {
-        Secret(s)
+        Secret(Zeroizing::new(s))
     }
     /// The password followed by a newline, as `sudo -S` expects it on stdin.
-    fn line(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(self.0.len() + 1);
+    fn line(&self) -> Zeroizing<Vec<u8>> {
+        let mut v = Zeroizing::new(Vec::with_capacity(self.0.len() + 1));
         v.extend_from_slice(self.0.as_bytes());
         v.push(b'\n');
         v
@@ -42,17 +43,6 @@ impl Secret {
     /// and fail the unlock — verified against cryptsetup 2.8.6).
     pub fn bytes(&self) -> &[u8] {
         self.0.as_bytes()
-    }
-}
-
-impl Drop for Secret {
-    fn drop(&mut self) {
-        // Overwrite the heap bytes in place before the String frees them.
-        unsafe {
-            for b in self.0.as_bytes_mut() {
-                *b = 0;
-            }
-        }
     }
 }
 
@@ -183,7 +173,7 @@ impl Elevation {
     }
 
     /// The password+newline to write to a `-S` command's stdin, or None when root.
-    fn password_line(&self) -> Option<Vec<u8>> {
+    fn password_line(&self) -> Option<Zeroizing<Vec<u8>>> {
         match self {
             Elevation::Root => None,
             Elevation::Sudo(s) => Some(s.line()),
@@ -537,5 +527,42 @@ impl DevWriter {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Elevation, Secret};
+    use std::sync::Arc;
+    use zeroize::ZeroizeOnDrop;
+
+    fn requires_zeroization_on_drop<T: ZeroizeOnDrop>(_: &T) {}
+
+    #[test]
+    fn secret_and_protocol_copy_zeroize_on_drop() {
+        let secret = Secret::new("synthetic-secret".to_owned());
+        requires_zeroization_on_drop(&secret.0);
+        let elevation = Elevation::Sudo(Arc::new(secret));
+        let line = elevation.password_line().unwrap();
+        requires_zeroization_on_drop(&line);
+        drop(elevation);
+        assert_eq!(line.as_slice(), b"synthetic-secret\n");
+        assert!(Elevation::Root.password_line().is_none());
+    }
+
+    #[test]
+    fn raw_passphrase_preserves_bytes_and_protocol_adds_one_newline() {
+        let secret = Secret::new("synthetic-\u{e9}\0passphrase".to_owned());
+        assert_eq!(secret.bytes(), "synthetic-\u{e9}\0passphrase".as_bytes());
+        assert_eq!(
+            secret.line().as_slice(),
+            "synthetic-\u{e9}\0passphrase\n".as_bytes()
+        );
+    }
+
+    #[test]
+    fn secret_debug_is_redacted() {
+        let secret = Secret::new("synthetic-secret".to_owned());
+        assert_eq!(format!("{secret:?}"), "<sudo password>");
     }
 }
