@@ -6,3 +6,5 @@ Additional coverage limits:
 
 - Image, Secure Boot, TPM-negative, power-cut, HOT ext4/ZFS, and soak gates require isolated disposable guests. Existing host-root disk/ZFS scripts must not run directly on shared Crow host.
 - Release builds musl TUI and publishes GitHub release; preserve exact tag and publication trust.
+
+Hosted Actions keeps the full portable workflow available for manual fallback.

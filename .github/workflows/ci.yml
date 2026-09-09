@@ -5,13 +5,12 @@
 # in the QEMU rig (test/), not on a CI runner.
 name: ci
 
+# Crow runs portable validation; this workflow is the manual fallback.
 on:
-  push:
-    branches: [ main ]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
-  # Every test script must PARSE on every push/PR — a syntax error in test/*.sh once
+  # Every test script must PARSE before validation — a syntax error in test/*.sh once
   # left three QEMU jobs silently dead. The heavy suites re-run this gate themselves
   # before executing any script; this job catches it even when they are not triggered.
   test-syntax:
