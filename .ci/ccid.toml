@@ -1,0 +1,36 @@
+# Shared ccid runner; coverage selectors are explicit.
+schema = 1
+project = "nixnas"
+
+[checks.native]
+kind = "nix"
+mode = "named"
+checks = ["tui-build"]
+
+[checks.eval]
+kind = "nix"
+mode = "eval"
+
+[checks.list]
+kind = "nix"
+mode = "list"
+
+[checks.all-systems]
+kind = "nix"
+mode = "all-systems"
+
+[checks.matrix-build]
+kind = "nix"
+mode = "native"
+
+[checks.syntax]
+kind = "commands"
+commands = [["bash", "-ceu", "for file in test/*.sh; do bash -n \"$file\"; done"]]
+
+[checks.configuration]
+kind = "commands"
+commands = [["nix", "eval", "--no-update-lock-file", "--raw", ".#nixosConfigurations.demo.config.system.build.toplevel.drvPath"], ["nix", "eval", "--no-update-lock-file", "--raw", ".#nixosConfigurations.demo.config.system.build.diskoImagesScript.drvPath"], ["nix", "eval", "--no-update-lock-file", "--raw", ".#nixosConfigurations.demo-hot.config.system.build.toplevel.drvPath"]]
+
+[checks.tui]
+kind = "commands"
+commands = [["bash", "-ceu", "cd tui; cargo clippy --locked -- -D warnings"]]
