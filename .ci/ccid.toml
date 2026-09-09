@@ -42,4 +42,4 @@ commands = [["cargo", "test", "--manifest-path", "tui/Cargo.toml", "--locked", "
 # Explicit dependency maintenance; never selected by routine checks.
 [checks.tui-lockfile]
 kind = "commands"
-commands = [["bash", "-ceu", "cargo update --offline --manifest-path tui/Cargo.toml -p nixnas-tui; printf 'CCID_LOCKFILE_BEGIN\\n'; base64 -w0 tui/Cargo.lock; printf '\\nCCID_LOCKFILE_END\\n'"]]
+commands = [["bash", "-ceu", "cargo update --manifest-path tui/Cargo.toml -p nixnas-tui; printf 'CCID_LOCKFILE_BEGIN\\n'; base64 -w0 tui/Cargo.lock; printf '\\nCCID_LOCKFILE_END\\n'"]]
